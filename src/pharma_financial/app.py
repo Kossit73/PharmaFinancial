@@ -1193,12 +1193,16 @@ def _render_depreciation_schedule(payload: dict) -> None:
         )
 
         default_year = int(row.get("year", years[0] if years else 0))
-        year_input = cols[1].number_input(
+        year_options: list[int] = list(dict.fromkeys([*years, default_year])) if years else [default_year]
+        try:
+            default_index = year_options.index(default_year)
+        except ValueError:
+            default_index = 0
+        year_input = cols[1].selectbox(
             "Year",
-            value=default_year,
+            options=year_options,
+            index=default_index,
             key=f"dep_year_{index}",
-            step=1,
-            format="%d",
         )
 
         acquisition_input = cols[2].number_input(
@@ -1309,12 +1313,16 @@ def _render_depreciation_schedule(payload: dict) -> None:
 
     with st.form("add_depreciation_row"):
         new_asset = st.text_input("Asset Type", key="dep_new_asset")
-        default_year = years[0] if years else 0
-        new_year = st.number_input(
+        default_year = int(years[0]) if years else 0
+        year_options: list[int] = list(dict.fromkeys([*years, default_year])) if years else [default_year]
+        try:
+            default_index = year_options.index(default_year)
+        except ValueError:
+            default_index = 0
+        new_year = st.selectbox(
             "Year",
-            value=int(default_year),
-            step=1,
-            format="%d",
+            options=year_options,
+            index=default_index,
             key="dep_new_year",
         )
         new_acquisition = st.number_input(
