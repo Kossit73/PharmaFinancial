@@ -130,6 +130,34 @@ class FinancialModelTest(unittest.TestCase):
             self.assertAlmostEqual(per_year_depr.get(year, 0.0), depreciation[idx], places=6)
             self.assertAlmostEqual(per_year_nb.get(year, 0.0), net_ppe[idx], places=6)
 
+        by_asset: dict[str, list[dict]] = {}
+        for entry in details:
+            by_asset.setdefault(entry["asset_type"], []).append(entry)
+
+        for asset_entries in by_asset.values():
+            asset_entries.sort(key=lambda item: item["year"])
+            previous_net_book = None
+            previous_cumulative = None
+            for entry in asset_entries:
+                opening_net = float(entry["opening_net_book"])
+                acquisition = float(entry["acquisition"])
+                total_cost = float(entry["total_asset_cost"])
+                total_dep = float(entry["total_depreciation"])
+                cumulative_dep = float(entry["cumulative_depreciation"])
+
+                if previous_net_book is not None:
+                    self.assertAlmostEqual(opening_net, previous_net_book, places=5)
+
+                expected_total = acquisition + opening_net
+                self.assertAlmostEqual(total_cost, expected_total, places=6)
+
+                base_cumulative = 0.0 if previous_cumulative is None else previous_cumulative
+                expected_cumulative = base_cumulative + total_dep
+                self.assertAlmostEqual(cumulative_dep, expected_cumulative, places=5)
+
+                previous_net_book = float(entry["net_book_value"])
+                previous_cumulative = cumulative_dep
+
 
 if __name__ == "__main__":
     unittest.main()

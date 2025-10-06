@@ -212,7 +212,7 @@ class FinancialModel:
             previous_net_book = float(previous_net_book or 0.0)
             previous_cumulative = float(previous_cumulative or 0.0)
 
-            total_asset_cost = row.asset_cost + previous_net_book
+            total_asset_cost = row.acquisition + previous_net_book
             total_depreciation = total_asset_cost * row.depreciation_rate
             cumulative_depreciation = previous_cumulative + total_depreciation
             net_book_value = total_asset_cost - cumulative_depreciation

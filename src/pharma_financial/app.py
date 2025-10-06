@@ -1330,14 +1330,20 @@ def _render_depreciation_schedule(payload: dict) -> None:
             format="%.4f",
         )
 
-        prior_net_book = float(data.get("prior_net_book", row.get("opening_net_book", 0.0) or 0.0))
-        prior_cumulative = float(data.get("prior_cumulative", row.get("opening_cumulative", 0.0) or 0.0))
-        opening_input = cols[4].number_input(
+        prior_net_book = float(
+            data.get("prior_net_book", row.get("opening_net_book", 0.0) or 0.0)
+        )
+        prior_cumulative = float(
+            data.get("prior_cumulative", row.get("opening_cumulative", 0.0) or 0.0)
+        )
+        _set_widget_value(f"dep_open_nb_{index}", prior_net_book)
+        cols[4].number_input(
             "Net Book Value (prev year)",
-            value=float(row.get("opening_net_book", prior_net_book)),
+            value=prior_net_book,
             key=f"dep_open_nb_{index}",
             step=0.001,
             format="%.4f",
+            disabled=True,
         )
 
         depreciation_rate_input = cols[5].number_input(
@@ -1348,7 +1354,7 @@ def _render_depreciation_schedule(payload: dict) -> None:
             format="%.5f",
         )
 
-        total_asset_cost = asset_cost_input + prior_net_book
+        total_asset_cost = acquisition_input + prior_net_book
         total_depreciation = total_asset_cost * depreciation_rate_input
         cumulative_depreciation = prior_cumulative + total_depreciation
         if cumulative_depreciation > total_asset_cost and total_asset_cost >= 0:
@@ -1398,12 +1404,12 @@ def _render_depreciation_schedule(payload: dict) -> None:
             st.session_state["depreciation_rows"] = rows
             _rerun()
 
-        override_net_book = (
-            abs(opening_input - prior_net_book) > 1e-6
-            or bool(row.get("override_net_book"))
-            or bool(data.get("is_first", False))
+        override_net_book = bool(row.get("override_net_book", False)) or bool(
+            data.get("is_first", False)
         )
-        override_cumulative = bool(row.get("override_cumulative")) or bool(data.get("is_first", False))
+        override_cumulative = bool(row.get("override_cumulative", False)) or bool(
+            data.get("is_first", False)
+        )
 
         new_row = {
             "asset_type": asset_input.strip(),
@@ -1411,7 +1417,7 @@ def _render_depreciation_schedule(payload: dict) -> None:
             "acquisition": float(acquisition_input),
             "asset_cost": float(asset_cost_input),
             "depreciation_rate": float(depreciation_rate_input),
-            "opening_net_book": float(opening_input),
+            "opening_net_book": prior_net_book,
             "opening_cumulative": prior_cumulative,
             "override_net_book": override_net_book,
             "override_cumulative": override_cumulative,
@@ -2351,20 +2357,24 @@ def _calculate_depreciation_preview(rows: Sequence[Mapping]) -> list[dict]:
             opening_net_book = float(row.get("opening_net_book", 0.0) or 0.0)
             opening_cumulative = float(row.get("opening_cumulative", 0.0) or 0.0)
 
-            if previous_net_book is None or override_net:
+            if previous_net_book is None:
+                prior_net_book = opening_net_book if override_net else 0.0
+            elif override_net:
                 prior_net_book = opening_net_book
             else:
                 prior_net_book = previous_net_book
 
-            if previous_cumulative is None or override_cum:
+            if previous_cumulative is None:
+                prior_cumulative = opening_cumulative if override_cum else 0.0
+            elif override_cum:
                 prior_cumulative = opening_cumulative
             else:
                 prior_cumulative = previous_cumulative
 
-            asset_cost = float(row.get("asset_cost", row.get("acquisition", 0.0)) or 0.0)
+            acquisition_amount = float(row.get("acquisition", row.get("asset_cost", 0.0)) or 0.0)
             depreciation_rate = float(row.get("depreciation_rate", 0.0) or 0.0)
 
-            total_asset_cost = asset_cost + prior_net_book
+            total_asset_cost = acquisition_amount + prior_net_book
             total_depreciation = total_asset_cost * depreciation_rate
             cumulative_depreciation = prior_cumulative + total_depreciation
             if cumulative_depreciation > total_asset_cost and total_asset_cost >= 0:
