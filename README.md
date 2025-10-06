@@ -9,7 +9,7 @@ This project provides a Python implementation of the Longevity Pharmaceuticals f
 - Core financial statements (income statement, balance sheet, cash flow statement).
 - Scenario, sensitivity, and Monte Carlo simulation tooling.
 - Break-even and payback analytics.
-- Dash web application delivering dashboards and statements, complemented by a CLI that exports schedules to CSV files.
+- Streamlit web application delivering dashboards and statements, complemented by a CLI that exports schedules to CSV files.
 
 ## Getting Started
 
@@ -27,18 +27,21 @@ This project provides a Python implementation of the Longevity Pharmaceuticals f
 
    This command writes CSV schedules for all statements, scenario tables, sensitivity pivots, and the Monte Carlo simulation to the `outputs/` directory.
 
-3. **Launch the dashboard**
+3. **Launch the Streamlit dashboard**
 
    ```bash
-   python -m pharma_financial.app
+   streamlit run streamlit_app.py
    ```
 
-   The Dash application serves:
+   The Streamlit application includes dedicated tabs for:
 
-   - An input landing page summarising unit economics.
-   - A dashboard with Net Revenue and EBITDA trends plus key metrics.
-   - Financial statements (performance, position, and cash flow).
-   - Scenario/sensitivity and Monte Carlo tabs.
+   1. An input landing page summarising unit economics and labour structures.
+   2. A key metrics dashboard highlighting Net Revenue, EBITDA, and investment KPIs.
+   3. Statements of financial performance, position, and cash flows.
+   4. Sensitivity, scenario ("IFs"), and Monte Carlo analyses.
+   5. Break-even and payback visualisations.
+
+   Use the sidebar to upload an alternative JSON assumptions file or download the bundled defaults.
 
 ## Customising Assumptions
 
@@ -47,6 +50,7 @@ All modelling assumptions are defined in [`src/pharma_financial/data/default_inp
 ## Project Structure
 
 ```
+streamlit_app.py
 src/
   pharma_financial/
     __init__.py

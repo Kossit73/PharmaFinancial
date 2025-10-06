@@ -154,13 +154,8 @@ def _parse_sensitivity(data: Mapping[str, Iterable[float]]) -> SensitivityParame
     return SensitivityParameters(variables=data)
 
 
-def load_inputs(path: Optional[Path] = None) -> ModelInputs:
-    """Load model assumptions from JSON."""
-    if path is None:
-        path = Path(__file__).resolve().parent / "data" / "default_inputs.json"
-    with Path(path).open("r", encoding="utf-8") as handle:
-        raw = json.load(handle)
-
+def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
+    """Parse a mapping of raw inputs into :class:`ModelInputs`."""
     years = [int(year) for year in raw["years"]]
     unit_costs = _parse_product_parameters(raw["unit_costs"], raw["markup"])
     depreciation_items = _parse_depreciation(raw["depreciation"])
@@ -203,6 +198,16 @@ def load_inputs(path: Optional[Path] = None) -> ModelInputs:
     )
 
 
+def load_inputs(path: Optional[Path] = None) -> ModelInputs:
+    """Load model assumptions from JSON."""
+    if path is None:
+        path = Path(__file__).resolve().parent / "data" / "default_inputs.json"
+    with Path(path).open("r", encoding="utf-8") as handle:
+        raw = json.load(handle)
+
+    return parse_inputs(raw)
+
+
 __all__ = [
     "ModelInputs",
     "ProductParameters",
@@ -212,5 +217,6 @@ __all__ = [
     "WorkingCapitalDays",
     "MonteCarloParameters",
     "SensitivityParameters",
+    "parse_inputs",
     "load_inputs",
 ]

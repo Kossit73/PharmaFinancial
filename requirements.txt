@@ -1,5 +1,5 @@
 numpy
 pandas
-dash
 plotly
 numpy-financial
+streamlit
