@@ -26,6 +26,7 @@ except Exception:  # pragma: no cover - gracefully degrade when Plotly missing
 
 DEFAULT_INPUT_PATH = Path(__file__).resolve().parent / "data" / "default_inputs.json"
 DEFAULT_INPUT_JSON = DEFAULT_INPUT_PATH.read_text(encoding="utf-8")
+DEFAULT_RISK_CATEGORIES = ["inherent", "climate", "political"]
 
 
 def _streamlit_runtime_exists() -> bool:
@@ -147,6 +148,11 @@ def _resolve_inputs() -> ModelInputs:
         "inflation_rows", _payload_to_inflation_rows(payload)
     )
     _inflation_rows_to_payload(inflation_rows, payload)
+
+    risk_rows = st.session_state.setdefault(
+        "risk_rows", _payload_to_risk_rows(payload)
+    )
+    _risk_rows_to_payload(risk_rows, payload)
 
     return parse_inputs(payload)
 
@@ -291,6 +297,7 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     _render_monte_carlo_inputs(payload)
 
     _core_rows_to_payload(st.session_state.get("core_assumption_rows", []), payload)
+    _risk_rows_to_payload(st.session_state.get("risk_rows", []), payload)
     _inflation_rows_to_payload(st.session_state.get("inflation_rows", []), payload)
     st.session_state["input_payload"] = payload
 
@@ -751,23 +758,67 @@ def _render_inflation_schedule(payload: dict) -> None:
 
 
 def _render_risk_schedule(payload: dict) -> None:
-    years = payload.get("years", [])
-    risk = payload.setdefault("risk", {})
-    categories = ["inherent", "climate", "political"]
-    for category in categories:
-        with st.expander(category.title(), expanded=False):
-            values = _ensure_schedule_length(risk.get(category, []), len(years), fill=0.0)
-            for index, year in enumerate(years):
-                values[index] = st.number_input(
-                    f"{category.title()} risk {year}",
-                    value=float(values[index]),
-                    min_value=0.0,
-                    max_value=1.0,
-                    step=0.01,
-                    format="%.4f",
-                    key=f"risk_{category}_{index}",
-                )
-            risk[category] = values
+    rows = st.session_state.get("risk_rows", [])
+    categories = _risk_categories(payload, rows)
+
+    if not rows:
+        st.info("No risk assumptions configured. Use the form below to add entries.")
+
+    updated_rows: list[dict] = []
+    for index, row in enumerate(rows):
+        cols = st.columns([2] + [1 for _ in categories] + [0.6])
+        year_label = cols[0].text_input(
+            "Year", value=str(row.get("Year", "")), key=f"risk_year_{index}"
+        )
+
+        cleaned_row = {"Year": year_label.strip()}
+        for position, category in enumerate(categories, start=1):
+            value = float(row.get(category, 0.0))
+            cleaned_row[category] = cols[position].number_input(
+                f"{category.title()} Risk",
+                value=value,
+                min_value=0.0,
+                max_value=1.0,
+                step=0.01,
+                format="%.4f",
+                key=f"risk_{category}_{index}",
+            )
+
+        if cols[-1].button("Remove", key=f"risk_remove_{index}"):
+            del rows[index]
+            st.session_state["risk_rows"] = rows
+            st.experimental_rerun()
+
+        updated_rows.append(cleaned_row)
+
+    if updated_rows != rows:
+        st.session_state["risk_rows"] = updated_rows
+
+    with st.form("add_risk_row"):
+        new_year = st.text_input("Year", key="risk_new_year")
+        new_values: dict[str, float] = {}
+        for category in categories:
+            new_values[category] = st.number_input(
+                f"{category.title()} Risk",
+                value=float(st.session_state.get(f"risk_new_{category}", 0.0)),
+                min_value=0.0,
+                max_value=1.0,
+                step=0.01,
+                format="%.4f",
+                key=f"risk_new_{category}",
+            )
+        submitted = st.form_submit_button("Add")
+
+    if submitted:
+        if not new_year.strip():
+            st.warning("Year label is required to add a risk entry.")
+        else:
+            rows.append({"Year": new_year.strip(), **new_values})
+            st.session_state["risk_rows"] = rows
+            st.session_state.pop("risk_new_year", None)
+            for category in categories:
+                st.session_state.pop(f"risk_new_{category}", None)
+            st.experimental_rerun()
 
 
 def _render_sensitivity_inputs(payload: dict) -> None:
@@ -1011,6 +1062,7 @@ def _initialise_session_payload(payload: dict) -> None:
     )
     st.session_state["sensitivity_rows"] = _payload_to_sensitivity_rows(payload)
     st.session_state["inflation_rows"] = _payload_to_inflation_rows(payload)
+    st.session_state["risk_rows"] = _payload_to_risk_rows(payload)
 
 
 def _payload_to_core_rows(payload: Mapping) -> list[dict]:
@@ -1102,6 +1154,98 @@ def _inflation_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
     payload["inflation_series"] = list(rates)
     payload["inflation_labels"] = labels
     _align_payload_horizon(payload, labels, len(rates))
+
+
+def _payload_to_risk_rows(payload: Mapping) -> list[dict]:
+    source: Mapping[str, Sequence[float]] = payload.get("risk", {}) or {}
+    risk: dict[str, list[float]] = {}
+    for name, values in source.items():
+        key = str(name).strip().lower()
+        if not key:
+            continue
+        risk[key] = [float(value) for value in values]
+
+    labels = list(payload.get("inflation_labels") or payload.get("years", []))
+    categories = _risk_categories(payload)
+
+    max_length = max([len(labels)] + [len(values) for values in risk.values()] or [0])
+    if max_length == 0:
+        max_length = 1
+
+    if not labels:
+        labels = [f"Year {index + 1}" for index in range(max_length)]
+    elif len(labels) < max_length:
+        labels = labels + [f"Year {index + 1}" for index in range(len(labels), max_length)]
+
+    rows: list[dict] = []
+    for index in range(max_length):
+        label = labels[index] if index < len(labels) else f"Year {index + 1}"
+        row = {"Year": str(label)}
+        for category in categories:
+            values = risk.get(category, [])
+            row[category] = float(values[index]) if index < len(values) else 0.0
+        rows.append(row)
+
+    return rows
+
+
+def _risk_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
+    if rows is None:
+        return
+
+    categories = _risk_categories(payload, rows)
+    if not rows:
+        payload["risk"] = {category: [] for category in categories}
+        return
+
+    labels: list[str] = []
+    risk_payload: dict[str, list[float]] = {category: [] for category in categories}
+
+    for index, row in enumerate(rows):
+        label = str(row.get("Year", "")).strip()
+        if not label:
+            label = f"Year {index + 1}"
+        labels.append(label)
+        for category in categories:
+            try:
+                value = float(row.get(category, 0.0))
+            except (TypeError, ValueError):
+                value = 0.0
+            risk_payload[category].append(min(max(value, 0.0), 1.0))
+
+    payload["risk"] = risk_payload
+    _align_payload_horizon(payload, labels, len(rows))
+
+    if "risk_rows" in st.session_state:
+        st.session_state["risk_rows"] = _payload_to_risk_rows(payload)
+
+
+def _risk_categories(payload: Mapping | None = None, rows: Sequence[Mapping] | None = None) -> list[str]:
+    categories: list[str] = []
+    seen: set[str] = set()
+
+    def _add(name: str | None) -> None:
+        if not name:
+            return
+        key = str(name).strip().lower()
+        if not key or key == "year" or key in seen:
+            return
+        seen.add(key)
+        categories.append(key)
+
+    for default in DEFAULT_RISK_CATEGORIES:
+        _add(default)
+
+    if payload and isinstance(payload.get("risk"), Mapping):
+        for name in payload["risk"].keys():
+            _add(str(name))
+
+    if rows:
+        for row in rows:
+            for key in row.keys():
+                _add(str(key))
+
+    return categories
 
 
 def _align_payload_horizon(payload: dict, labels: Sequence[str], target_length: int) -> None:
