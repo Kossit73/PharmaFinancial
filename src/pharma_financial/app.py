@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 from typing import Mapping
 
-import plotly.express as px
 import streamlit as st
 
 from .inputs import ModelInputs, load_inputs, parse_inputs
@@ -16,6 +15,11 @@ try:  # pragma: no cover - executed in environments with pandas available
     import pandas as pd
 except Exception:  # pragma: no cover - fallback for environments without pandas
     pd = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency for charting
+    import plotly.express as px
+except Exception:  # pragma: no cover - gracefully degrade when Plotly missing
+    px = None  # type: ignore
 
 DEFAULT_INPUT_PATH = Path(__file__).resolve().parent / "data" / "default_inputs.json"
 DEFAULT_INPUT_JSON = DEFAULT_INPUT_PATH.read_text(encoding="utf-8")
@@ -130,26 +134,37 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
         )
 
     st.markdown("### Utility Schedule")
-    utility_df = pd.DataFrame(
+    utility_rows = [
         {
-            "Year": inputs.years,
-            "Operating Days": inputs.utility_schedule.operating_days,
-            "Operating Hours": inputs.utility_schedule.operating_hours,
+            "Year": year,
+            "Operating Days": days,
+            "Operating Hours": hours,
         }
-    )
-    st.dataframe(_ensure_dataframe(utility_df), use_container_width=True)
+        for year, days, hours in zip(
+            inputs.years,
+            inputs.utility_schedule.operating_days,
+            inputs.utility_schedule.operating_hours,
+        )
+    ]
+    st.dataframe(_ensure_dataframe(utility_rows), use_container_width=True)
 
 
 def _render_dashboard_tab(outputs: FinancialOutputs) -> None:
     income = _with_year(outputs.income_statement)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        fig_revenue = px.line(income, x="Year", y="Net Revenue", title="Net Revenue")
-        st.plotly_chart(fig_revenue, use_container_width=True)
-    with col2:
-        fig_ebitda = px.line(income, x="Year", y="EBITDA", title="EBITDA")
-        st.plotly_chart(fig_ebitda, use_container_width=True)
+    if px is None or pd is None:
+        st.warning(
+            "Plotly visualisations unavailable. Displaying financial metrics as tables instead."
+        )
+        st.dataframe(income, use_container_width=True)
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            fig_revenue = px.line(income, x="Year", y="Net Revenue", title="Net Revenue")
+            st.plotly_chart(fig_revenue, use_container_width=True)
+        with col2:
+            fig_ebitda = px.line(income, x="Year", y="EBITDA", title="EBITDA")
+            st.plotly_chart(fig_ebitda, use_container_width=True)
 
     st.markdown("### Investment Metrics")
     metrics = outputs.summary_metrics["Value"]
@@ -186,9 +201,12 @@ def _render_scenarios(outputs: FinancialOutputs) -> None:
 def _render_monte_carlo(outputs: FinancialOutputs) -> None:
     st.subheader("Monte Carlo Simulation")
     monte_carlo_df = _ensure_dataframe(outputs.monte_carlo)
-    fig = px.histogram(monte_carlo_df, x="NPV", nbins=40, title="NPV Distribution")
-    st.plotly_chart(fig, use_container_width=True)
-    if pd is not None:
+    if px is None or pd is None:
+        st.warning("Plotly unavailable. Displaying Monte Carlo results in tabular form.")
+        st.dataframe(monte_carlo_df, use_container_width=True)
+    else:
+        fig = px.histogram(monte_carlo_df, x="NPV", nbins=40, title="NPV Distribution")
+        st.plotly_chart(fig, use_container_width=True)
         st.dataframe(monte_carlo_df.describe().T, use_container_width=True)
 
 
