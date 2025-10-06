@@ -113,6 +113,14 @@ class SensitivityParameters:
 
 
 @dataclass
+class GoalSeekParameters:
+    metric: str
+    target: float
+    source: str = "income_statement"
+    year: Optional[int] = None
+
+
+@dataclass
 class ModelInputs:
     years: List[int]
     production_estimate: Mapping[str, List[float]]
@@ -136,6 +144,7 @@ class ModelInputs:
     scenarios: Mapping[str, Mapping[str, List[float]]]
     sensitivity: SensitivityParameters
     monte_carlo: MonteCarloParameters
+    goal_seek: Optional[GoalSeekParameters]
 
     @property
     def products(self) -> List[str]:
@@ -339,6 +348,19 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
     if not risk_schedule:
         risk_schedule = {"inherent": [0.0 for _ in years]}
 
+    goal_seek = None
+    goal_data = raw.get("goal_seek")
+    if isinstance(goal_data, Mapping):
+        metric = str(goal_data.get("metric", "Net Income"))
+        target = float(goal_data.get("target", 0.0))
+        source = str(goal_data.get("source", "income_statement"))
+        year_value = goal_data.get("year")
+        try:
+            year = int(year_value) if year_value is not None else None
+        except (TypeError, ValueError):
+            year = None
+        goal_seek = GoalSeekParameters(metric=metric, target=target, source=source, year=year)
+
     return ModelInputs(
         years=years,
         production_estimate=raw["production_estimate"],
@@ -362,6 +384,7 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         scenarios=raw["scenarios"],
         sensitivity=sensitivity,
         monte_carlo=monte_carlo,
+        goal_seek=goal_seek,
     )
 
 
@@ -385,6 +408,7 @@ __all__ = [
     "WorkingCapitalDays",
     "MonteCarloParameters",
     "SensitivityParameters",
+    "GoalSeekParameters",
     "parse_inputs",
     "load_inputs",
 ]

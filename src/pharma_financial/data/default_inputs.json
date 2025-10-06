@@ -292,5 +292,11 @@
     "iterations": 1000,
     "revenue_growth_range": [0.05, 0.15],
     "metrics": ["NPV", "Average Net Income", "Average EBITDA"]
+  },
+  "goal_seek": {
+    "metric": "Net Income",
+    "source": "income_statement",
+    "target": 20.0,
+    "year": 2033
   }
 }

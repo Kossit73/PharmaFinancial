@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Mapping, MutableMapping
+from typing import Dict, Iterable, List, Mapping, MutableMapping, Optional
 
 from .inputs import DebtEntry, ModelInputs, ProductParameters
 from .table import Table, build_table
@@ -17,6 +17,7 @@ class FinancialOutputs:
     balance_sheet: Table
     cash_flow: Table
     summary_metrics: Table
+    goal_seek: Table
     break_even: Table
     payback: Table
     discounted_payback: Table
@@ -54,6 +55,22 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
     if abs(denominator) < 1e-12:
         return float("nan")
     return numerator / denominator
+
+
+def _value_for_year(table: Table, column: str, year: Optional[int]) -> float:
+    if column not in table.data:
+        return float("nan")
+    values = table.column(column)
+    if not values:
+        return float("nan")
+    if year is None:
+        return values[-1]
+    try:
+        position = table.index.index(year)
+    except ValueError:
+        position = len(values) - 1
+    position = max(0, min(position, len(values) - 1))
+    return values[position]
 
 
 class FinancialModel:
@@ -549,6 +566,48 @@ class FinancialModel:
             index_name="Metric",
         )
 
+    def goal_seek_metrics(
+        self,
+        summary: Optional[Table] = None,
+        income: Optional[Table] = None,
+        cash_flow: Optional[Table] = None,
+    ) -> Table:
+        config = getattr(self.inputs, "goal_seek", None)
+        if config is None:
+            return build_table([], {"Target": []}, index_name="Metric")
+
+        source = (config.source or "income_statement").lower()
+        metric_name = config.metric
+
+        actual = float("nan")
+        if source == "summary":
+            summary_table = summary or self.summary_metrics()
+            if metric_name in summary_table.index:
+                position = summary_table.index.index(metric_name)
+                actual = summary_table.data["Value"][position]
+        elif source == "cash_flow":
+            cash_table = cash_flow or self.cash_flow_statement()
+            actual = _value_for_year(cash_table, metric_name, config.year)
+        else:
+            income_table = income or self.income_statement()
+            actual = _value_for_year(income_table, metric_name, config.year)
+
+        gap = config.target - actual
+        multiplier = float("nan")
+        if abs(actual) > 1e-9:
+            multiplier = config.target / actual
+
+        return build_table(
+            [metric_name],
+            {
+                "Target": [config.target],
+                "Actual": [actual],
+                "Gap": [gap],
+                "Required Multiplier": [multiplier],
+            },
+            index_name="Metric",
+        )
+
     def break_even_analysis(self) -> Table:
         costs = self.cost_structure()
         fixed_cost_total = sum(costs.column("Total Expenses")) / len(self.years)
@@ -587,6 +646,7 @@ class FinancialModel:
         balance = self.balance_sheet()
         cash_flow = self.cash_flow_statement()
         summary = self.summary_metrics()
+        goal_seek = self.goal_seek_metrics(summary=summary, income=income, cash_flow=cash_flow)
         break_even = self.break_even_analysis()
         payback = self.payback_schedule()
         discounted_payback = self.discounted_payback_schedule()
@@ -598,6 +658,7 @@ class FinancialModel:
             balance_sheet=balance,
             cash_flow=cash_flow,
             summary_metrics=summary,
+            goal_seek=goal_seek,
             break_even=break_even,
             payback=payback,
             discounted_payback=discounted_payback,

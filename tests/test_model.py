@@ -34,6 +34,16 @@ class FinancialModelTest(unittest.TestCase):
         expected = ["NPV", "IRR", "Payback Period", "Discounted Payback"]
         self.assertEqual(summary.index, expected)
 
+    def test_goal_seek_metric_matches_income_statement(self):
+        self.assertIsNotNone(self.inputs.goal_seek)
+        goal_table = self.outputs.goal_seek
+        self.assertTrue(goal_table.index)
+        metric_name = goal_table.index[0]
+        self.assertEqual(metric_name, self.inputs.goal_seek.metric)
+        actual_value = goal_table.data["Actual"][0]
+        income_last = self.outputs.income_statement.column(metric_name)[-1]
+        self.assertAlmostEqual(actual_value, income_last, places=6)
+
     def test_total_units_respect_capacity(self):
         totals = self.inputs.total_production_units
         capacity = self.inputs.production_capacity

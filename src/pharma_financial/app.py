@@ -6,7 +6,7 @@ import hashlib
 import re
 from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import streamlit as st
 
@@ -452,6 +452,9 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     st.markdown("### Risk Schedule")
     _render_risk_schedule(payload)
 
+    st.markdown("### Goal Seek Configuration")
+    _render_goal_seek(payload)
+
     st.markdown("### Sensitivity Analysis Configuration")
     _render_sensitivity_inputs(payload)
 
@@ -500,6 +503,36 @@ def _render_dashboard_tab(outputs: FinancialOutputs) -> None:
         with col:
             formatted = _format_number(value)
             st.metric(label=name, value=formatted)
+
+    st.markdown("### Goal Seek Metric")
+    goal_data = _ensure_dataframe(outputs.goal_seek)
+    if isinstance(goal_data, list):
+        if not goal_data:
+            st.caption("No goal seek configuration provided in the assumptions.")
+        else:
+            st.dataframe(goal_data, use_container_width=True)
+    else:
+        if hasattr(goal_data, "empty") and getattr(goal_data, "empty"):
+            st.caption("No goal seek configuration provided in the assumptions.")
+        elif pd is not None and isinstance(goal_data, pd.DataFrame):
+            display = goal_data.copy()
+            index_name = display.index.name or "Metric"
+            display = display.reset_index().rename(columns={index_name: "Metric"})
+            metric_columns = st.columns(len(display))
+            for column, (_, row) in zip(metric_columns, display.iterrows()):
+                label = str(row.get("Metric", "Goal"))
+                actual_value = float(row.get("Actual", float("nan")))
+                target_value = float(row.get("Target", float("nan")))
+                delta_value = actual_value - target_value
+                with column:
+                    st.metric(
+                        label=f"{label} Actual",
+                        value=_format_number(actual_value),
+                        delta=_format_number(delta_value),
+                    )
+            st.dataframe(display, use_container_width=True)
+        else:
+            st.dataframe(goal_data, use_container_width=True)
 
     st.markdown("### Key Analysis Dashboard")
     if not supports_plotly:
@@ -1494,6 +1527,97 @@ def _render_risk_schedule(payload: dict) -> None:
             for category in categories:
                 st.session_state.pop(f"risk_new_{category}", None)
             _rerun()
+
+
+def _render_goal_seek(payload: dict) -> None:
+    goal = payload.get("goal_seek", {}) if isinstance(payload, Mapping) else {}
+    source_options = ["income_statement", "cash_flow", "summary"]
+    default_source = str(goal.get("source", "income_statement"))
+    if default_source not in source_options:
+        default_source = "income_statement"
+    source = st.selectbox(
+        "Metric Source",
+        source_options,
+        index=source_options.index(default_source),
+        key="goal_source",
+        help="Choose whether to evaluate income statement, cash flow, or summary metrics.",
+    )
+
+    metric_options = {
+        "income_statement": [
+            "Gross Revenue",
+            "Net Revenue",
+            "Total Expenses",
+            "EBITDA",
+            "EBIT",
+            "Interest",
+            "EBT",
+            "Taxes",
+            "Net Income",
+            "Return on Equity",
+        ],
+        "cash_flow": [
+            "Operating Cash Flow",
+            "Investing Cash Flow",
+            "Financing Cash Flow",
+            "Net Change in Cash",
+            "Beginning Cash",
+            "Ending Cash",
+        ],
+        "summary": ["NPV", "IRR", "Payback Period", "Discounted Payback"],
+    }
+
+    available_metrics = metric_options.get(source, [])
+    if not available_metrics:
+        available_metrics = [str(goal.get("metric", "Net Income"))]
+
+    default_metric = str(goal.get("metric", available_metrics[0]))
+    if default_metric not in available_metrics:
+        default_metric = available_metrics[0]
+
+    metric = st.selectbox(
+        "Metric",
+        available_metrics,
+        index=available_metrics.index(default_metric),
+        key="goal_metric",
+    )
+
+    target_value = float(goal.get("target", 0.0))
+    target = st.number_input(
+        "Target Value",
+        value=target_value,
+        step=0.01,
+        format="%.4f",
+        key="goal_target",
+    )
+
+    selected_year: Optional[int] = None
+    if source != "summary":
+        years = payload.get("years", []) if isinstance(payload, Mapping) else []
+        if years:
+            try:
+                default_year = int(goal.get("year", years[-1]))
+            except (TypeError, ValueError):
+                default_year = years[-1]
+            if default_year not in years:
+                default_year = years[-1]
+            selected_year = st.selectbox(
+                "Year",
+                years,
+                index=years.index(default_year),
+                key="goal_year",
+            )
+    else:
+        st.caption("Summary metrics apply across the full projection horizon.")
+
+    goal_payload: dict[str, object] = {
+        "metric": metric,
+        "target": float(target),
+        "source": source,
+    }
+    if selected_year is not None:
+        goal_payload["year"] = int(selected_year)
+    payload["goal_seek"] = goal_payload
 
 
 def _render_sensitivity_inputs(payload: dict) -> None:
