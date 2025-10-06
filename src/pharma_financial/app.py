@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 from collections.abc import Mapping, Sequence
-from typing import Tuple
+from typing import List, Tuple
 
 import streamlit as st
 
-from .inputs import ModelInputs, load_inputs, parse_inputs
+from .inputs import ModelInputs, parse_inputs
 from .model import FinancialModel, FinancialOutputs
 from .table import Table
 
@@ -86,39 +87,147 @@ def _resolve_inputs() -> ModelInputs:
         "Custom assumptions (JSON)", type="json", accept_multiple_files=False
     )
     if uploaded is not None:
-        try:
-            raw = json.loads(uploaded.getvalue().decode("utf-8"))
-            inputs = parse_inputs(raw)
-            st.sidebar.success("Loaded custom assumptions.")
-            return inputs
-        except json.JSONDecodeError as exc:
-            st.sidebar.error(f"Invalid JSON file: {exc}")
-        except Exception as exc:  # pragma: no cover - user supplied input
-            st.sidebar.error(f"Unable to parse inputs: {exc}")
+        file_bytes = uploaded.getvalue()
+        signature = f"{getattr(uploaded, 'name', 'upload')}:{hashlib.md5(file_bytes).hexdigest()}"
+        if st.session_state.get("uploaded_signature") != signature:
+            try:
+                raw = json.loads(file_bytes.decode("utf-8"))
+                _initialise_session_payload(raw)
+                parse_inputs(raw)
+                st.session_state["uploaded_signature"] = signature
+                st.sidebar.success("Loaded custom assumptions.")
+            except json.JSONDecodeError as exc:
+                st.sidebar.error(f"Invalid JSON file: {exc}")
+            except Exception as exc:  # pragma: no cover - user supplied input
+                st.sidebar.error(f"Unable to parse inputs: {exc}")
 
-    st.sidebar.caption("Using default assumptions bundled with the project.")
+    if st.session_state.get("uploaded_signature"):
+        st.sidebar.caption(
+            "Using uploaded assumptions. Adjust the tables below to update the model."
+        )
+    else:
+        st.sidebar.caption("Using default assumptions bundled with the project.")
     st.sidebar.download_button(
         label="Download default JSON",
         data=DEFAULT_INPUT_JSON,
         file_name="default_inputs.json",
         mime="application/json",
     )
-    return load_inputs(DEFAULT_INPUT_PATH)
+    if "input_payload" not in st.session_state:
+        _initialise_session_payload(json.loads(DEFAULT_INPUT_JSON))
+
+    payload = st.session_state["input_payload"]
+    rows = st.session_state.setdefault(
+        "core_assumption_rows", _payload_to_core_rows(payload)
+    )
+    _core_rows_to_payload(rows, payload)
+
+    return parse_inputs(payload)
 
 
 def _render_inputs_tab(inputs: ModelInputs) -> None:
     st.subheader("Core Assumptions")
-    assumption_rows = [
-        {
-            "Product": name.title(),
-            "Production Cost": params.production_cost,
-            "Selling Price": params.selling_price,
-            "Freight Cost": params.freight_cost,
-            "Markup": params.markup,
-        }
-        for name, params in inputs.unit_costs.items()
-    ]
-    st.dataframe(_ensure_dataframe(assumption_rows), use_container_width=True)
+    rows: List[dict] = st.session_state.get("core_assumption_rows", [])
+
+    if not rows:
+        st.info("No core assumptions configured. Use the form below to add entries.")
+
+    updated_rows: list[dict] = []
+    for index, row in enumerate(rows):
+        container = st.container()
+        with container:
+            cols = st.columns([3, 2, 2, 2, 2, 1])
+            description = cols[0].text_input(
+                "Description",
+                value=row.get("Product", ""),
+                key=f"core_desc_{index}",
+                help="Name of the product or assumption this row represents.",
+            )
+            production = cols[1].number_input(
+                "Production Cost",
+                value=float(row.get("Production Cost", 0.0)),
+                key=f"core_prod_{index}",
+                step=0.001,
+                format="%.4f",
+            )
+            selling = cols[2].number_input(
+                "Selling Price",
+                value=float(row.get("Selling Price", 0.0)),
+                key=f"core_sell_{index}",
+                step=0.001,
+                format="%.4f",
+            )
+            freight = cols[3].number_input(
+                "Freight Cost",
+                value=float(row.get("Freight Cost", 0.0)),
+                key=f"core_freight_{index}",
+                step=0.001,
+                format="%.4f",
+            )
+            markup = cols[4].number_input(
+                "Markup",
+                value=float(row.get("Markup", 0.0)),
+                key=f"core_markup_{index}",
+                step=0.01,
+                format="%.2f",
+            )
+            if cols[5].button("Remove", key=f"core_remove_{index}"):
+                del rows[index]
+                st.session_state["core_assumption_rows"] = rows
+                st.experimental_rerun()
+
+        updated_rows.append(
+            {
+                "Product": description.strip(),
+                "Production Cost": production,
+                "Selling Price": selling,
+                "Freight Cost": freight,
+                "Markup": markup,
+            }
+        )
+
+    if updated_rows != rows:
+        st.session_state["core_assumption_rows"] = updated_rows
+
+    st.markdown("#### Add a core assumption")
+    with st.form("add_core_assumption"):
+        new_description = st.text_input(
+            "Description", key="core_new_description", help="Label for the new row."
+        )
+        new_production = st.number_input(
+            "Production Cost", value=0.0, step=0.001, format="%.4f", key="core_new_prod"
+        )
+        new_selling = st.number_input(
+            "Selling Price", value=0.0, step=0.001, format="%.4f", key="core_new_sell"
+        )
+        new_freight = st.number_input(
+            "Freight Cost", value=0.0, step=0.001, format="%.4f", key="core_new_freight"
+        )
+        new_markup = st.number_input(
+            "Markup", value=0.0, step=0.01, format="%.2f", key="core_new_markup"
+        )
+        submitted = st.form_submit_button("Add")
+
+    if submitted:
+        if not new_description.strip():
+            st.warning("Description is required to add a core assumption.")
+        else:
+            rows.append(
+                {
+                    "Product": new_description.strip(),
+                    "Production Cost": new_production,
+                    "Selling Price": new_selling,
+                    "Freight Cost": new_freight,
+                    "Markup": new_markup,
+                }
+            )
+            st.session_state["core_assumption_rows"] = rows
+            st.session_state["core_new_description"] = ""
+            st.session_state["core_new_prod"] = 0.0
+            st.session_state["core_new_sell"] = 0.0
+            st.session_state["core_new_freight"] = 0.0
+            st.session_state["core_new_markup"] = 0.0
+            st.experimental_rerun()
 
     col1, col2 = st.columns(2)
     with col1:
@@ -314,6 +423,56 @@ def _extract_metric_pairs(summary) -> Sequence[Tuple[str, float]]:
             return [(str(name), float(val)) for name, val in value.items()]
 
     return []
+
+
+def _initialise_session_payload(payload: dict) -> None:
+    st.session_state["input_payload"] = payload
+    st.session_state["core_assumption_rows"] = _payload_to_core_rows(payload)
+
+
+def _payload_to_core_rows(payload: Mapping) -> list[dict]:
+    unit_costs = payload.get("unit_costs", {})
+    markup = payload.get("markup", {})
+    rows: list[dict] = []
+    for name, values in unit_costs.items():
+        rows.append(
+            {
+                "Product": str(name),
+                "Production Cost": float(values.get("production", 0.0)),
+                "Selling Price": float(values.get("price", 0.0)),
+                "Freight Cost": float(values.get("freight", 0.0)),
+                "Markup": float(markup.get(name, 0.0)),
+            }
+        )
+    return rows
+
+
+def _core_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
+    unit_costs: dict[str, dict[str, float]] = {}
+    markup: dict[str, float] = {}
+    years = payload.get("years", [])
+    existing_estimate = payload.get("production_estimate", {})
+    production_estimate: dict[str, list[float]] = {}
+
+    for row in rows:
+        name = str(row.get("Product", "")).strip()
+        if not name:
+            continue
+        unit_costs[name] = {
+            "production": float(row.get("Production Cost", 0.0)),
+            "price": float(row.get("Selling Price", 0.0)),
+            "freight": float(row.get("Freight Cost", 0.0)),
+        }
+        markup[name] = float(row.get("Markup", 0.0))
+        if isinstance(existing_estimate, Mapping) and name in existing_estimate:
+            production_estimate[name] = list(existing_estimate[name])
+        else:
+            production_estimate[name] = [0.0 for _ in years]
+
+    payload["unit_costs"] = unit_costs
+    payload["markup"] = markup
+    if production_estimate:
+        payload["production_estimate"] = production_estimate
 
 
 if __name__ == "__main__":  # pragma: no cover - Streamlit executes the script directly
