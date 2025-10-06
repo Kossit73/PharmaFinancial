@@ -1432,9 +1432,7 @@ def _render_depreciation_schedule(payload: dict) -> None:
         override_net_book = bool(row.get("override_net_book", False)) or bool(
             data.get("is_first", False)
         )
-        override_cumulative = bool(row.get("override_cumulative", False)) or bool(
-            data.get("is_first", False)
-        )
+        override_cumulative = bool(data.get("is_first", False))
 
         new_row = {
             "asset_type": asset_input.strip(),
