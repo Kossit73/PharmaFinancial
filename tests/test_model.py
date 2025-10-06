@@ -61,6 +61,48 @@ class FinancialModelTest(unittest.TestCase):
             expected_total = raw[idx] + utilities[idx] + direct[idx] + general[idx]
             self.assertAlmostEqual(total_expenses[idx], expected_total, places=6)
 
+    def test_interest_matches_financing_inputs(self):
+        financing = self.inputs.financing
+        interest_column = self.outputs.income_statement.column("Interest")
+        manual: list[float] = []
+        for year in self.inputs.years:
+            total = 0.0
+            for entry in financing.senior_debt_entries:
+                if entry.year == year:
+                    total += entry.amount * financing.senior_debt_interest
+            for entry in financing.revolver_entries:
+                if entry.year == year:
+                    total += entry.amount * financing.revolver_interest
+            for entry in financing.overdraft_entries:
+                if entry.year == year:
+                    total += entry.amount * financing.cash_interest
+            manual.append(-total)
+
+        self.assertEqual(len(interest_column), len(manual))
+        for actual, expected in zip(interest_column, manual):
+            self.assertAlmostEqual(actual, expected, places=6)
+
+    def test_liabilities_include_outstanding_balances(self):
+        financing = self.inputs.financing
+        liabilities = self.outputs.balance_sheet.column("Total Liabilities")
+        manual: list[float] = []
+        for year in self.inputs.years:
+            total = 0.0
+            for entry in financing.senior_debt_entries:
+                if entry.year == year:
+                    total += entry.outstanding
+            for entry in financing.revolver_entries:
+                if entry.year == year:
+                    total += entry.outstanding
+            for entry in financing.overdraft_entries:
+                if entry.year == year:
+                    total += entry.outstanding
+            manual.append(total)
+
+        self.assertEqual(len(liabilities), len(manual))
+        for actual, expected in zip(liabilities, manual):
+            self.assertAlmostEqual(actual, expected, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

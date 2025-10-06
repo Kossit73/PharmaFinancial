@@ -217,9 +217,35 @@
     "revolver_interest": 0.20,
     "cash_interest": 0.04,
     "dividend_payout": 0.20,
-    "senior_debt_schedule": {"2024": -0.5, "2025": 4.54, "2026": -0.5, "2027": -0.5, "2028": -0.5, "2029": -0.5, "2030": -0.5, "2031": -0.5, "2032": -0.5, "2033": -0.5},
-    "revolver_initial": 1.0,
-    "share_capital": 5.0
+    "share_capital": 5.0,
+    "senior_debt": [
+      {"year": 2024, "amount": 9.5, "outstanding": 9.5},
+      {"year": 2025, "amount": 14.036, "outstanding": 14.036},
+      {"year": 2026, "amount": 13.536, "outstanding": 13.536},
+      {"year": 2027, "amount": 13.036, "outstanding": 13.036},
+      {"year": 2028, "amount": 12.536, "outstanding": 12.536},
+      {"year": 2029, "amount": 12.036, "outstanding": 12.036},
+      {"year": 2030, "amount": 11.536, "outstanding": 11.536},
+      {"year": 2031, "amount": 11.036, "outstanding": 11.036},
+      {"year": 2032, "amount": 10.536, "outstanding": 10.536},
+      {"year": 2033, "amount": 10.036, "outstanding": 10.036}
+    ],
+    "revolver": [
+      {"year": 2024, "amount": 1.0, "outstanding": 1.0},
+      {"year": 2025, "amount": 0.326, "outstanding": 0.326}
+    ],
+    "overdraft": [
+      {"year": 2024, "amount": 2.5, "outstanding": 2.5},
+      {"year": 2025, "amount": 2.7, "outstanding": 2.7},
+      {"year": 2026, "amount": 3.0, "outstanding": 3.0},
+      {"year": 2027, "amount": 3.2, "outstanding": 3.2},
+      {"year": 2028, "amount": 3.5, "outstanding": 3.5},
+      {"year": 2029, "amount": 3.8, "outstanding": 3.8},
+      {"year": 2030, "amount": 4.2, "outstanding": 4.2},
+      {"year": 2031, "amount": 4.6, "outstanding": 4.6},
+      {"year": 2032, "amount": 5.0, "outstanding": 5.0},
+      {"year": 2033, "amount": 5.5, "outstanding": 5.5}
+    ]
   },
   "working_capital": {
     "days": {

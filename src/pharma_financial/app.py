@@ -465,6 +465,9 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     _utility_rows_to_payload(st.session_state.get("utility_rows", []), payload)
     _risk_rows_to_payload(st.session_state.get("risk_rows", []), payload)
     _inflation_rows_to_payload(st.session_state.get("inflation_rows", []), payload)
+    _debt_rows_to_payload(st.session_state.get("senior_debt_rows", []), payload, "senior_debt")
+    _debt_rows_to_payload(st.session_state.get("revolver_rows", []), payload, "revolver")
+    _debt_rows_to_payload(st.session_state.get("overdraft_rows", []), payload, "overdraft")
     st.session_state["input_payload"] = payload
 
 
@@ -1175,6 +1178,38 @@ def _render_cost_and_financing(payload: dict) -> None:
         key="finance_cash_interest",
     )
 
+    years: Sequence[int] = payload.get("years", [])
+
+    _render_debt_section(
+        title="Senior Debt",
+        session_key="senior_debt_rows",
+        amount_label="Senior Debt Amount",
+        outstanding_label="Outstanding Liability",
+        interest_label="Senior Debt Interest Payable",
+        interest_rate=float(financing.get("senior_debt_interest", 0.0)),
+        years=years,
+    )
+
+    _render_debt_section(
+        title="Revolver Loan",
+        session_key="revolver_rows",
+        amount_label="Revolver Balance",
+        outstanding_label="Outstanding Liability",
+        interest_label="Revolver Interest Payable",
+        interest_rate=float(financing.get("revolver_interest", 0.0)),
+        years=years,
+    )
+
+    _render_debt_section(
+        title="Overdraft",
+        session_key="overdraft_rows",
+        amount_label="Overdraft Balance",
+        outstanding_label="Outstanding Liability",
+        interest_label="Cash Interest Payable",
+        interest_rate=float(financing.get("cash_interest", 0.0)),
+        years=years,
+    )
+
     financing["dividend_payout"] = st.number_input(
         "Dividend payout ratio",
         value=float(financing.get("dividend_payout", 0.0)),
@@ -1182,6 +1217,129 @@ def _render_cost_and_financing(payload: dict) -> None:
         format="%.4f",
         key="finance_dividend",
     )
+
+
+def _render_debt_section(
+    *,
+    title: str,
+    session_key: str,
+    amount_label: str,
+    outstanding_label: str,
+    interest_label: str,
+    interest_rate: float,
+    years: Sequence[int],
+) -> None:
+    st.markdown(f"#### {title}")
+
+    rows: List[dict] = st.session_state.get(session_key, [])
+
+    if not rows:
+        st.info("No entries configured. Use the form below to add debt details.")
+
+    header = st.columns([1.2, 1.6, 1.6, 1.6, 0.8])
+    header[0].markdown("**Year**")
+    header[1].markdown(f"**{amount_label}**")
+    header[2].markdown(f"**{outstanding_label}**")
+    header[3].markdown(f"**{interest_label}**")
+    header[4].markdown(" ")
+
+    updated_rows: List[dict] = []
+    for index, row in enumerate(rows):
+        cols = st.columns([1.2, 1.6, 1.6, 1.6, 0.8])
+        default_year = int(row.get("Year", years[index] if index < len(years) else (years[0] if years else 0)))
+        year_value = cols[0].number_input(
+            "Year",
+            value=default_year,
+            key=f"{session_key}_year_{index}",
+            step=1,
+            format="%d",
+        )
+        amount_value = cols[1].number_input(
+            amount_label,
+            value=float(row.get("Amount", 0.0)),
+            key=f"{session_key}_amount_{index}",
+            min_value=0.0,
+            step=0.1,
+            format="%.4f",
+        )
+        outstanding_value = cols[2].number_input(
+            outstanding_label,
+            value=float(row.get("Outstanding", amount_value)),
+            key=f"{session_key}_outstanding_{index}",
+            min_value=0.0,
+            step=0.1,
+            format="%.4f",
+        )
+
+        interest_value = float(amount_value) * float(interest_rate)
+        interest_key = f"{session_key}_interest_{index}"
+        _set_widget_value(interest_key, interest_value)
+        cols[3].number_input(
+            interest_label,
+            value=interest_value,
+            key=interest_key,
+            format="%.4f",
+            disabled=True,
+        )
+
+        if cols[4].button("Remove", key=f"{session_key}_remove_{index}"):
+            del rows[index]
+            st.session_state[session_key] = rows
+            _rerun()
+
+        updated_rows.append(
+            {
+                "Year": int(year_value),
+                "Amount": float(amount_value),
+                "Outstanding": float(outstanding_value),
+            }
+        )
+
+    if updated_rows != rows:
+        st.session_state[session_key] = updated_rows
+
+    next_year = years[len(rows)] if years and len(rows) < len(years) else (years[-1] + 1 if years else 0)
+
+    with st.form(f"add_{session_key}"):
+        new_year = st.number_input(
+            "Year",
+            value=int(next_year),
+            step=1,
+            format="%d",
+            key=f"{session_key}_new_year",
+        )
+        new_amount = st.number_input(
+            amount_label,
+            value=0.0,
+            min_value=0.0,
+            step=0.1,
+            format="%.4f",
+            key=f"{session_key}_new_amount",
+        )
+        new_outstanding = st.number_input(
+            outstanding_label,
+            value=0.0,
+            min_value=0.0,
+            step=0.1,
+            format="%.4f",
+            key=f"{session_key}_new_outstanding",
+        )
+        if st.form_submit_button("Add"):
+            rows.append(
+                {
+                    "Year": int(new_year),
+                    "Amount": float(new_amount),
+                    "Outstanding": float(new_outstanding or new_amount),
+                }
+            )
+            st.session_state[session_key] = rows
+            for key in (
+                f"{session_key}_new_year",
+                f"{session_key}_new_amount",
+                f"{session_key}_new_outstanding",
+            ):
+                st.session_state.pop(key, None)
+            _rerun()
 
 
 def _render_tax_schedule(payload: dict) -> None:
@@ -1689,6 +1847,9 @@ def _initialise_session_payload(payload: dict) -> None:
     st.session_state["sensitivity_rows"] = _payload_to_sensitivity_rows(payload)
     st.session_state["inflation_rows"] = _payload_to_inflation_rows(payload)
     st.session_state["risk_rows"] = _payload_to_risk_rows(payload)
+    st.session_state["senior_debt_rows"] = _payload_to_debt_rows(payload, "senior_debt")
+    st.session_state["revolver_rows"] = _payload_to_debt_rows(payload, "revolver")
+    st.session_state["overdraft_rows"] = _payload_to_debt_rows(payload, "overdraft")
 
 
 def _payload_to_core_rows(payload: Mapping) -> list[dict]:
@@ -1790,6 +1951,55 @@ def _core_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
         payload["production_capacity"] = capacity_map
     else:
         payload.pop("production_capacity", None)
+
+
+def _payload_to_debt_rows(payload: Mapping, key: str) -> list[dict]:
+    financing = payload.get("financing", {}) if isinstance(payload, Mapping) else {}
+    raw_rows = financing.get(key, []) if isinstance(financing, Mapping) else []
+
+    if raw_rows is None:
+        iterable: Iterable[Mapping] = []
+    elif isinstance(raw_rows, Mapping):
+        iterable = raw_rows.values()  # type: ignore[assignment]
+    else:
+        iterable = raw_rows  # type: ignore[assignment]
+
+    rows: list[dict] = []
+    for item in iterable:
+        if not isinstance(item, Mapping):
+            continue
+        year_value = item.get("year")
+        try:
+            year = int(year_value)
+        except (TypeError, ValueError):
+            continue
+        amount = float(item.get("amount", 0.0))
+        outstanding = float(item.get("outstanding", amount))
+        rows.append({"Year": year, "Amount": amount, "Outstanding": outstanding})
+
+    rows.sort(key=lambda row: row.get("Year", 0))
+    return rows
+
+
+def _debt_rows_to_payload(rows: Sequence[Mapping], payload: dict, key: str) -> None:
+    cleaned: list[dict] = []
+    for row in rows:
+        year_value = row.get("Year")
+        try:
+            year = int(year_value)
+        except (TypeError, ValueError):
+            continue
+        amount = float(row.get("Amount", 0.0))
+        outstanding = float(row.get("Outstanding", amount))
+        cleaned.append({"year": year, "amount": amount, "outstanding": outstanding})
+
+    cleaned.sort(key=lambda item: item["year"])
+    financing = payload.setdefault("financing", {})
+    financing[key] = cleaned
+    if key == "senior_debt":
+        financing.pop("senior_debt_schedule", None)
+    if key == "revolver":
+        financing.pop("revolver_initial", None)
 
 
 def _payload_to_inflation_rows(payload: Mapping) -> list[dict]:

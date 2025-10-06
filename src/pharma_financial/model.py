@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Mapping, MutableMapping
 
-from .inputs import ModelInputs, ProductParameters
+from .inputs import DebtEntry, ModelInputs, ProductParameters
 from .table import Table, build_table
 
 
@@ -231,9 +231,20 @@ class FinancialModel:
         )
 
     def _interest_schedule(self) -> List[float]:
-        debt_balance = self._senior_debt_balance()
-        interest_rate = self.inputs.financing.senior_debt_interest
-        return [-balance * interest_rate for balance in debt_balance]
+        financing = self.inputs.financing
+        senior_amounts = self._instrument_values(financing.senior_debt_entries, "amount")
+        revolver_amounts = self._instrument_values(financing.revolver_entries, "amount")
+        overdraft_amounts = self._instrument_values(financing.overdraft_entries, "amount")
+
+        interest: List[float] = []
+        for idx in range(len(self.years)):
+            total_interest = (
+                senior_amounts[idx] * financing.senior_debt_interest
+                + revolver_amounts[idx] * financing.revolver_interest
+                + overdraft_amounts[idx] * financing.cash_interest
+            )
+            interest.append(-total_interest)
+        return interest
 
     def _tax_schedule(self) -> List[float]:
         if getattr(self.inputs, "tax_rates", None):
@@ -300,10 +311,10 @@ class FinancialModel:
         ]
         total_assets = [tca + ppe for tca, ppe in zip(total_current_assets, net_ppe)]
 
-        debt = self._senior_debt_balance()
+        liabilities = self._liability_balance()
         equity = self._equity_schedule(cash_flow, income=self.income_statement())
 
-        total_liabilities = debt
+        total_liabilities = liabilities
         shareholders_equity = equity
         total_liabilities_equity = [l + e for l, e in zip(total_liabilities, shareholders_equity)]
 
@@ -379,22 +390,39 @@ class FinancialModel:
         cumulative_depreciation = _cumulative(depreciation)
         return [cap - dep for cap, dep in zip(cumulative_capex, cumulative_depreciation)]
 
-    def _senior_debt_balance(self) -> List[float]:
-        schedule = self.inputs.financing.senior_debt_schedule
-        balance = []
-        total = self.inputs.financing.initial_investment
-        for year in self.years:
-            total += schedule.get(year, 0.0)
-            balance.append(max(total, 0.0))
-        return balance
+    def _instrument_values(self, entries: List[DebtEntry], attribute: str) -> List[float]:
+        per_year: Dict[int, float] = {}
+        for entry in entries:
+            value = float(getattr(entry, attribute))
+            per_year[entry.year] = per_year.get(entry.year, 0.0) + value
+        return [per_year.get(year, 0.0) for year in self.years]
+
+    def _instrument_changes(self, entries: List[DebtEntry]) -> List[float]:
+        schedule = self._instrument_values(entries, "outstanding")
+        if not schedule:
+            return [0.0 for _ in self.years]
+        return _difference(schedule)
+
+    def _liability_balance(self) -> List[float]:
+        financing = self.inputs.financing
+        senior = self._instrument_values(financing.senior_debt_entries, "outstanding")
+        revolver = self._instrument_values(financing.revolver_entries, "outstanding")
+        overdraft = self._instrument_values(financing.overdraft_entries, "outstanding")
+        return [senior[idx] + revolver[idx] + overdraft[idx] for idx in range(len(self.years))]
 
     def _financing_cash_flow(self) -> List[float]:
         financing = self.inputs.financing
         dividends = [ni * financing.dividend_payout for ni in self.income_statement().column("Net Income")]
-        senior_debt = [financing.senior_debt_schedule.get(year, 0.0) for year in self.years]
+        senior_changes = self._instrument_changes(financing.senior_debt_entries)
+        revolver_changes = self._instrument_changes(financing.revolver_entries)
+        overdraft_changes = self._instrument_changes(financing.overdraft_entries)
+        debt_changes = [
+            senior_changes[idx] + revolver_changes[idx] + overdraft_changes[idx]
+            for idx in range(len(self.years))
+        ]
         share_issuance = [0.0 for _ in self.years]
         share_issuance[0] = financing.share_capital
-        return [debt + share - div for debt, share, div in zip(senior_debt, share_issuance, dividends)]
+        return [change + share - div for change, share, div in zip(debt_changes, share_issuance, dividends)]
 
     def _equity_schedule(self, cash_flow: Table, income: Table) -> List[float]:
         financing = self.inputs.financing

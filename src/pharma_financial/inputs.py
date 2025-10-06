@@ -74,9 +74,20 @@ class FinancingParameters:
     revolver_interest: float
     cash_interest: float
     dividend_payout: float
-    senior_debt_schedule: Mapping[int, float]
-    revolver_initial: float
     share_capital: float
+    senior_debt_entries: List["DebtEntry"]
+    revolver_entries: List["DebtEntry"]
+    overdraft_entries: List["DebtEntry"]
+
+
+@dataclass
+class DebtEntry:
+    year: int
+    amount: float
+    outstanding: float
+
+    def interest_payable(self, rate: float) -> float:
+        return self.amount * rate
 
 
 @dataclass
@@ -169,6 +180,33 @@ def _parse_working_capital(days: Mapping[str, List[int]]) -> WorkingCapitalDays:
     )
 
 
+def _parse_debt_entries(data: object) -> List[DebtEntry]:
+    entries: List[DebtEntry] = []
+
+    if data is None:
+        iterable: Iterable[Mapping[str, object]] = []
+    elif isinstance(data, Mapping):
+        iterable = data.values()  # type: ignore[assignment]
+    else:
+        iterable = data  # type: ignore[assignment]
+
+    for item in iterable:
+        if item is None:
+            continue
+        year_value = item.get("year") if isinstance(item, Mapping) else None
+        if year_value is None:
+            continue
+        try:
+            year = int(year_value)
+        except (TypeError, ValueError):
+            continue
+        amount = float(item.get("amount", 0.0)) if isinstance(item, Mapping) else 0.0
+        outstanding = float(item.get("outstanding", amount)) if isinstance(item, Mapping) else amount
+        entries.append(DebtEntry(year=year, amount=amount, outstanding=outstanding))
+    entries.sort(key=lambda entry: entry.year)
+    return entries
+
+
 def _parse_financing(financing: Mapping[str, object]) -> FinancingParameters:
     return FinancingParameters(
         initial_investment=float(financing["initial_investment"]),
@@ -177,9 +215,10 @@ def _parse_financing(financing: Mapping[str, object]) -> FinancingParameters:
         revolver_interest=float(financing["revolver_interest"]),
         cash_interest=float(financing["cash_interest"]),
         dividend_payout=float(financing["dividend_payout"]),
-        senior_debt_schedule={int(year): float(value) for year, value in financing["senior_debt_schedule"].items()},
-        revolver_initial=float(financing["revolver_initial"]),
         share_capital=float(financing["share_capital"]),
+        senior_debt_entries=_parse_debt_entries(financing.get("senior_debt", [])),
+        revolver_entries=_parse_debt_entries(financing.get("revolver", [])),
+        overdraft_entries=_parse_debt_entries(financing.get("overdraft", [])),
     )
 
 
@@ -342,6 +381,7 @@ __all__ = [
     "UtilitySchedule",
     "DepreciationItem",
     "FinancingParameters",
+    "DebtEntry",
     "WorkingCapitalDays",
     "MonteCarloParameters",
     "SensitivityParameters",
