@@ -65,6 +65,7 @@ class WorkingCapitalDays:
 class MonteCarloParameters:
     iterations: int
     revenue_growth_range: Iterable[float]
+    metrics: List[str] = field(default_factory=lambda: ["NPV"])
 
 
 @dataclass
@@ -88,7 +89,9 @@ class ModelInputs:
     financing: FinancingParameters
     working_capital_days: WorkingCapitalDays
     tax_rate: float
+    tax_rates: List[float]
     tax_timing_adjustment: float
+    risk_schedule: Mapping[str, List[float]]
     scenarios: Mapping[str, Mapping[str, List[float]]]
     sensitivity: SensitivityParameters
     monte_carlo: MonteCarloParameters
@@ -154,6 +157,17 @@ def _parse_sensitivity(data: Mapping[str, Iterable[float]]) -> SensitivityParame
     return SensitivityParameters(variables=data)
 
 
+def _coerce_schedule(values: Iterable[float], length: int) -> List[float]:
+    """Normalise a schedule to match the projection horizon length."""
+    sequence = [float(value) for value in values]
+    if not sequence:
+        return [0.0 for _ in range(length)]
+    if len(sequence) >= length:
+        return sequence[:length]
+    padding = [sequence[-1] for _ in range(length - len(sequence))]
+    return sequence + padding
+
+
 def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
     """Parse a mapping of raw inputs into :class:`ModelInputs`."""
     years = [int(year) for year in raw["years"]]
@@ -171,10 +185,27 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         operating_hours=[int(x) for x in raw["utility_costs"]["hours"]],
     )
 
+    monte_source = raw["monte_carlo"]
     monte_carlo = MonteCarloParameters(
-        iterations=int(raw["monte_carlo"]["iterations"]),
-        revenue_growth_range=raw["monte_carlo"]["revenue_growth_range"],
+        iterations=int(monte_source["iterations"]),
+        revenue_growth_range=monte_source["revenue_growth_range"],
+        metrics=list(monte_source.get("metrics", ["NPV"])),
     )
+
+    tax_data = raw["tax"]
+    schedule = tax_data.get("schedule") or []
+    tax_schedule = _coerce_schedule(schedule, len(years)) if schedule else [
+        float(tax_data.get("rate", 0.0)) for _ in years
+    ]
+
+    risk_data = raw.get("risk", {})
+    risk_schedule = {
+        name: _coerce_schedule(values, len(years))
+        for name, values in risk_data.items()
+    }
+
+    if not risk_schedule:
+        risk_schedule = {"inherent": [0.0 for _ in years]}
 
     return ModelInputs(
         years=years,
@@ -190,8 +221,10 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         capital_expenditure=raw["capital_expenditure"],
         financing=financing,
         working_capital_days=working_capital,
-        tax_rate=float(raw["tax"]["rate"]),
-        tax_timing_adjustment=float(raw["tax"]["timing_adjustment"]),
+        tax_rate=float(tax_data.get("rate", 0.0)),
+        tax_rates=tax_schedule,
+        tax_timing_adjustment=float(tax_data.get("timing_adjustment", 0.0)),
+        risk_schedule=risk_schedule,
         scenarios=raw["scenarios"],
         sensitivity=sensitivity,
         monte_carlo=monte_carlo,

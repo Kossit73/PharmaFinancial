@@ -94,7 +94,13 @@
   },
   "tax": {
     "rate": 0.0,
-    "timing_adjustment": 0.5
+    "timing_adjustment": 0.5,
+    "schedule": [0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0]
+  },
+  "risk": {
+    "inherent": [0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05,0.05],
+    "climate": [0.02,0.02,0.02,0.02,0.02,0.02,0.02,0.02,0.02,0.02],
+    "political": [0.03,0.03,0.03,0.03,0.03,0.03,0.03,0.03,0.03,0.03]
   },
   "scenarios": {
     "base": {
@@ -119,6 +125,7 @@
   },
   "monte_carlo": {
     "iterations": 1000,
-    "revenue_growth_range": [0.05, 0.15]
+    "revenue_growth_range": [0.05, 0.15],
+    "metrics": ["NPV", "Average Net Income", "Average EBITDA"]
   }
 }

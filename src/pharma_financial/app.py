@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import hashlib
 from pathlib import Path
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import List, Tuple
 
 import streamlit as st
@@ -126,6 +126,8 @@ def _resolve_inputs() -> ModelInputs:
 
 
 def _render_inputs_tab(inputs: ModelInputs) -> None:
+    payload = st.session_state["input_payload"]
+
     st.subheader("Core Assumptions")
     rows: List[dict] = st.session_state.get("core_assumption_rows", [])
 
@@ -222,9 +224,6 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
                 }
             )
             st.session_state["core_assumption_rows"] = rows
-            # Clearing the form widgets by removing their stored state avoids
-            # manipulating widget-managed keys directly, which previously
-            # triggered ``StreamlitAPIException`` in bare-mode executions.
             for key in (
                 "core_new_description",
                 "core_new_prod",
@@ -235,34 +234,38 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
                 st.session_state.pop(key, None)
             st.experimental_rerun()
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("### Direct Labour Structure")
-        st.dataframe(
-            _ensure_dataframe(_dict_to_dataframe(inputs.direct_labor_costs, "Role", "Annual Cost")),
-            use_container_width=True,
-        )
-    with col2:
-        st.markdown("### Indirect Labour Structure")
-        st.dataframe(
-            _ensure_dataframe(_dict_to_dataframe(inputs.indirect_labor_costs, "Role", "Annual Cost")),
-            use_container_width=True,
-        )
+    st.markdown("### Direct Labour Structure")
+    _render_labor_section("direct", "direct_labor_rows", payload)
+
+    st.markdown("### Indirect Labour Structure")
+    _render_labor_section("indirect", "indirect_labor_rows", payload)
 
     st.markdown("### Utility Schedule")
-    utility_rows = [
-        {
-            "Year": year,
-            "Operating Days": days,
-            "Operating Hours": hours,
-        }
-        for year, days, hours in zip(
-            inputs.years,
-            inputs.utility_schedule.operating_days,
-            inputs.utility_schedule.operating_hours,
-        )
-    ]
-    st.dataframe(_ensure_dataframe(utility_rows), use_container_width=True)
+    _render_utility_schedule(payload)
+
+    st.markdown("### Cost & Financing Assumptions")
+    _render_cost_and_financing(payload)
+
+    st.markdown("### Tax Schedule")
+    _render_tax_schedule(payload)
+
+    st.markdown("### Inflation Schedule")
+    _render_inflation_schedule(payload)
+
+    st.markdown("### Risk Schedule")
+    _render_risk_schedule(payload)
+
+    st.markdown("### Sensitivity Analysis Configuration")
+    _render_sensitivity_inputs(payload)
+
+    st.markdown("### Scenario / IFs Configuration")
+    _render_scenario_inputs(payload)
+
+    st.markdown("### Monte Carlo Simulation")
+    _render_monte_carlo_inputs(payload)
+
+    _core_rows_to_payload(st.session_state.get("core_assumption_rows", []), payload)
+    st.session_state["input_payload"] = payload
 
 
 def _render_dashboard_tab(outputs: FinancialOutputs) -> None:
@@ -399,6 +402,496 @@ def _format_number(value: float) -> str:
     return f"{value:,.2f}"
 
 
+def _mapping_to_rows(mapping: Mapping[str, float], key_label: str, value_label: str) -> list[dict]:
+    return [
+        {key_label: str(name), value_label: float(cost)}
+        for name, cost in mapping.items()
+    ]
+
+
+def _payload_to_sensitivity_rows(payload: Mapping) -> list[dict]:
+    variables = (
+        payload.get("sensitivity", {}).get("variables", {})
+        if isinstance(payload.get("sensitivity"), Mapping)
+        else {}
+    )
+    rows: list[dict] = []
+    for name, values in variables.items():
+        numeric = [float(value) for value in values]
+        rows.append({"Variable": str(name), "Values": numeric})
+    return rows
+
+
+def _ensure_schedule_length(values: Iterable[float], length: int, fill: float = 0.0) -> List[float]:
+    sequence = [float(value) for value in values]
+    if length <= 0:
+        return sequence
+    if len(sequence) < length:
+        sequence += [fill for _ in range(length - len(sequence))]
+    return sequence[:length]
+
+
+def _parse_float_list(text: str) -> List[float]:
+    values: List[float] = []
+    if not text:
+        return values
+    for token in text.replace("\n", ",").split(","):
+        stripped = token.strip()
+        if not stripped:
+            continue
+        values.append(float(stripped))
+    return values
+
+
+def _format_float_list(values: Iterable[float]) -> str:
+    return ", ".join(f"{float(value):.4f}" for value in values)
+
+
+def _render_labor_section(section: str, state_key: str, payload: dict) -> None:
+    rows: list[dict] = st.session_state.get(state_key, [])
+    updated: list[dict] = []
+    for index, row in enumerate(rows):
+        cols = st.columns([3, 2, 1])
+        role = cols[0].text_input(
+            "Role",
+            value=row.get("Role", ""),
+            key=f"{state_key}_role_{index}",
+        )
+        cost = cols[1].number_input(
+            "Annual Cost",
+            value=float(row.get("Annual Cost", 0.0)),
+            key=f"{state_key}_cost_{index}",
+            step=0.001,
+            format="%.4f",
+        )
+        if cols[2].button("Remove", key=f"{state_key}_remove_{index}"):
+            del rows[index]
+            st.session_state[state_key] = rows
+            st.experimental_rerun()
+        updated.append({"Role": role.strip(), "Annual Cost": cost})
+
+    if updated != rows:
+        st.session_state[state_key] = updated
+
+    with st.form(f"add_{state_key}"):
+        new_role = st.text_input("Role", key=f"{state_key}_new_role")
+        new_cost = st.number_input(
+            "Annual Cost",
+            value=0.0,
+            step=0.001,
+            format="%.4f",
+            key=f"{state_key}_new_cost",
+        )
+        submitted = st.form_submit_button("Add")
+
+    if submitted:
+        if not new_role.strip():
+            st.warning("Role is required to add a labour cost entry.")
+        else:
+            rows.append({"Role": new_role.strip(), "Annual Cost": new_cost})
+            st.session_state[state_key] = rows
+            for key in (f"{state_key}_new_role", f"{state_key}_new_cost"):
+                st.session_state.pop(key, None)
+            st.experimental_rerun()
+
+    labor = payload.setdefault("labor", {})
+    labor[section] = {
+        row["Role"]: row["Annual Cost"]
+        for row in st.session_state.get(state_key, [])
+        if row.get("Role")
+    }
+
+
+def _render_utility_schedule(payload: dict) -> None:
+    utility = payload.setdefault("utility_costs", {})
+    electricity = utility.get("electricity_per_day", 0.0)
+    water = utility.get("water_per_day", 0.0)
+    steam = utility.get("steam_per_hour", 0.0)
+    cols = st.columns(3)
+    utility["electricity_per_day"] = cols[0].number_input(
+        "Electricity per day",
+        value=float(electricity),
+        step=1.0,
+        format="%.4f",
+        key="utility_electricity",
+    )
+    utility["water_per_day"] = cols[1].number_input(
+        "Water per day",
+        value=float(water),
+        step=1.0,
+        format="%.4f",
+        key="utility_water",
+    )
+    utility["steam_per_hour"] = cols[2].number_input(
+        "Steam per hour",
+        value=float(steam),
+        step=0.1,
+        format="%.4f",
+        key="utility_steam",
+    )
+
+    years = payload.get("years", [])
+    days = _ensure_schedule_length(utility.get("days", []), len(years), fill=0)
+    hours = _ensure_schedule_length(utility.get("hours", []), len(years), fill=0)
+
+    for index, year in enumerate(years):
+        cols = st.columns([1, 2, 2])
+        cols[0].markdown(f"**{year}**")
+        days[index] = int(
+            cols[1].number_input(
+                "Operating Days",
+                value=int(days[index]),
+                key=f"utility_days_{index}",
+                min_value=0,
+            )
+        )
+        hours[index] = int(
+            cols[2].number_input(
+                "Operating Hours",
+                value=int(hours[index]),
+                key=f"utility_hours_{index}",
+                min_value=0,
+            )
+        )
+
+    utility["days"] = days
+    utility["hours"] = hours
+
+
+def _render_cost_and_financing(payload: dict) -> None:
+    raw = payload.setdefault("raw_material_cost", {})
+    raw["per_unit"] = st.number_input(
+        "Raw material cost per unit",
+        value=float(raw.get("per_unit", 0.0)),
+        step=0.0001,
+        format="%.4f",
+        key="raw_material_per_unit",
+    )
+    annual_text = st.text_area(
+        "Annual raw material spend (comma separated, optional)",
+        value=_format_float_list(raw.get("annual", [])),
+        key="raw_material_annual",
+    )
+    try:
+        raw["annual"] = _parse_float_list(annual_text)
+    except ValueError as exc:
+        st.warning(f"Raw material schedule ignored: {exc}")
+
+    financing = payload.setdefault("financing", {})
+    finance_cols = st.columns(3)
+    financing["initial_investment"] = finance_cols[0].number_input(
+        "Initial investment",
+        value=float(financing.get("initial_investment", 0.0)),
+        step=0.1,
+        format="%.4f",
+        key="finance_initial",
+    )
+    financing["discount_rate"] = finance_cols[1].number_input(
+        "Discount rate",
+        value=float(financing.get("discount_rate", 0.0)),
+        step=0.001,
+        format="%.4f",
+        key="finance_discount",
+    )
+    financing["share_capital"] = finance_cols[2].number_input(
+        "Share capital",
+        value=float(financing.get("share_capital", 0.0)),
+        step=0.1,
+        format="%.4f",
+        key="finance_share_capital",
+    )
+
+    finance_cols = st.columns(3)
+    financing["senior_debt_interest"] = finance_cols[0].number_input(
+        "Senior debt interest",
+        value=float(financing.get("senior_debt_interest", 0.0)),
+        step=0.001,
+        format="%.4f",
+        key="finance_senior_interest",
+    )
+    financing["revolver_interest"] = finance_cols[1].number_input(
+        "Revolver interest",
+        value=float(financing.get("revolver_interest", 0.0)),
+        step=0.001,
+        format="%.4f",
+        key="finance_revolver_interest",
+    )
+    financing["cash_interest"] = finance_cols[2].number_input(
+        "Cash interest",
+        value=float(financing.get("cash_interest", 0.0)),
+        step=0.001,
+        format="%.4f",
+        key="finance_cash_interest",
+    )
+
+    financing["dividend_payout"] = st.number_input(
+        "Dividend payout ratio",
+        value=float(financing.get("dividend_payout", 0.0)),
+        step=0.01,
+        format="%.4f",
+        key="finance_dividend",
+    )
+
+
+def _render_tax_schedule(payload: dict) -> None:
+    tax = payload.setdefault("tax", {})
+    years = payload.get("years", [])
+    base_rate = st.number_input(
+        "Base tax rate",
+        value=float(tax.get("rate", 0.0)),
+        step=0.01,
+        format="%.4f",
+        key="tax_base_rate",
+    )
+    tax["rate"] = base_rate
+    tax["timing_adjustment"] = st.number_input(
+        "Timing adjustment",
+        value=float(tax.get("timing_adjustment", 0.0)),
+        step=0.01,
+        format="%.4f",
+        key="tax_timing",
+    )
+
+    schedule = _ensure_schedule_length(tax.get("schedule", []), len(years), fill=base_rate)
+    for index, year in enumerate(years):
+        schedule[index] = st.number_input(
+            f"Tax rate {year}",
+            value=float(schedule[index]),
+            step=0.01,
+            format="%.4f",
+            key=f"tax_rate_{index}",
+        )
+    tax["schedule"] = schedule
+
+
+def _render_inflation_schedule(payload: dict) -> None:
+    years = payload.get("years", [])
+    series = _ensure_schedule_length(payload.get("inflation_series", []), len(years), fill=0.0)
+    for index, year in enumerate(years):
+        series[index] = st.number_input(
+            f"Inflation {year}",
+            value=float(series[index]),
+            step=0.001,
+            format="%.4f",
+            key=f"inflation_{index}",
+        )
+    payload["inflation_series"] = series
+
+
+def _render_risk_schedule(payload: dict) -> None:
+    years = payload.get("years", [])
+    risk = payload.setdefault("risk", {})
+    categories = ["inherent", "climate", "political"]
+    for category in categories:
+        with st.expander(category.title(), expanded=False):
+            values = _ensure_schedule_length(risk.get(category, []), len(years), fill=0.0)
+            for index, year in enumerate(years):
+                values[index] = st.number_input(
+                    f"{category.title()} risk {year}",
+                    value=float(values[index]),
+                    min_value=0.0,
+                    max_value=1.0,
+                    step=0.01,
+                    format="%.4f",
+                    key=f"risk_{category}_{index}",
+                )
+            risk[category] = values
+
+
+def _render_sensitivity_inputs(payload: dict) -> None:
+    rows = st.session_state.get("sensitivity_rows", [])
+    updated: list[dict] = []
+    for index, row in enumerate(rows):
+        cols = st.columns([3, 5, 1])
+        variable = cols[0].text_input(
+            "Variable",
+            value=row.get("Variable", ""),
+            key=f"sensitivity_var_{index}",
+        )
+        values_text = cols[1].text_input(
+            "Multipliers",
+            value=_format_float_list(row.get("Values", [])),
+            help="Comma-separated multipliers applied during sensitivity analysis.",
+            key=f"sensitivity_vals_{index}",
+        )
+        if cols[2].button("Remove", key=f"sensitivity_remove_{index}"):
+            del rows[index]
+            st.session_state["sensitivity_rows"] = rows
+            st.experimental_rerun()
+        try:
+            values = _parse_float_list(values_text)
+        except ValueError as exc:
+            st.warning(f"Sensitivity entry ignored due to invalid number: {exc}")
+            values = row.get("Values", [])
+        updated.append({"Variable": variable.strip(), "Values": values})
+
+    if updated != rows:
+        st.session_state["sensitivity_rows"] = updated
+
+    with st.form("add_sensitivity"):
+        new_variable = st.text_input("Variable Name", key="sensitivity_new_variable")
+        new_values_text = st.text_input(
+            "Multipliers",
+            key="sensitivity_new_values",
+            help="Comma-separated list such as 0.9, 1.0, 1.1",
+        )
+        submitted = st.form_submit_button("Add Variable")
+
+    if submitted:
+        if not new_variable.strip():
+            st.warning("Variable name is required for sensitivity analysis.")
+        else:
+            try:
+                new_values = _parse_float_list(new_values_text)
+            except ValueError as exc:
+                st.warning(f"Unable to add sensitivity variable: {exc}")
+                new_values = []
+            if new_values:
+                rows.append({"Variable": new_variable.strip(), "Values": new_values})
+                st.session_state["sensitivity_rows"] = rows
+                for key in ("sensitivity_new_variable", "sensitivity_new_values"):
+                    st.session_state.pop(key, None)
+                st.experimental_rerun()
+            else:
+                st.warning("At least one multiplier is required.")
+
+    variables = {
+        row["Variable"]: row["Values"]
+        for row in st.session_state.get("sensitivity_rows", [])
+        if row.get("Variable") and row.get("Values")
+    }
+    payload.setdefault("sensitivity", {})["variables"] = variables
+
+
+def _render_scenario_inputs(payload: dict) -> None:
+    scenarios = payload.setdefault("scenarios", {})
+    updated: dict[str, dict[str, List[float]]] = {}
+    scenario_items = list(scenarios.items())
+    for index, (name, values) in enumerate(scenario_items):
+        with st.expander(f"Scenario: {name}", expanded=False):
+            new_name = st.text_input(
+                "Scenario Name",
+                value=name,
+                key=f"scenario_name_{index}",
+            )
+            inflation_text = st.text_area(
+                "Inflation Series",
+                value=_format_float_list(values.get("inflation", [])),
+                key=f"scenario_inflation_{index}",
+            )
+            interest_text = st.text_area(
+                "Interest Series",
+                value=_format_float_list(values.get("interest", [])),
+                key=f"scenario_interest_{index}",
+            )
+            remove = st.checkbox(
+                "Remove scenario",
+                key=f"scenario_remove_{index}",
+                value=False,
+            )
+
+        if remove:
+            continue
+
+        try:
+            inflation_values = _parse_float_list(inflation_text)
+            interest_values = _parse_float_list(interest_text)
+        except ValueError as exc:
+            st.warning(f"Scenario '{name}' ignored due to invalid number: {exc}")
+            inflation_values = values.get("inflation", [])
+            interest_values = values.get("interest", [])
+
+        key_name = new_name.strip() or name
+        updated[key_name] = {
+            "inflation": inflation_values,
+            "interest": interest_values,
+        }
+
+    with st.form("add_scenario"):
+        new_name = st.text_input("Scenario Name", key="scenario_new_name")
+        new_inflation = st.text_area(
+            "Inflation Series",
+            key="scenario_new_inflation",
+        )
+        new_interest = st.text_area(
+            "Interest Series",
+            key="scenario_new_interest",
+        )
+        submitted = st.form_submit_button("Add Scenario")
+
+    if submitted:
+        if not new_name.strip():
+            st.warning("Scenario name is required.")
+        else:
+            try:
+                inflation_values = _parse_float_list(new_inflation)
+                interest_values = _parse_float_list(new_interest)
+            except ValueError as exc:
+                st.warning(f"Unable to add scenario: {exc}")
+            else:
+                updated[new_name.strip()] = {
+                    "inflation": inflation_values,
+                    "interest": interest_values,
+                }
+                for key in (
+                    "scenario_new_name",
+                    "scenario_new_inflation",
+                    "scenario_new_interest",
+                ):
+                    st.session_state.pop(key, None)
+                st.experimental_rerun()
+
+    payload["scenarios"] = updated
+
+
+def _render_monte_carlo_inputs(payload: dict) -> None:
+    monte = payload.setdefault("monte_carlo", {})
+    iterations = st.number_input(
+        "Iterations",
+        min_value=1,
+        value=int(monte.get("iterations", 1000)),
+        step=10,
+        key="monte_iterations",
+    )
+    growth_range = list(monte.get("revenue_growth_range", [0.05, 0.15]))
+    if len(growth_range) < 2:
+        growth_range = [0.0, 0.0]
+    min_growth = st.number_input(
+        "Minimum revenue growth",
+        value=float(growth_range[0]),
+        format="%.4f",
+        key="monte_growth_min",
+    )
+    max_growth = st.number_input(
+        "Maximum revenue growth",
+        value=float(growth_range[1]),
+        format="%.4f",
+        key="monte_growth_max",
+    )
+    if max_growth < min_growth:
+        st.warning("Maximum growth cannot be less than minimum growth. Adjusted automatically.")
+        max_growth = min_growth
+
+    metric_options = [
+        "NPV",
+        "Average Net Income",
+        "Average EBITDA",
+        "Average Cash Flow",
+    ]
+    metrics = st.multiselect(
+        "Metrics to capture",
+        options=metric_options,
+        default=[m for m in monte.get("metrics", ["NPV"]) if m in metric_options],
+        key="monte_metrics",
+    )
+    if not metrics:
+        metrics = ["NPV"]
+
+    monte["iterations"] = int(iterations)
+    monte["revenue_growth_range"] = [float(min_growth), float(max_growth)]
+    monte["metrics"] = metrics
+
+
 def _extract_metric_pairs(summary) -> Sequence[Tuple[str, float]]:
     if isinstance(summary, Table):
         return list(zip([str(label) for label in summary.index], summary.column("Value")))
@@ -434,6 +927,17 @@ def _extract_metric_pairs(summary) -> Sequence[Tuple[str, float]]:
 def _initialise_session_payload(payload: dict) -> None:
     st.session_state["input_payload"] = payload
     st.session_state["core_assumption_rows"] = _payload_to_core_rows(payload)
+    st.session_state["direct_labor_rows"] = _mapping_to_rows(
+        payload.get("labor", {}).get("direct", {}),
+        "Role",
+        "Annual Cost",
+    )
+    st.session_state["indirect_labor_rows"] = _mapping_to_rows(
+        payload.get("labor", {}).get("indirect", {}),
+        "Role",
+        "Annual Cost",
+    )
+    st.session_state["sensitivity_rows"] = _payload_to_sensitivity_rows(payload)
 
 
 def _payload_to_core_rows(payload: Mapping) -> list[dict]:

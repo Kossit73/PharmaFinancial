@@ -64,6 +64,7 @@ class FinancialModel:
         self.years = inputs.years
         self.products = inputs.products
         self._inflation = self._build_inflation_factors(inputs.inflation_series)
+        self._risk_factors_cache: List[float] | None = None
 
     # ------------------------------------------------------------------ core
     def _build_inflation_factors(self, series: Iterable[Number]) -> List[float]:
@@ -184,8 +185,12 @@ class FinancialModel:
         ebit = [ea - dep for ea, dep in zip(ebitda, depreciation)]
         interest = self._interest_schedule()
         ebt = [e - i for e, i in zip(ebit, interest)]
-        taxes = [value * self.inputs.tax_rate for value in ebt]
-        net_income = [value - tax for value, tax in zip(ebt, taxes)]
+        taxes = [value * rate for value, rate in zip(ebt, self._tax_schedule())]
+        risk_factors = self._risk_factors()
+        net_income = [
+            (value - tax) * risk_factors[idx]
+            for idx, (value, tax) in enumerate(zip(ebt, taxes))
+        ]
 
         ebitda_margin = [_safe_ratio(e, r) for e, r in zip(ebitda, net_revenue)]
         ebit_margin = [_safe_ratio(e, r) for e, r in zip(ebit, net_revenue)]
@@ -214,6 +219,27 @@ class FinancialModel:
         debt_balance = self._senior_debt_balance()
         interest_rate = self.inputs.financing.senior_debt_interest
         return [-balance * interest_rate for balance in debt_balance]
+
+    def _tax_schedule(self) -> List[float]:
+        if getattr(self.inputs, "tax_rates", None):
+            return list(self.inputs.tax_rates)
+        return [self.inputs.tax_rate for _ in self.years]
+
+    def _risk_factors(self) -> List[float]:
+        if self._risk_factors_cache is not None:
+            return self._risk_factors_cache
+        schedule = getattr(self.inputs, "risk_schedule", {})
+        factors: List[float] = []
+        for idx in range(len(self.years)):
+            factor = 1.0
+            for values in schedule.values():
+                if not values:
+                    continue
+                rate = values[idx] if idx < len(values) else values[-1]
+                factor *= max(0.0, 1.0 - float(rate))
+            factors.append(factor)
+        self._risk_factors_cache = factors
+        return factors
 
     def cash_flow_statement(self) -> Table:
         income = self.income_statement()
@@ -376,6 +402,7 @@ class FinancialModel:
         self.inputs.inflation_series = base_inflation
         self.inputs.financing.discount_rate = base_discount
         self._inflation = self._build_inflation_factors(self.inputs.inflation_series)
+        self._risk_factors_cache = None
         return results
 
     def sensitivity_analysis(self) -> Dict[str, Table]:
@@ -414,17 +441,56 @@ class FinancialModel:
         base_revenue = self.income_statement().column("Net Revenue")
         total_costs = self.cost_structure().column("Total Costs")
         discount_rate = self.inputs.financing.discount_rate
+        depreciation = self.depreciation_schedule()
+        interest = self._interest_schedule()
+        tax_schedule = self._tax_schedule()
+        risk_factors = self._risk_factors()
 
         import random
 
-        npv_values: List[float] = []
+        metric_names = [metric.strip() for metric in self.inputs.monte_carlo.metrics]
+        allowed_metrics = {
+            "NPV",
+            "Average Net Income",
+            "Average EBITDA",
+            "Average Cash Flow",
+        }
+        metrics_to_track = [metric for metric in metric_names if metric in allowed_metrics]
+        if "NPV" not in metrics_to_track:
+            metrics_to_track.insert(0, "NPV")
+
+        results: Dict[str, List[float]] = {metric: [] for metric in metrics_to_track}
         for _ in range(iterations):
             growth_rates = [random.uniform(low, high) for _ in self.years]
             simulated_revenue = [rev * (1 + growth) for rev, growth in zip(base_revenue, growth_rates)]
-            cash_flows = [rev - cost for rev, cost in zip(simulated_revenue, total_costs)]
-            discounted = [cf / (1 + discount_rate) ** (idx + 1) for idx, cf in enumerate(cash_flows)]
-            npv_values.append(sum(discounted) - self.inputs.financing.initial_investment)
-        return build_table(range(1, iterations + 1), {"NPV": npv_values}, index_name="Iteration")
+            ebitda = [rev - cost for rev, cost in zip(simulated_revenue, total_costs)]
+            ebit = [ea - depreciation[idx] for idx, ea in enumerate(ebitda)]
+            ebt = [ea - interest[idx] for idx, ea in enumerate(ebit)]
+            taxes = [ea * tax_schedule[idx] for idx, ea in enumerate(ebt)]
+            net_income = [
+                (ebt[idx] - taxes[idx]) * risk_factors[idx]
+                for idx in range(len(self.years))
+            ]
+            cash_flows = [ebitda[idx] * risk_factors[idx] for idx in range(len(self.years))]
+            discounted = [
+                cf / (1 + discount_rate) ** (idx + 1)
+                for idx, cf in enumerate(cash_flows)
+            ]
+            npv = sum(discounted) - self.inputs.financing.initial_investment
+
+            averages = {
+                "Average Net Income": sum(net_income) / len(net_income),
+                "Average EBITDA": sum(ebitda) / len(ebitda),
+                "Average Cash Flow": sum(cash_flows) / len(cash_flows),
+            }
+
+            for metric in metrics_to_track:
+                if metric == "NPV":
+                    results[metric].append(npv)
+                else:
+                    results[metric].append(averages[metric])
+
+        return build_table(range(1, iterations + 1), results, index_name="Iteration")
 
     def summary_metrics(self) -> Table:
         cash_flow = self.cash_flow_statement().column("Net Change in Cash")
