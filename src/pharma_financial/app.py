@@ -1289,7 +1289,7 @@ def _render_depreciation_schedule(payload: dict) -> None:
         row = rows[index]
         data = derived[index] if index < len(derived) else {}
 
-        cols = st.columns([2.2, 1.1, 1.1, 1.1, 1.3, 1.2, 1.1, 1.2, 1.3, 1.3, 0.7])
+        cols = st.columns([2.2, 1.1, 1.1, 1.3, 1.2, 1.2, 1.2, 1.3, 1.3, 1.2, 0.7])
 
         asset_input = _select_or_create_option(
             cols[0],
@@ -1322,14 +1322,6 @@ def _render_depreciation_schedule(payload: dict) -> None:
             format="%.4f",
         )
 
-        asset_cost_input = cols[3].number_input(
-            "Asset Cost",
-            value=float(row.get("asset_cost", row.get("acquisition", 0.0) or 0.0)),
-            key=f"dep_cost_{index}",
-            step=0.001,
-            format="%.4f",
-        )
-
         prior_net_book = float(
             data.get("prior_net_book", row.get("opening_net_book", 0.0) or 0.0)
         )
@@ -1337,7 +1329,7 @@ def _render_depreciation_schedule(payload: dict) -> None:
             data.get("prior_cumulative", row.get("opening_cumulative", 0.0) or 0.0)
         )
         _set_widget_value(f"dep_open_nb_{index}", prior_net_book)
-        cols[4].number_input(
+        cols[3].number_input(
             "Net Book Value (prev year)",
             value=prior_net_book,
             key=f"dep_open_nb_{index}",
@@ -1346,7 +1338,7 @@ def _render_depreciation_schedule(payload: dict) -> None:
             disabled=True,
         )
 
-        depreciation_rate_input = cols[5].number_input(
+        depreciation_rate_input = cols[4].number_input(
             "Depreciation Rate",
             value=float(row.get("depreciation_rate", 0.0)),
             key=f"dep_rate_{index}",
@@ -1354,14 +1346,25 @@ def _render_depreciation_schedule(payload: dict) -> None:
             format="%.5f",
         )
 
+        depreciable_base = float(
+            data.get("depreciable_base", prior_net_book + (acquisition_input * 0.5))
+        )
         total_asset_cost = acquisition_input + prior_net_book
-        total_depreciation = total_asset_cost * depreciation_rate_input
-        cumulative_depreciation = prior_cumulative + total_depreciation
-        if cumulative_depreciation > total_asset_cost and total_asset_cost >= 0:
-            allowable = max(total_asset_cost - prior_cumulative, 0.0)
+        total_depreciation = depreciable_base * depreciation_rate_input
+        allowable = max(total_asset_cost - prior_cumulative, 0.0)
+        if total_depreciation > allowable:
             total_depreciation = allowable
-            cumulative_depreciation = prior_cumulative + total_depreciation
+        cumulative_depreciation = prior_cumulative + total_depreciation
         net_book_value = max(total_asset_cost - cumulative_depreciation, 0.0)
+
+        _set_widget_value(f"dep_base_{index}", depreciable_base)
+        cols[5].number_input(
+            "Depreciable Base",
+            value=depreciable_base,
+            key=f"dep_base_{index}",
+            format="%.4f",
+            disabled=True,
+        )
 
         _set_widget_value(f"dep_total_cost_{index}", total_asset_cost)
         cols[6].number_input(
@@ -1415,7 +1418,6 @@ def _render_depreciation_schedule(payload: dict) -> None:
             "asset_type": asset_input.strip(),
             "year": int(year_input),
             "acquisition": float(acquisition_input),
-            "asset_cost": float(asset_cost_input),
             "depreciation_rate": float(depreciation_rate_input),
             "opening_net_book": prior_net_book,
             "opening_cumulative": prior_cumulative,
@@ -1452,13 +1454,6 @@ def _render_depreciation_schedule(payload: dict) -> None:
             format="%.4f",
             key="dep_new_acquisition",
         )
-        new_asset_cost = st.number_input(
-            "Asset Cost",
-            value=0.0,
-            step=0.001,
-            format="%.4f",
-            key="dep_new_asset_cost",
-        )
         new_opening_nb = st.number_input(
             "Opening Net Book Value",
             value=0.0,
@@ -1484,7 +1479,6 @@ def _render_depreciation_schedule(payload: dict) -> None:
                     "asset_type": new_asset.strip(),
                     "year": int(new_year),
                     "acquisition": float(new_acquisition),
-                    "asset_cost": float(new_asset_cost),
                     "depreciation_rate": float(new_rate),
                     "opening_net_book": float(new_opening_nb),
                     "opening_cumulative": 0.0,
@@ -1499,7 +1493,6 @@ def _render_depreciation_schedule(payload: dict) -> None:
                 "dep_new_asset_custom",
                 "dep_new_year",
                 "dep_new_acquisition",
-                "dep_new_asset_cost",
                 "dep_new_opening_nb",
                 "dep_new_rate",
             ):
@@ -2371,21 +2364,22 @@ def _calculate_depreciation_preview(rows: Sequence[Mapping]) -> list[dict]:
             else:
                 prior_cumulative = previous_cumulative
 
-            acquisition_amount = float(row.get("acquisition", row.get("asset_cost", 0.0)) or 0.0)
+            acquisition_amount = float(row.get("acquisition", 0.0) or 0.0)
             depreciation_rate = float(row.get("depreciation_rate", 0.0) or 0.0)
 
             total_asset_cost = acquisition_amount + prior_net_book
-            total_depreciation = total_asset_cost * depreciation_rate
-            cumulative_depreciation = prior_cumulative + total_depreciation
-            if cumulative_depreciation > total_asset_cost and total_asset_cost >= 0:
-                allowable = max(total_asset_cost - prior_cumulative, 0.0)
+            depreciable_base = prior_net_book + (acquisition_amount * 0.5)
+            total_depreciation = depreciable_base * depreciation_rate
+            allowable = max(total_asset_cost - prior_cumulative, 0.0)
+            if total_depreciation > allowable:
                 total_depreciation = allowable
-                cumulative_depreciation = prior_cumulative + total_depreciation
+            cumulative_depreciation = prior_cumulative + total_depreciation
             net_book_value = max(total_asset_cost - cumulative_depreciation, 0.0)
 
             preview[position] = {
                 "prior_net_book": prior_net_book,
                 "prior_cumulative": prior_cumulative,
+                "depreciable_base": depreciable_base,
                 "total_asset_cost": total_asset_cost,
                 "total_depreciation": total_depreciation,
                 "cumulative_depreciation": cumulative_depreciation,
@@ -2421,14 +2415,13 @@ def _legacy_depreciation_rows(payload: Mapping) -> list[dict]:
 
         for idx, year in enumerate(years):
             acquisition = base_value if idx == 0 else 0.0
-            asset_cost = acquisition
 
             if life and life > 0 and idx < life:
                 annual = base_value / life
             else:
                 annual = 0.0
 
-            total_asset_cost = asset_cost + previous_net_book
+            total_asset_cost = acquisition + previous_net_book
             rate = annual / total_asset_cost if total_asset_cost else 0.0
 
             rows.append(
@@ -2436,7 +2429,6 @@ def _legacy_depreciation_rows(payload: Mapping) -> list[dict]:
                     "asset_type": str(asset),
                     "year": int(year),
                     "acquisition": acquisition,
-                    "asset_cost": asset_cost,
                     "depreciation_rate": rate,
                     "opening_net_book": previous_net_book,
                     "opening_cumulative": previous_cumulative,
@@ -2470,7 +2462,6 @@ def _payload_to_depreciation_rows(payload: Mapping) -> list[dict]:
                         "asset_type": str(item.get("asset_type", item.get("asset", ""))),
                         "year": int(item.get("year", 0)),
                         "acquisition": float(item.get("acquisition", 0.0) or 0.0),
-                        "asset_cost": float(item.get("asset_cost", item.get("acquisition", 0.0) or 0.0)),
                         "depreciation_rate": float(item.get("depreciation_rate", item.get("rate", 0.0)) or 0.0),
                         "opening_net_book": float(item.get("opening_net_book", 0.0) or 0.0),
                         "opening_cumulative": float(item.get("opening_cumulative", 0.0) or 0.0),
@@ -2496,7 +2487,6 @@ def _depreciation_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> Non
                 "asset_type": asset,
                 "year": int(row.get("year", 0)),
                 "acquisition": float(row.get("acquisition", 0.0) or 0.0),
-                "asset_cost": float(row.get("asset_cost", row.get("acquisition", 0.0) or 0.0)),
                 "depreciation_rate": float(row.get("depreciation_rate", 0.0) or 0.0),
                 "opening_net_book": float(row.get("opening_net_book", 0.0) or 0.0),
                 "opening_cumulative": float(row.get("opening_cumulative", 0.0) or 0.0),

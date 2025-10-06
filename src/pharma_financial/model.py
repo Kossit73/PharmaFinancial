@@ -213,15 +213,16 @@ class FinancialModel:
             previous_cumulative = float(previous_cumulative or 0.0)
 
             total_asset_cost = row.acquisition + previous_net_book
-            total_depreciation = total_asset_cost * row.depreciation_rate
-            cumulative_depreciation = previous_cumulative + total_depreciation
-            net_book_value = total_asset_cost - cumulative_depreciation
-
-            if net_book_value < 0 and total_asset_cost >= 0:
-                allowable = max(total_asset_cost - previous_cumulative, 0.0)
+            # Apply a half-year convention so in-year additions only
+            # contribute half their value to the depreciable base during
+            # the year of acquisition.
+            depreciable_base = previous_net_book + (row.acquisition * 0.5)
+            total_depreciation = depreciable_base * row.depreciation_rate
+            allowable = max(total_asset_cost - previous_cumulative, 0.0)
+            if total_depreciation > allowable:
                 total_depreciation = allowable
-                cumulative_depreciation = previous_cumulative + total_depreciation
-                net_book_value = max(total_asset_cost - cumulative_depreciation, 0.0)
+            cumulative_depreciation = previous_cumulative + total_depreciation
+            net_book_value = max(total_asset_cost - cumulative_depreciation, 0.0)
 
             per_year_depreciation[row.year] = per_year_depreciation.get(row.year, 0.0) + total_depreciation
             per_year_net_book[row.year] = per_year_net_book.get(row.year, 0.0) + net_book_value
@@ -234,8 +235,8 @@ class FinancialModel:
                     "asset_type": asset,
                     "year": row.year,
                     "acquisition": row.acquisition,
-                    "asset_cost": row.asset_cost,
                     "opening_net_book": previous_net_book,
+                    "depreciable_base": depreciable_base,
                     "total_asset_cost": total_asset_cost,
                     "depreciation_rate": row.depreciation_rate,
                     "total_depreciation": total_depreciation,

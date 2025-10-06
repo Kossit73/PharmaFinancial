@@ -58,7 +58,6 @@ class DepreciationRow:
     asset_type: str
     year: int
     acquisition: float
-    asset_cost: float
     depreciation_rate: float
     opening_net_book: float = 0.0
     opening_cumulative: float = 0.0
@@ -187,26 +186,32 @@ def _parse_depreciation_schedule(
                 year = int(year_value)
             except (TypeError, ValueError):
                 continue
-            acquisition = float(item.get("acquisition", 0.0) or 0.0)
-            asset_cost = float(item.get("asset_cost", acquisition) or 0.0)
+            acquisition = float(
+                item.get("acquisition", item.get("asset_cost", 0.0)) or 0.0
+            )
             rate = float(
                 item.get("depreciation_rate", item.get("rate", 0.0)) or 0.0
             )
-            has_opening_nb = "opening_net_book" in item
-            has_opening_cum = "opening_cumulative" in item
             opening_net_book = float(item.get("opening_net_book", 0.0) or 0.0)
             opening_cumulative = float(item.get("opening_cumulative", 0.0) or 0.0)
+            has_opening_nb = "opening_net_book" in item
+            has_opening_cum = "opening_cumulative" in item
+            override_net_flag = item.get("override_net_book")
+            override_cum_flag = item.get("override_cumulative")
             rows.append(
                 DepreciationRow(
                     asset_type=asset,
                     year=year,
                     acquisition=acquisition,
-                    asset_cost=asset_cost,
                     depreciation_rate=rate,
                     opening_net_book=opening_net_book,
                     opening_cumulative=opening_cumulative,
-                    override_net_book=has_opening_nb,
-                    override_cumulative=has_opening_cum,
+                    override_net_book=bool(
+                        has_opening_nb if override_net_flag is None else override_net_flag
+                    ),
+                    override_cumulative=bool(
+                        has_opening_cum if override_cum_flag is None else override_cum_flag
+                    ),
                 )
             )
 
@@ -236,14 +241,13 @@ def _parse_depreciation_schedule(
 
         for index, year in enumerate(sequence_years):
             acquisition = base_value if index == 0 else 0.0
-            asset_cost = acquisition
 
             if useful_life and useful_life > 0 and index < useful_life:
                 annual_depreciation = base_value / useful_life
             else:
                 annual_depreciation = 0.0
 
-            total_asset_cost = asset_cost + previous_net_book
+            total_asset_cost = acquisition + previous_net_book
             rate = annual_depreciation / total_asset_cost if total_asset_cost else 0.0
             cumulative = previous_cumulative + annual_depreciation
             net_book = total_asset_cost - cumulative
@@ -256,7 +260,6 @@ def _parse_depreciation_schedule(
                     asset_type=str(asset),
                     year=int(year),
                     acquisition=acquisition,
-                    asset_cost=asset_cost,
                     depreciation_rate=rate,
                     opening_net_book=previous_net_book,
                     opening_cumulative=previous_cumulative,
