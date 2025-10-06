@@ -366,52 +366,62 @@
       {
         "year": 2024,
         "amount": 9.5,
-        "outstanding": 9.5
+        "outstanding": 9.5,
+        "duration": 5
       },
       {
         "year": 2025,
         "amount": 14.036,
-        "outstanding": 14.036
+        "outstanding": 14.036,
+        "duration": 5
       },
       {
         "year": 2026,
         "amount": 13.536,
-        "outstanding": 13.536
+        "outstanding": 13.536,
+        "duration": 5
       },
       {
         "year": 2027,
         "amount": 13.036,
-        "outstanding": 13.036
+        "outstanding": 13.036,
+        "duration": 4
       },
       {
         "year": 2028,
         "amount": 12.536,
-        "outstanding": 12.536
+        "outstanding": 12.536,
+        "duration": 4
       },
       {
         "year": 2029,
         "amount": 12.036,
-        "outstanding": 12.036
+        "outstanding": 12.036,
+        "duration": 4
       },
       {
         "year": 2030,
         "amount": 11.536,
-        "outstanding": 11.536
+        "outstanding": 11.536,
+        "duration": 3
       },
       {
         "year": 2031,
         "amount": 11.036,
-        "outstanding": 11.036
+        "outstanding": 11.036,
+        "duration": 3
       },
       {
         "year": 2032,
         "amount": 10.536,
-        "outstanding": 10.536
+        "outstanding": 10.536,
+        "duration": 2
       },
       {
         "year": 2033,
         "amount": 10.036,
-        "outstanding": 10.036
+        "outstanding": 10.036,
+        "duration": 1
       }
     ],
     "revolver": [

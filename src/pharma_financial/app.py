@@ -10,7 +10,7 @@ from typing import Any, List, Optional, Tuple
 
 import streamlit as st
 
-from .inputs import ModelInputs, parse_inputs
+from .inputs import DebtEntry, ModelInputs, parse_inputs
 from .model import FinancialModel, FinancialOutputs
 from .table import Table
 
@@ -1637,6 +1637,7 @@ def _render_cost_and_financing(payload: dict) -> None:
         interest_label="Senior Debt Interest Payable",
         interest_rate=float(financing.get("senior_debt_interest", 0.0)),
         years=years,
+        include_duration=True,
     )
 
     _render_debt_section(
@@ -1677,6 +1678,7 @@ def _render_debt_section(
     interest_label: str,
     interest_rate: float,
     years: Sequence[int],
+    include_duration: bool = False,
 ) -> None:
     st.markdown(f"#### {title}")
 
@@ -1685,16 +1687,27 @@ def _render_debt_section(
     if not rows:
         st.info("No entries configured. Use the form below to add debt details.")
 
-    header = st.columns([1.2, 1.6, 1.6, 1.6, 0.8])
-    header[0].markdown("**Year**")
-    header[1].markdown(f"**{amount_label}**")
-    header[2].markdown(f"**{outstanding_label}**")
-    header[3].markdown(f"**{interest_label}**")
-    header[4].markdown(" ")
+    if include_duration:
+        column_widths = [1.1, 1.1, 1.4, 1.4, 1.4, 0.7]
+        header_titles = [
+            "Year",
+            "Duration",
+            amount_label,
+            outstanding_label,
+            interest_label,
+            "",
+        ]
+    else:
+        column_widths = [1.2, 1.6, 1.6, 1.6, 0.8]
+        header_titles = ["Year", amount_label, outstanding_label, interest_label, ""]
+
+    header = st.columns(column_widths)
+    for column, title in zip(header, header_titles):
+        column.markdown(f"**{title}**" if title else " ")
 
     updated_rows: List[dict] = []
     for index, row in enumerate(rows):
-        cols = st.columns([1.2, 1.6, 1.6, 1.6, 0.8])
+        cols = st.columns(column_widths)
         default_year = int(row.get("Year", years[index] if index < len(years) else (years[0] if years else 0)))
         year_value = cols[0].number_input(
             "Year",
@@ -1703,7 +1716,22 @@ def _render_debt_section(
             step=1,
             format="%d",
         )
-        amount_value = cols[1].number_input(
+        if include_duration:
+            default_duration = int(row.get("Duration", 1))
+            duration_value = cols[1].number_input(
+                "Duration",
+                value=max(1, default_duration),
+                key=f"{session_key}_duration_{index}",
+                step=1,
+                format="%d",
+                min_value=1,
+            )
+            amount_column_index = 2
+        else:
+            duration_value = int(row.get("Duration", 1)) or 1
+            amount_column_index = 1
+
+        amount_value = cols[amount_column_index].number_input(
             amount_label,
             value=float(row.get("Amount", 0.0)),
             key=f"{session_key}_amount_{index}",
@@ -1711,7 +1739,8 @@ def _render_debt_section(
             step=0.1,
             format="%.4f",
         )
-        outstanding_value = cols[2].number_input(
+        outstanding_column_index = amount_column_index + 1
+        outstanding_value = cols[outstanding_column_index].number_input(
             outstanding_label,
             value=float(row.get("Outstanding", amount_value)),
             key=f"{session_key}_outstanding_{index}",
@@ -1720,10 +1749,21 @@ def _render_debt_section(
             format="%.4f",
         )
 
-        interest_value = float(amount_value) * float(interest_rate)
+        if include_duration:
+            entry = DebtEntry(
+                year=int(year_value),
+                amount=float(amount_value),
+                outstanding=float(outstanding_value),
+                duration=max(1, int(duration_value)),
+            )
+            interest_value = entry.first_payment(float(interest_rate))
+            interest_column_index = outstanding_column_index + 1
+        else:
+            interest_value = float(amount_value) * float(interest_rate)
+            interest_column_index = outstanding_column_index + 1
         interest_key = f"{session_key}_interest_{index}"
         _set_widget_value(interest_key, interest_value)
-        cols[3].number_input(
+        cols[interest_column_index].number_input(
             interest_label,
             value=interest_value,
             key=interest_key,
@@ -1731,7 +1771,8 @@ def _render_debt_section(
             disabled=True,
         )
 
-        if cols[4].button("Remove", key=f"{session_key}_remove_{index}"):
+        action_column_index = interest_column_index + 1
+        if cols[action_column_index].button("Remove", key=f"{session_key}_remove_{index}"):
             del rows[index]
             st.session_state[session_key] = rows
             _rerun()
@@ -1741,6 +1782,7 @@ def _render_debt_section(
                 "Year": int(year_value),
                 "Amount": float(amount_value),
                 "Outstanding": float(outstanding_value),
+                "Duration": int(max(1, int(duration_value))),
             }
         )
 
@@ -1757,6 +1799,17 @@ def _render_debt_section(
             format="%d",
             key=f"{session_key}_new_year",
         )
+        if include_duration:
+            new_duration = st.number_input(
+                "Duration",
+                value=1,
+                min_value=1,
+                step=1,
+                format="%d",
+                key=f"{session_key}_new_duration",
+            )
+        else:
+            new_duration = 1
         new_amount = st.number_input(
             amount_label,
             value=0.0,
@@ -1779,11 +1832,13 @@ def _render_debt_section(
                     "Year": int(new_year),
                     "Amount": float(new_amount),
                     "Outstanding": float(new_outstanding or new_amount),
+                    "Duration": int(max(1, int(new_duration))),
                 }
             )
             st.session_state[session_key] = rows
             for key in (
                 f"{session_key}_new_year",
+                f"{session_key}_new_duration",
                 f"{session_key}_new_amount",
                 f"{session_key}_new_outstanding",
             ):
@@ -2766,7 +2821,19 @@ def _payload_to_debt_rows(payload: Mapping, key: str) -> list[dict]:
             continue
         amount = float(item.get("amount", 0.0))
         outstanding = float(item.get("outstanding", amount))
-        rows.append({"Year": year, "Amount": amount, "Outstanding": outstanding})
+        duration_value = item.get("duration", 1)
+        try:
+            duration = int(duration_value)
+        except (TypeError, ValueError):
+            duration = 1
+        rows.append(
+            {
+                "Year": year,
+                "Amount": amount,
+                "Outstanding": outstanding,
+                "Duration": max(1, duration),
+            }
+        )
 
     rows.sort(key=lambda row: row.get("Year", 0))
     return rows
@@ -2782,7 +2849,19 @@ def _debt_rows_to_payload(rows: Sequence[Mapping], payload: dict, key: str) -> N
             continue
         amount = float(row.get("Amount", 0.0))
         outstanding = float(row.get("Outstanding", amount))
-        cleaned.append({"year": year, "amount": amount, "outstanding": outstanding})
+        duration_value = row.get("Duration", 1)
+        try:
+            duration = int(duration_value)
+        except (TypeError, ValueError):
+            duration = 1
+        cleaned.append(
+            {
+                "year": year,
+                "amount": amount,
+                "outstanding": outstanding,
+                "duration": max(1, duration),
+            }
+        )
 
     cleaned.sort(key=lambda item: item["year"])
     financing = payload.setdefault("financing", {})

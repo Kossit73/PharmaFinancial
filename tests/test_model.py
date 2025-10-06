@@ -75,18 +75,20 @@ class FinancialModelTest(unittest.TestCase):
     def test_interest_matches_financing_inputs(self):
         financing = self.inputs.financing
         interest_column = self.outputs.income_statement.column("Interest")
+        senior_interest, _ = self.model._senior_debt_schedules()
         manual: list[float] = []
-        for year in self.inputs.years:
-            total = 0.0
-            for entry in financing.senior_debt_entries:
-                if entry.year == year:
-                    total += entry.amount * financing.senior_debt_interest
-            for entry in financing.revolver_entries:
-                if entry.year == year:
-                    total += entry.amount * financing.revolver_interest
-            for entry in financing.overdraft_entries:
-                if entry.year == year:
-                    total += entry.amount * financing.cash_interest
+        for idx, year in enumerate(self.inputs.years):
+            total = senior_interest[idx]
+            total += sum(
+                entry.amount * financing.revolver_interest
+                for entry in financing.revolver_entries
+                if entry.year == year
+            )
+            total += sum(
+                entry.amount * financing.cash_interest
+                for entry in financing.overdraft_entries
+                if entry.year == year
+            )
             manual.append(-total)
 
         self.assertEqual(len(interest_column), len(manual))
@@ -96,23 +98,30 @@ class FinancialModelTest(unittest.TestCase):
     def test_liabilities_include_outstanding_balances(self):
         financing = self.inputs.financing
         liabilities = self.outputs.balance_sheet.column("Total Liabilities")
+        _, senior_outstanding = self.model._senior_debt_schedules()
         manual: list[float] = []
-        for year in self.inputs.years:
-            total = 0.0
-            for entry in financing.senior_debt_entries:
-                if entry.year == year:
-                    total += entry.outstanding
-            for entry in financing.revolver_entries:
-                if entry.year == year:
-                    total += entry.outstanding
-            for entry in financing.overdraft_entries:
-                if entry.year == year:
-                    total += entry.outstanding
+        for idx, year in enumerate(self.inputs.years):
+            total = senior_outstanding[idx]
+            total += sum(
+                entry.outstanding
+                for entry in financing.revolver_entries
+                if entry.year == year
+            )
+            total += sum(
+                entry.outstanding
+                for entry in financing.overdraft_entries
+                if entry.year == year
+            )
             manual.append(total)
 
         self.assertEqual(len(liabilities), len(manual))
         for actual, expected in zip(liabilities, manual):
             self.assertAlmostEqual(actual, expected, places=6)
+
+    def test_senior_debt_outstanding_clears_by_horizon(self):
+        _, outstanding = self.model._senior_debt_schedules()
+        self.assertTrue(outstanding)
+        self.assertAlmostEqual(outstanding[-1], 0.0, places=6)
 
     def test_depreciation_schedule_feeds_statements(self):
         depreciation = self.model.depreciation_schedule()

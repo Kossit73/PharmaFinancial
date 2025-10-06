@@ -86,9 +86,32 @@ class DebtEntry:
     year: int
     amount: float
     outstanding: float
+    duration: int = 1
 
-    def interest_payable(self, rate: float) -> float:
-        return self.amount * rate
+    def first_payment(self, rate: float) -> float:
+        """Return the first scheduled payment for the debt entry.
+
+        The payment is calculated from the current outstanding balance and the
+        configured interest rate.  When the duration is one period or the
+        computed payment would exceed the remaining outstanding balance, the
+        method returns the full outstanding amount so that the liability is
+        extinguished within the configured life span.
+        """
+
+        principal = max(float(self.amount), float(self.outstanding))
+        outstanding = min(float(self.outstanding), principal)
+        cumulative_interest = principal - outstanding
+        current_outstanding = max(principal - cumulative_interest, 0.0)
+        if current_outstanding <= 0:
+            return 0.0
+
+        duration = max(int(self.duration or 0), 1)
+        base_payment = current_outstanding * float(rate)
+        principal_share = current_outstanding / duration if duration > 0 else current_outstanding
+        payment = max(base_payment, principal_share)
+        if payment > current_outstanding:
+            payment = current_outstanding
+        return payment
 
 
 @dataclass
@@ -325,7 +348,15 @@ def _parse_debt_entries(data: object) -> List[DebtEntry]:
             continue
         amount = float(item.get("amount", 0.0)) if isinstance(item, Mapping) else 0.0
         outstanding = float(item.get("outstanding", amount)) if isinstance(item, Mapping) else amount
-        entries.append(DebtEntry(year=year, amount=amount, outstanding=outstanding))
+        duration_value = item.get("duration") if isinstance(item, Mapping) else None
+        try:
+            duration = int(duration_value) if duration_value not in (None, "") else 1
+        except (TypeError, ValueError):
+            duration = 1
+        duration = max(1, duration)
+        entries.append(
+            DebtEntry(year=year, amount=amount, outstanding=outstanding, duration=duration)
+        )
     entries.sort(key=lambda entry: entry.year)
     return entries
 
