@@ -37,11 +37,138 @@
     "annual": [0.9,2.178,3.267]
   },
   "utility_costs": {
-    "electricity_per_day": 187.5,
-    "water_per_day": 107.25,
-    "steam_per_hour": 0.0,
-    "days": [260,260,312,312,312,312,312,312,312,312],
-    "hours": [10,12,16,16,16,16,16,16,16,16]
+    "years": [
+      {
+        "label": "Year 1",
+        "electricity_per_day": 750.0,
+        "electricity_rate": 0.25,
+        "electricity_days": 260,
+        "water_per_day": 50.0,
+        "water_rate": 2.145,
+        "water_days": 260,
+        "steam_per_hour": 0.0,
+        "steam_rate": 2.145,
+        "steam_days": 260,
+        "steam_hours": 10
+      },
+      {
+        "label": "Year 2",
+        "electricity_per_day": 750.0,
+        "electricity_rate": 0.25,
+        "electricity_days": 260,
+        "water_per_day": 50.0,
+        "water_rate": 2.145,
+        "water_days": 260,
+        "steam_per_hour": 0.0,
+        "steam_rate": 2.145,
+        "steam_days": 260,
+        "steam_hours": 12
+      },
+      {
+        "label": "Year 3",
+        "electricity_per_day": 750.0,
+        "electricity_rate": 0.25,
+        "electricity_days": 312,
+        "water_per_day": 50.0,
+        "water_rate": 2.145,
+        "water_days": 312,
+        "steam_per_hour": 0.0,
+        "steam_rate": 2.145,
+        "steam_days": 312,
+        "steam_hours": 16
+      },
+      {
+        "label": "Year 4",
+        "electricity_per_day": 750.0,
+        "electricity_rate": 0.25,
+        "electricity_days": 312,
+        "water_per_day": 50.0,
+        "water_rate": 2.145,
+        "water_days": 312,
+        "steam_per_hour": 0.0,
+        "steam_rate": 2.145,
+        "steam_days": 312,
+        "steam_hours": 16
+      },
+      {
+        "label": "Year 5",
+        "electricity_per_day": 750.0,
+        "electricity_rate": 0.25,
+        "electricity_days": 312,
+        "water_per_day": 50.0,
+        "water_rate": 2.145,
+        "water_days": 312,
+        "steam_per_hour": 0.0,
+        "steam_rate": 2.145,
+        "steam_days": 312,
+        "steam_hours": 16
+      },
+      {
+        "label": "Year 6",
+        "electricity_per_day": 750.0,
+        "electricity_rate": 0.25,
+        "electricity_days": 312,
+        "water_per_day": 50.0,
+        "water_rate": 2.145,
+        "water_days": 312,
+        "steam_per_hour": 0.0,
+        "steam_rate": 2.145,
+        "steam_days": 312,
+        "steam_hours": 16
+      },
+      {
+        "label": "Year 7",
+        "electricity_per_day": 750.0,
+        "electricity_rate": 0.25,
+        "electricity_days": 312,
+        "water_per_day": 50.0,
+        "water_rate": 2.145,
+        "water_days": 312,
+        "steam_per_hour": 0.0,
+        "steam_rate": 2.145,
+        "steam_days": 312,
+        "steam_hours": 16
+      },
+      {
+        "label": "Year 8",
+        "electricity_per_day": 750.0,
+        "electricity_rate": 0.25,
+        "electricity_days": 312,
+        "water_per_day": 50.0,
+        "water_rate": 2.145,
+        "water_days": 312,
+        "steam_per_hour": 0.0,
+        "steam_rate": 2.145,
+        "steam_days": 312,
+        "steam_hours": 16
+      },
+      {
+        "label": "Year 9",
+        "electricity_per_day": 750.0,
+        "electricity_rate": 0.25,
+        "electricity_days": 312,
+        "water_per_day": 50.0,
+        "water_rate": 2.145,
+        "water_days": 312,
+        "steam_per_hour": 0.0,
+        "steam_rate": 2.145,
+        "steam_days": 312,
+        "steam_hours": 16
+      },
+      {
+        "label": "Year 10",
+        "electricity_per_day": 750.0,
+        "electricity_rate": 0.25,
+        "electricity_days": 312,
+        "water_per_day": 50.0,
+        "water_rate": 2.145,
+        "water_days": 312,
+        "steam_per_hour": 0.0,
+        "steam_rate": 2.145,
+        "steam_days": 312,
+        "steam_hours": 16
+      }
+    ]
   },
   "labor": {
     "direct": {

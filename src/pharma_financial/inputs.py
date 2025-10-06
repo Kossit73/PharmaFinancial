@@ -18,11 +18,39 @@ class ProductParameters:
 
 @dataclass
 class UtilitySchedule:
-    electricity_per_day: float
-    water_per_day: float
-    steam_per_hour: float
-    operating_days: List[int]
-    operating_hours: List[int]
+    electricity_per_day: List[float]
+    electricity_rate: List[float]
+    electricity_days: List[int]
+    water_per_day: List[float]
+    water_rate: List[float]
+    water_days: List[int]
+    steam_per_hour: List[float]
+    steam_rate: List[float]
+    steam_days: List[int]
+    steam_hours: List[int]
+
+    def annual_totals(self) -> List[float]:
+        totals: List[float] = []
+        length = len(self.electricity_per_day)
+        for idx in range(length):
+            electricity = (
+                self.electricity_per_day[idx]
+                * self.electricity_rate[idx]
+                * self.electricity_days[idx]
+            )
+            water = (
+                self.water_per_day[idx]
+                * self.water_rate[idx]
+                * self.water_days[idx]
+            )
+            steam = (
+                self.steam_per_hour[idx]
+                * self.steam_rate[idx]
+                * self.steam_days[idx]
+                * self.steam_hours[idx]
+            )
+            totals.append(electricity + water + steam)
+        return totals
 
 
 @dataclass
@@ -170,6 +198,10 @@ def _coerce_schedule(values: Iterable[float], length: int) -> List[float]:
     return sequence + padding
 
 
+def _coerce_int_schedule(values: Iterable[float], length: int) -> List[int]:
+    return [int(round(value)) for value in _coerce_schedule(values, length)]
+
+
 def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
     """Parse a mapping of raw inputs into :class:`ModelInputs`."""
     years = [int(year) for year in raw["years"]]
@@ -179,13 +211,59 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
     financing = _parse_financing(raw["financing"])
     sensitivity = _parse_sensitivity(raw["sensitivity"]["variables"])
 
-    utility = UtilitySchedule(
-        electricity_per_day=float(raw["utility_costs"]["electricity_per_day"]),
-        water_per_day=float(raw["utility_costs"]["water_per_day"]),
-        steam_per_hour=float(raw["utility_costs"]["steam_per_hour"]),
-        operating_days=[int(x) for x in raw["utility_costs"]["days"]],
-        operating_hours=[int(x) for x in raw["utility_costs"]["hours"]],
-    )
+    utility_source = raw["utility_costs"]
+    years_length = len(years)
+    utility_rows = list(utility_source.get("years", [])) if isinstance(utility_source, Mapping) else []
+
+    if utility_rows:
+        def _floats(key: str) -> List[float]:
+            return _coerce_schedule(
+                [float(row.get(key, 0.0) or 0.0) for row in utility_rows],
+                years_length,
+            )
+
+        def _ints(key: str) -> List[int]:
+            return _coerce_int_schedule(
+                [float(row.get(key, 0.0) or 0.0) for row in utility_rows],
+                years_length,
+            )
+
+        utility = UtilitySchedule(
+            electricity_per_day=_floats("electricity_per_day"),
+            electricity_rate=_floats("electricity_rate"),
+            electricity_days=_ints("electricity_days"),
+            water_per_day=_floats("water_per_day"),
+            water_rate=_floats("water_rate"),
+            water_days=_ints("water_days"),
+            steam_per_hour=_floats("steam_per_hour"),
+            steam_rate=_floats("steam_rate"),
+            steam_days=_ints("steam_days"),
+            steam_hours=_ints("steam_hours"),
+        )
+    else:
+        days = utility_source.get("days", []) if isinstance(utility_source, Mapping) else []
+        hours = utility_source.get("hours", []) if isinstance(utility_source, Mapping) else []
+        electricity_per_day = float(utility_source.get("electricity_per_day", 0.0)) if isinstance(utility_source, Mapping) else 0.0
+        water_per_day = float(utility_source.get("water_per_day", 0.0)) if isinstance(utility_source, Mapping) else 0.0
+        steam_per_hour = float(utility_source.get("steam_per_hour", 0.0)) if isinstance(utility_source, Mapping) else 0.0
+
+        electricity_days = _coerce_int_schedule(days, years_length)
+        water_days = electricity_days
+        steam_hours = _coerce_int_schedule(hours, years_length)
+        steam_days = _coerce_int_schedule([1 for _ in range(len(steam_hours))], years_length)
+
+        utility = UtilitySchedule(
+            electricity_per_day=[electricity_per_day for _ in range(years_length)],
+            electricity_rate=[1.0 for _ in range(years_length)],
+            electricity_days=electricity_days,
+            water_per_day=[water_per_day for _ in range(years_length)],
+            water_rate=[1.0 for _ in range(years_length)],
+            water_days=water_days,
+            steam_per_hour=[steam_per_hour for _ in range(years_length)],
+            steam_rate=[1.0 for _ in range(years_length)],
+            steam_days=steam_days,
+            steam_hours=steam_hours,
+        )
 
     monte_source = raw["monte_carlo"]
     monte_carlo = MonteCarloParameters(

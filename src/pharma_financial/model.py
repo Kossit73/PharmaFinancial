@@ -124,10 +124,25 @@ class FinancialModel:
         raw_material_cost = [units * self.inputs.raw_material_cost_per_unit for units in total_units]
 
         utility = self.inputs.utility_schedule
-        electricity = [days * utility.electricity_per_day for days in utility.operating_days]
-        water = [days * utility.water_per_day for days in utility.operating_days]
-        steam = [hours * utility.steam_per_hour for hours in utility.operating_hours]
-        utilities = [e + w + s for e, w, s in zip(electricity, water, steam)]
+        utilities: List[float] = []
+        for idx in range(len(self.years)):
+            electricity = (
+                utility.electricity_per_day[idx]
+                * utility.electricity_rate[idx]
+                * utility.electricity_days[idx]
+            )
+            water = (
+                utility.water_per_day[idx]
+                * utility.water_rate[idx]
+                * utility.water_days[idx]
+            )
+            steam = (
+                utility.steam_per_hour[idx]
+                * utility.steam_rate[idx]
+                * utility.steam_days[idx]
+                * utility.steam_hours[idx]
+            )
+            utilities.append(electricity + water + steam)
 
         base_direct = sum(self.inputs.direct_labor_costs.values())
         baseline_units = total_units[0] or 1.0
@@ -137,7 +152,7 @@ class FinancialModel:
         indirect_labor = [base_indirect * self._inflation[idx] for idx in range(len(self.years))]
 
         cost_of_sales = [raw + util + direct for raw, util, direct in zip(raw_material_cost, utilities, direct_labor)]
-        total_costs = [cos + indirect for cos, indirect in zip(cost_of_sales, indirect_labor)]
+        total_expenses = [cos + indirect for cos, indirect in zip(cost_of_sales, indirect_labor)]
 
         return build_table(
             self.years,
@@ -147,7 +162,7 @@ class FinancialModel:
                 "Direct Labor": direct_labor,
                 "Cost of Sales": cost_of_sales,
                 "General & Admin": indirect_labor,
-                "Total Costs": total_costs,
+                "Total Expenses": total_expenses,
             },
         )
 
@@ -179,9 +194,9 @@ class FinancialModel:
         depreciation = self.depreciation_schedule()
 
         net_revenue = revenue.column("Net Revenue")
-        total_costs = costs.column("Total Costs")
+        total_expenses = costs.column("Total Expenses")
 
-        ebitda = [rev - cost for rev, cost in zip(net_revenue, total_costs)]
+        ebitda = [rev - cost for rev, cost in zip(net_revenue, total_expenses)]
         ebit = [ea - dep for ea, dep in zip(ebitda, depreciation)]
         interest = self._interest_schedule()
         ebt = [e - i for e, i in zip(ebit, interest)]
@@ -201,7 +216,7 @@ class FinancialModel:
             {
                 "Gross Revenue": revenue.column("Gross Revenue"),
                 "Net Revenue": net_revenue,
-                "Total Costs": total_costs,
+                "Total Expenses": total_expenses,
                 "EBITDA": ebitda,
                 "Depreciation": depreciation,
                 "EBIT": ebit,
@@ -439,7 +454,7 @@ class FinancialModel:
         iterations = self.inputs.monte_carlo.iterations
         low, high = self.inputs.monte_carlo.revenue_growth_range
         base_revenue = self.income_statement().column("Net Revenue")
-        total_costs = self.cost_structure().column("Total Costs")
+        total_costs = self.cost_structure().column("Total Expenses")
         discount_rate = self.inputs.financing.discount_rate
         depreciation = self.depreciation_schedule()
         interest = self._interest_schedule()
@@ -508,7 +523,7 @@ class FinancialModel:
 
     def break_even_analysis(self) -> Table:
         costs = self.cost_structure()
-        fixed_cost_total = sum(costs.column("Total Costs")) / len(self.years)
+        fixed_cost_total = sum(costs.column("Total Expenses")) / len(self.years)
         break_even_units: Dict[str, List[float]] = {}
         for product in self.products:
             params: ProductParameters = self.inputs.unit_costs[product]

@@ -45,6 +45,22 @@ class FinancialModelTest(unittest.TestCase):
     def test_npf_irr_handles_short_series(self):
         self.assertTrue(npf_irr([100]) != float("inf"))
 
+    def test_utility_costs_feed_total_expenses(self):
+        costs = self.model.cost_structure()
+        utilities = costs.column("Utilities")
+        expected_utilities = self.inputs.utility_schedule.annual_totals()
+        self.assertEqual(len(utilities), len(expected_utilities))
+        for actual, expected in zip(utilities, expected_utilities):
+            self.assertAlmostEqual(actual, expected, places=6)
+
+        total_expenses = costs.column("Total Expenses")
+        raw = costs.column("Raw Materials")
+        direct = costs.column("Direct Labor")
+        general = costs.column("General & Admin")
+        for idx in range(len(total_expenses)):
+            expected_total = raw[idx] + utilities[idx] + direct[idx] + general[idx]
+            self.assertAlmostEqual(total_expenses[idx], expected_total, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()
