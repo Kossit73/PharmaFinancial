@@ -59,6 +59,7 @@ class DepreciationRow:
     year: int
     acquisition: float
     depreciation_rate: float
+    asset_life: Optional[int] = None
     method: str = "straight_line"
     opening_net_book: float = 0.0
     opening_cumulative: float = 0.0
@@ -193,6 +194,12 @@ def _parse_depreciation_schedule(
             rate = float(
                 item.get("depreciation_rate", item.get("rate", 0.0)) or 0.0
             )
+            life_value = item.get("asset_life")
+            try:
+                asset_life = int(life_value) if life_value not in (None, "") else None
+            except (TypeError, ValueError):
+                asset_life = None
+
             method_value = str(
                 item.get("method", "straight_line") or "straight_line"
             ).strip().lower()
@@ -210,6 +217,7 @@ def _parse_depreciation_schedule(
                     year=year,
                     acquisition=acquisition,
                     depreciation_rate=rate,
+                    asset_life=asset_life,
                     method=method_value,
                     opening_net_book=opening_net_book,
                     opening_cumulative=opening_cumulative,
@@ -268,6 +276,7 @@ def _parse_depreciation_schedule(
                     year=int(year),
                     acquisition=acquisition,
                     depreciation_rate=rate,
+                    asset_life=useful_life,
                     method="straight_line",
                     opening_net_book=previous_net_book,
                     opening_cumulative=previous_cumulative,

@@ -130,22 +130,28 @@ class FinancialModelTest(unittest.TestCase):
             self.assertAlmostEqual(per_year_depr.get(year, 0.0), depreciation[idx], places=6)
             self.assertAlmostEqual(per_year_nb.get(year, 0.0), net_ppe[idx], places=6)
 
-        by_asset: dict[str, list[dict]] = {}
+        by_asset: dict[tuple[str, int], list[dict]] = {}
         for entry in details:
-            by_asset.setdefault(entry["asset_type"], []).append(entry)
+            acquisition_year = int(entry.get("acquisition_year", entry["year"]))
+            key = (entry["asset_type"], acquisition_year)
+            by_asset.setdefault(key, []).append(entry)
 
-        for asset_entries in by_asset.values():
+        for asset_key, asset_entries in by_asset.items():
             asset_entries.sort(key=lambda item: item["year"])
             previous_net_book = None
             previous_cumulative = None
+            asset_life = asset_entries[0].get("asset_life")
+            configured_life = int(asset_life) if asset_life else None
+
             for entry in asset_entries:
                 opening_net = float(entry["opening_net_book"])
                 acquisition = float(entry["acquisition"])
                 total_cost = float(entry["total_asset_cost"])
                 total_dep = float(entry["total_depreciation"])
                 cumulative_dep = float(entry["cumulative_depreciation"])
-                rate = float(entry["depreciation_rate"])
                 method = str(entry.get("method", "straight_line"))
+                configured_rate = float(entry.get("configured_rate", entry.get("depreciation_rate", 0.0)))
+                life_index = int(entry.get("life_year_index", 0))
                 self.assertIn(method, {"straight_line", "reducing_balance"})
 
                 if previous_net_book is not None:
@@ -154,14 +160,23 @@ class FinancialModelTest(unittest.TestCase):
                 expected_total = acquisition + opening_net
                 self.assertAlmostEqual(total_cost, expected_total, places=6)
 
-                if method == "reducing_balance":
-                    expected_base = opening_net + (acquisition * 0.5)
-                else:
-                    expected_base = opening_net + acquisition
-
                 base_cumulative = 0.0 if previous_cumulative is None else previous_cumulative
                 allowable = max(total_cost - base_cumulative, 0.0)
-                expected_depreciation = min(expected_base * rate, allowable)
+
+                if method == "straight_line" and configured_life and configured_life > 0:
+                    remaining = max(configured_life - life_index, 1)
+                    expected_depreciation = allowable / remaining if remaining else allowable
+                else:
+                    if method == "reducing_balance":
+                        expected_base = opening_net + (acquisition * 0.5)
+                    else:
+                        expected_base = opening_net + acquisition
+                    expected_depreciation = expected_base * configured_rate
+                    if configured_life and configured_life > 0 and life_index >= configured_life - 1:
+                        expected_depreciation = allowable
+                    elif expected_depreciation > allowable:
+                        expected_depreciation = allowable
+
                 self.assertAlmostEqual(total_dep, expected_depreciation, places=5)
 
                 expected_cumulative = base_cumulative + expected_depreciation
@@ -170,8 +185,12 @@ class FinancialModelTest(unittest.TestCase):
                 expected_net_book = max(total_cost - expected_cumulative, 0.0)
                 self.assertAlmostEqual(float(entry["net_book_value"]), expected_net_book, places=5)
 
-                previous_net_book = float(entry["net_book_value"])
-                previous_cumulative = cumulative_dep
+                previous_net_book = expected_net_book
+                previous_cumulative = expected_cumulative
+
+            if configured_life and configured_life > 0 and len(asset_entries) >= configured_life:
+                final_entry = asset_entries[configured_life - 1]
+                self.assertAlmostEqual(float(final_entry["net_book_value"]), 0.0, places=5)
 
 
 if __name__ == "__main__":

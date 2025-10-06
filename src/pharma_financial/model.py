@@ -192,64 +192,94 @@ class FinancialModel:
         per_year_net_book: dict[int, float] = {int(year): 0.0 for year in self.years}
         details: list[dict] = []
 
-        schedule = sorted(
-            self.inputs.depreciation_schedule,
-            key=lambda row: (row.asset_type, row.year),
-        )
-        last_net_book: dict[str, float] = {}
-        last_cumulative: dict[str, float] = {}
+        year_index = {year: idx for idx, year in enumerate(self.years)}
+        enumerated_schedule = list(enumerate(self.inputs.depreciation_schedule))
+        enumerated_schedule.sort(key=lambda item: (item[1].asset_type, item[1].year, item[0]))
 
-        for row in schedule:
+        for _, row in enumerated_schedule:
             asset = row.asset_type
-            previous_net_book = last_net_book.get(asset)
-            previous_cumulative = last_cumulative.get(asset)
-
-            if previous_net_book is None or row.override_net_book:
-                previous_net_book = row.opening_net_book
-            if previous_cumulative is None or row.override_cumulative:
-                previous_cumulative = row.opening_cumulative
-
-            previous_net_book = float(previous_net_book or 0.0)
-            previous_cumulative = float(previous_cumulative or 0.0)
-
-            total_asset_cost = row.acquisition + previous_net_book
-            method = getattr(row, "method", "straight_line") or "straight_line"
-            method = method.lower()
+            method = (row.method or "straight_line").lower()
             if method not in {"straight_line", "reducing_balance"}:
                 method = "straight_line"
 
-            if method == "reducing_balance":
-                depreciation_base = previous_net_book + (row.acquisition * 0.5)
+            start_position = year_index.get(row.year)
+            if start_position is None:
+                continue
+
+            configured_life = row.asset_life if row.asset_life not in (None, 0) else None
+            if configured_life is not None and configured_life < 0:
+                configured_life = None
+
+            available_years = len(self.years) - start_position
+            if available_years <= 0:
+                continue
+
+            if configured_life is None:
+                life_span = available_years
             else:
-                depreciation_base = total_asset_cost
+                life_span = min(configured_life, available_years)
+            if life_span <= 0:
+                continue
 
-            total_depreciation = depreciation_base * row.depreciation_rate
-            allowable = max(total_asset_cost - previous_cumulative, 0.0)
-            if total_depreciation > allowable:
-                total_depreciation = allowable
-            cumulative_depreciation = previous_cumulative + total_depreciation
-            net_book_value = max(total_asset_cost - cumulative_depreciation, 0.0)
+            previous_net_book = float(row.opening_net_book or 0.0)
+            previous_cumulative = float(row.opening_cumulative or 0.0)
 
-            per_year_depreciation[row.year] = per_year_depreciation.get(row.year, 0.0) + total_depreciation
-            per_year_net_book[row.year] = per_year_net_book.get(row.year, 0.0) + net_book_value
+            for offset in range(life_span):
+                year_idx = start_position + offset
+                year = self.years[year_idx]
+                acquisition_amount = row.acquisition if offset == 0 else 0.0
+                opening_net_book = previous_net_book
+                opening_cumulative = previous_cumulative
+                total_asset_cost = opening_net_book + acquisition_amount
+                allowable = max(total_asset_cost - opening_cumulative, 0.0)
 
-            last_net_book[asset] = net_book_value
-            last_cumulative[asset] = cumulative_depreciation
+                if configured_life is not None and method == "straight_line":
+                    remaining_periods = max(configured_life - offset, 1)
+                    total_depreciation = allowable / remaining_periods if remaining_periods else allowable
+                else:
+                    if method == "reducing_balance":
+                        depreciation_base = opening_net_book + (acquisition_amount * 0.5)
+                    else:
+                        depreciation_base = total_asset_cost
+                    total_depreciation = depreciation_base * row.depreciation_rate
+                    if configured_life is not None and offset >= configured_life - 1:
+                        total_depreciation = allowable
+                    elif total_depreciation > allowable:
+                        total_depreciation = allowable
 
-            details.append(
-                {
-                    "asset_type": asset,
-                    "year": row.year,
-                    "acquisition": row.acquisition,
-                    "opening_net_book": previous_net_book,
-                    "total_asset_cost": total_asset_cost,
-                    "depreciation_rate": row.depreciation_rate,
-                    "total_depreciation": total_depreciation,
-                    "cumulative_depreciation": cumulative_depreciation,
-                    "net_book_value": net_book_value,
-                    "method": method,
-                }
-            )
+                cumulative_depreciation = opening_cumulative + total_depreciation
+                net_book_value = max(total_asset_cost - cumulative_depreciation, 0.0)
+
+                per_year_depreciation[year] = (
+                    per_year_depreciation.get(year, 0.0) + total_depreciation
+                )
+                per_year_net_book[year] = per_year_net_book.get(year, 0.0) + net_book_value
+
+                details.append(
+                    {
+                        "asset_type": asset,
+                        "year": year,
+                        "acquisition_year": row.year,
+                        "acquisition": acquisition_amount,
+                        "opening_net_book": opening_net_book,
+                        "opening_cumulative": opening_cumulative,
+                        "total_asset_cost": total_asset_cost,
+                        "configured_rate": row.depreciation_rate,
+                        "depreciation_rate": (
+                            total_depreciation / total_asset_cost if total_asset_cost else 0.0
+                        ),
+                        "total_depreciation": total_depreciation,
+                        "cumulative_depreciation": cumulative_depreciation,
+                        "net_book_value": net_book_value,
+                        "method": method,
+                        "asset_life": configured_life,
+                        "life_year_index": offset,
+                        "life_span": life_span,
+                    }
+                )
+
+                previous_net_book = net_book_value
+                previous_cumulative = cumulative_depreciation
 
         self._depreciation_cache = (details, per_year_depreciation, per_year_net_book)
         return self._depreciation_cache
