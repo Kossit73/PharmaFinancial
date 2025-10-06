@@ -59,6 +59,7 @@ class DepreciationRow:
     year: int
     acquisition: float
     depreciation_rate: float
+    method: str = "straight_line"
     opening_net_book: float = 0.0
     opening_cumulative: float = 0.0
     override_net_book: bool = False
@@ -192,6 +193,11 @@ def _parse_depreciation_schedule(
             rate = float(
                 item.get("depreciation_rate", item.get("rate", 0.0)) or 0.0
             )
+            method_value = str(
+                item.get("method", "straight_line") or "straight_line"
+            ).strip().lower()
+            if method_value not in {"straight_line", "reducing_balance"}:
+                method_value = "straight_line"
             opening_net_book = float(item.get("opening_net_book", 0.0) or 0.0)
             opening_cumulative = float(item.get("opening_cumulative", 0.0) or 0.0)
             has_opening_nb = "opening_net_book" in item
@@ -204,6 +210,7 @@ def _parse_depreciation_schedule(
                     year=year,
                     acquisition=acquisition,
                     depreciation_rate=rate,
+                    method=method_value,
                     opening_net_book=opening_net_book,
                     opening_cumulative=opening_cumulative,
                     override_net_book=bool(
@@ -261,6 +268,7 @@ def _parse_depreciation_schedule(
                     year=int(year),
                     acquisition=acquisition,
                     depreciation_rate=rate,
+                    method="straight_line",
                     opening_net_book=previous_net_book,
                     opening_cumulative=previous_cumulative,
                     override_net_book=index == 0,

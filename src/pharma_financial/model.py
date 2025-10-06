@@ -213,11 +213,17 @@ class FinancialModel:
             previous_cumulative = float(previous_cumulative or 0.0)
 
             total_asset_cost = row.acquisition + previous_net_book
-            # Apply a half-year convention so in-year additions only
-            # contribute half their value to the depreciable base during
-            # the year of acquisition.
-            depreciable_base = previous_net_book + (row.acquisition * 0.5)
-            total_depreciation = depreciable_base * row.depreciation_rate
+            method = getattr(row, "method", "straight_line") or "straight_line"
+            method = method.lower()
+            if method not in {"straight_line", "reducing_balance"}:
+                method = "straight_line"
+
+            if method == "reducing_balance":
+                depreciation_base = previous_net_book + (row.acquisition * 0.5)
+            else:
+                depreciation_base = total_asset_cost
+
+            total_depreciation = depreciation_base * row.depreciation_rate
             allowable = max(total_asset_cost - previous_cumulative, 0.0)
             if total_depreciation > allowable:
                 total_depreciation = allowable
@@ -236,12 +242,12 @@ class FinancialModel:
                     "year": row.year,
                     "acquisition": row.acquisition,
                     "opening_net_book": previous_net_book,
-                    "depreciable_base": depreciable_base,
                     "total_asset_cost": total_asset_cost,
                     "depreciation_rate": row.depreciation_rate,
                     "total_depreciation": total_depreciation,
                     "cumulative_depreciation": cumulative_depreciation,
                     "net_book_value": net_book_value,
+                    "method": method,
                 }
             )
 

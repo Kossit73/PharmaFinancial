@@ -145,7 +145,8 @@ class FinancialModelTest(unittest.TestCase):
                 total_dep = float(entry["total_depreciation"])
                 cumulative_dep = float(entry["cumulative_depreciation"])
                 rate = float(entry["depreciation_rate"])
-                base = float(entry["depreciable_base"])
+                method = str(entry.get("method", "straight_line"))
+                self.assertIn(method, {"straight_line", "reducing_balance"})
 
                 if previous_net_book is not None:
                     self.assertAlmostEqual(opening_net, previous_net_book, places=5)
@@ -153,12 +154,14 @@ class FinancialModelTest(unittest.TestCase):
                 expected_total = acquisition + opening_net
                 self.assertAlmostEqual(total_cost, expected_total, places=6)
 
-                expected_base = opening_net + (acquisition * 0.5)
-                self.assertAlmostEqual(base, expected_base, places=6)
+                if method == "reducing_balance":
+                    expected_base = opening_net + (acquisition * 0.5)
+                else:
+                    expected_base = opening_net + acquisition
 
                 base_cumulative = 0.0 if previous_cumulative is None else previous_cumulative
                 allowable = max(total_cost - base_cumulative, 0.0)
-                expected_depreciation = min(base * rate, allowable)
+                expected_depreciation = min(expected_base * rate, allowable)
                 self.assertAlmostEqual(total_dep, expected_depreciation, places=5)
 
                 expected_cumulative = base_cumulative + expected_depreciation

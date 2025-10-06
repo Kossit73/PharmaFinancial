@@ -27,6 +27,14 @@ except Exception:  # pragma: no cover - gracefully degrade when Plotly missing
 DEFAULT_INPUT_PATH = Path(__file__).resolve().parent / "data" / "default_inputs.json"
 DEFAULT_INPUT_JSON = DEFAULT_INPUT_PATH.read_text(encoding="utf-8")
 DEFAULT_RISK_CATEGORIES = ["inherent", "climate", "political"]
+DEPRECIATION_METHOD_LABELS = {
+    "straight_line": "Straight Line",
+    "reducing_balance": "Reducing Balance",
+}
+DEPRECIATION_METHOD_OPTIONS = list(DEPRECIATION_METHOD_LABELS.values())
+DEPRECIATION_LABEL_TO_VALUE = {
+    label: value for value, label in DEPRECIATION_METHOD_LABELS.items()
+}
 
 
 def _rerun() -> None:
@@ -1289,7 +1297,7 @@ def _render_depreciation_schedule(payload: dict) -> None:
         row = rows[index]
         data = derived[index] if index < len(derived) else {}
 
-        cols = st.columns([2.2, 1.1, 1.1, 1.3, 1.2, 1.2, 1.2, 1.3, 1.3, 1.2, 0.7])
+        cols = st.columns([2.0, 1.4, 1.0, 1.2, 1.2, 1.1, 1.2, 1.2, 1.2, 1.2, 0.7])
 
         asset_input = _select_or_create_option(
             cols[0],
@@ -1301,20 +1309,39 @@ def _render_depreciation_schedule(payload: dict) -> None:
         if asset_input and asset_input not in asset_options:
             asset_options.append(asset_input)
 
+        method_value = str(row.get("method", "straight_line") or "straight_line").strip().lower()
+        if method_value not in DEPRECIATION_METHOD_LABELS:
+            method_value = "straight_line"
+        method_label = DEPRECIATION_METHOD_LABELS[method_value]
+        try:
+            default_method_index = DEPRECIATION_METHOD_OPTIONS.index(method_label)
+        except ValueError:
+            default_method_index = 0
+        method_selection_label = cols[1].selectbox(
+            "Method",
+            options=DEPRECIATION_METHOD_OPTIONS,
+            index=default_method_index,
+            key=f"dep_method_{index}",
+        )
+        method_selection = DEPRECIATION_LABEL_TO_VALUE.get(
+            method_selection_label,
+            "straight_line",
+        )
+
         default_year = int(row.get("year", years[0] if years else 0))
         year_options: list[int] = list(dict.fromkeys([*years, default_year])) if years else [default_year]
         try:
             default_index = year_options.index(default_year)
         except ValueError:
             default_index = 0
-        year_input = cols[1].selectbox(
+        year_input = cols[2].selectbox(
             "Year",
             options=year_options,
             index=default_index,
             key=f"dep_year_{index}",
         )
 
-        acquisition_input = cols[2].number_input(
+        acquisition_input = cols[3].number_input(
             "Acquisition",
             value=float(row.get("acquisition", 0.0)),
             key=f"dep_acq_{index}",
@@ -1329,7 +1356,7 @@ def _render_depreciation_schedule(payload: dict) -> None:
             data.get("prior_cumulative", row.get("opening_cumulative", 0.0) or 0.0)
         )
         _set_widget_value(f"dep_open_nb_{index}", prior_net_book)
-        cols[3].number_input(
+        cols[4].number_input(
             "Net Book Value (prev year)",
             value=prior_net_book,
             key=f"dep_open_nb_{index}",
@@ -1338,7 +1365,7 @@ def _render_depreciation_schedule(payload: dict) -> None:
             disabled=True,
         )
 
-        depreciation_rate_input = cols[4].number_input(
+        depreciation_rate_input = cols[5].number_input(
             "Depreciation Rate",
             value=float(row.get("depreciation_rate", 0.0)),
             key=f"dep_rate_{index}",
@@ -1346,25 +1373,20 @@ def _render_depreciation_schedule(payload: dict) -> None:
             format="%.5f",
         )
 
-        depreciable_base = float(
-            data.get("depreciable_base", prior_net_book + (acquisition_input * 0.5))
-        )
         total_asset_cost = acquisition_input + prior_net_book
-        total_depreciation = depreciable_base * depreciation_rate_input
+        method_used = str(data.get("method", method_selection) or method_selection)
+        if method_used not in DEPRECIATION_METHOD_LABELS:
+            method_used = "straight_line"
+        if method_used == "reducing_balance":
+            depreciation_base = prior_net_book + (acquisition_input * 0.5)
+        else:
+            depreciation_base = total_asset_cost
+        total_depreciation = depreciation_base * depreciation_rate_input
         allowable = max(total_asset_cost - prior_cumulative, 0.0)
         if total_depreciation > allowable:
             total_depreciation = allowable
         cumulative_depreciation = prior_cumulative + total_depreciation
         net_book_value = max(total_asset_cost - cumulative_depreciation, 0.0)
-
-        _set_widget_value(f"dep_base_{index}", depreciable_base)
-        cols[5].number_input(
-            "Depreciable Base",
-            value=depreciable_base,
-            key=f"dep_base_{index}",
-            format="%.4f",
-            disabled=True,
-        )
 
         _set_widget_value(f"dep_total_cost_{index}", total_asset_cost)
         cols[6].number_input(
@@ -1419,6 +1441,7 @@ def _render_depreciation_schedule(payload: dict) -> None:
             "year": int(year_input),
             "acquisition": float(acquisition_input),
             "depreciation_rate": float(depreciation_rate_input),
+            "method": method_selection,
             "opening_net_book": prior_net_book,
             "opening_cumulative": prior_cumulative,
             "override_net_book": override_net_book,
@@ -1435,6 +1458,18 @@ def _render_depreciation_schedule(payload: dict) -> None:
             asset_options,
             "dep_new_asset",
         )
+        method_default_label = DEPRECIATION_METHOD_LABELS["straight_line"]
+        try:
+            method_default_index = DEPRECIATION_METHOD_OPTIONS.index(method_default_label)
+        except ValueError:
+            method_default_index = 0
+        new_method_label = st.selectbox(
+            "Depreciation Method",
+            options=DEPRECIATION_METHOD_OPTIONS,
+            index=method_default_index,
+            key="dep_new_method",
+        )
+        new_method = DEPRECIATION_LABEL_TO_VALUE.get(new_method_label, "straight_line")
         default_year = int(years[0]) if years else 0
         year_options: list[int] = list(dict.fromkeys([*years, default_year])) if years else [default_year]
         try:
@@ -1480,6 +1515,7 @@ def _render_depreciation_schedule(payload: dict) -> None:
                     "year": int(new_year),
                     "acquisition": float(new_acquisition),
                     "depreciation_rate": float(new_rate),
+                    "method": new_method,
                     "opening_net_book": float(new_opening_nb),
                     "opening_cumulative": 0.0,
                     "override_net_book": abs(new_opening_nb) > 1e-6,
@@ -1491,6 +1527,7 @@ def _render_depreciation_schedule(payload: dict) -> None:
                 "dep_new_asset",
                 "dep_new_asset_select",
                 "dep_new_asset_custom",
+                "dep_new_method",
                 "dep_new_year",
                 "dep_new_acquisition",
                 "dep_new_opening_nb",
@@ -2366,10 +2403,17 @@ def _calculate_depreciation_preview(rows: Sequence[Mapping]) -> list[dict]:
 
             acquisition_amount = float(row.get("acquisition", 0.0) or 0.0)
             depreciation_rate = float(row.get("depreciation_rate", 0.0) or 0.0)
+            method = str(row.get("method", "straight_line") or "straight_line").strip().lower()
+            if method not in {"straight_line", "reducing_balance"}:
+                method = "straight_line"
 
             total_asset_cost = acquisition_amount + prior_net_book
-            depreciable_base = prior_net_book + (acquisition_amount * 0.5)
-            total_depreciation = depreciable_base * depreciation_rate
+            if method == "reducing_balance":
+                depreciation_base = prior_net_book + (acquisition_amount * 0.5)
+            else:
+                depreciation_base = total_asset_cost
+
+            total_depreciation = depreciation_base * depreciation_rate
             allowable = max(total_asset_cost - prior_cumulative, 0.0)
             if total_depreciation > allowable:
                 total_depreciation = allowable
@@ -2379,11 +2423,11 @@ def _calculate_depreciation_preview(rows: Sequence[Mapping]) -> list[dict]:
             preview[position] = {
                 "prior_net_book": prior_net_book,
                 "prior_cumulative": prior_cumulative,
-                "depreciable_base": depreciable_base,
                 "total_asset_cost": total_asset_cost,
                 "total_depreciation": total_depreciation,
                 "cumulative_depreciation": cumulative_depreciation,
                 "net_book_value": net_book_value,
+                "method": method,
                 "is_first": previous_net_book is None,
             }
 
@@ -2463,6 +2507,7 @@ def _payload_to_depreciation_rows(payload: Mapping) -> list[dict]:
                         "year": int(item.get("year", 0)),
                         "acquisition": float(item.get("acquisition", 0.0) or 0.0),
                         "depreciation_rate": float(item.get("depreciation_rate", item.get("rate", 0.0)) or 0.0),
+                        "method": str(item.get("method", "straight_line") or "straight_line").strip().lower(),
                         "opening_net_book": float(item.get("opening_net_book", 0.0) or 0.0),
                         "opening_cumulative": float(item.get("opening_cumulative", 0.0) or 0.0),
                         "override_net_book": bool(item.get("override_net_book", False)),
@@ -2471,7 +2516,14 @@ def _payload_to_depreciation_rows(payload: Mapping) -> list[dict]:
                 )
 
     if rows:
-        return rows
+        normalised: list[dict] = []
+        for entry in rows:
+            method_value = str(entry.get("method", "straight_line") or "straight_line").strip().lower()
+            if method_value not in DEPRECIATION_METHOD_LABELS:
+                method_value = "straight_line"
+            entry["method"] = method_value
+            normalised.append(entry)
+        return normalised[:5]
 
     return _legacy_depreciation_rows(payload)
 
@@ -2482,12 +2534,17 @@ def _depreciation_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> Non
         asset = str(row.get("asset_type", "")).strip()
         if not asset:
             continue
+        method_value = str(row.get("method", "straight_line") or "straight_line").strip().lower()
+        if method_value not in DEPRECIATION_METHOD_LABELS:
+            method_value = "straight_line"
+
         depreciation_rows.append(
             {
                 "asset_type": asset,
                 "year": int(row.get("year", 0)),
                 "acquisition": float(row.get("acquisition", 0.0) or 0.0),
                 "depreciation_rate": float(row.get("depreciation_rate", 0.0) or 0.0),
+                "method": method_value,
                 "opening_net_book": float(row.get("opening_net_book", 0.0) or 0.0),
                 "opening_cumulative": float(row.get("opening_cumulative", 0.0) or 0.0),
                 "override_net_book": bool(row.get("override_net_book", False)),
