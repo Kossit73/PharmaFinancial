@@ -6,7 +6,7 @@ import hashlib
 import re
 from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import streamlit as st
 
@@ -74,6 +74,70 @@ def _set_widget_value(key: str, value: float) -> None:
         st.session_state[key] = value
     except Exception:  # pragma: no cover - depends on Streamlit runtime
         pass
+
+
+def _select_or_create_option(
+    container: Any,
+    label: str,
+    options: Sequence[str],
+    key_prefix: str,
+    current_value: str | None = None,
+) -> str:
+    """Render a select box that allows choosing from ``options`` or a custom value."""
+
+    cleaned = [str(option).strip() for option in options if str(option).strip()]
+    seen: dict[str, None] = {value: None for value in cleaned}
+    ordered_options = list(seen.keys())
+
+    value = (current_value or "").strip()
+    if value and value not in seen:
+        ordered_options.append(value)
+
+    if not ordered_options:
+        ordered_options.append("")
+
+    option_list = ordered_options + ["Add new…"]
+    default_index = option_list.index(value) if value in option_list else len(option_list) - 1
+
+    selection = container.selectbox(
+        label,
+        option_list,
+        index=default_index,
+        key=f"{key_prefix}_select",
+    )
+
+    if selection == "Add new…":
+        custom_default = "" if value in ordered_options else value
+        custom_value = container.text_input(
+            f"{label} (custom)",
+            value=custom_default,
+            key=f"{key_prefix}_custom",
+        )
+        return custom_value.strip()
+
+    return selection.strip()
+
+
+def _parse_year_value(label: str | int | float | None, default: int = 0) -> int:
+    """Extract an integer year from ``label`` when possible."""
+
+    if label is None:
+        return default
+
+    if isinstance(label, (int, float)):
+        try:
+            return int(label)
+        except Exception:  # pragma: no cover - defensive conversion
+            return default
+
+    match = re.search(r"-?\d+", str(label))
+    if match:
+        try:
+            return int(match.group())
+        except Exception:  # pragma: no cover - defensive conversion
+            return default
+
+    return default
 
 
 UTILITY_FLOAT_FIELDS = [
@@ -917,21 +981,44 @@ def _render_utility_schedule(payload: dict) -> None:
     rows: list[dict] = st.session_state.get("utility_rows", [])
     updated_rows: list[dict] = []
 
+    payload_years = payload.get("years", [])
+    base_year_labels = [str(year) for year in payload_years if year is not None]
+    existing_labels = [str(row.get("label", "")) for row in rows if row.get("label")]
+    year_catalog = list(dict.fromkeys([*base_year_labels, *existing_labels]))
+    if not year_catalog:
+        max_length = max(len(base_year_labels), len(rows), 1)
+        year_catalog = [f"Year {index + 1}" for index in range(max_length)]
+
     for index, row in enumerate(rows):
         container = st.container()
         with container:
-            header_cols = st.columns([3, 1])
-            label_input = header_cols[0].text_input(
-                "Years",
-                value=row.get("label", f"Year {index + 1}"),
-                key=f"utility_label_{index}",
+            header_cols = st.columns([2, 1])
+            current_label = str(
+                row.get(
+                    "label",
+                    year_catalog[index] if index < len(year_catalog) else f"Year {index + 1}",
+                )
             )
-            label = label_input.strip() or f"Year {index + 1}"
+            label_input = _select_or_create_option(
+                header_cols[0],
+                "Year",
+                year_catalog,
+                f"utility_label_{index}",
+                current_value=current_label,
+            )
+            if label_input and label_input not in year_catalog:
+                year_catalog.append(label_input)
+            label = label_input or f"Year {index + 1}"
 
             if header_cols[1].button("Remove", key=f"utility_remove_{index}"):
                 del rows[index]
                 st.session_state["utility_rows"] = rows
                 _rerun()
+
+            fallback_year = row.get("year")
+            if not isinstance(fallback_year, (int, float)):
+                fallback_year = payload_years[index] if index < len(payload_years) else 0
+            parsed_year = _parse_year_value(label, int(fallback_year) if fallback_year else 0)
 
             electricity_cols = st.columns([2, 2, 2, 2])
             electricity_per_day = electricity_cols[0].number_input(
@@ -1039,6 +1126,7 @@ def _render_utility_schedule(payload: dict) -> None:
             updated_rows.append(
                 {
                     "label": label,
+                    "year": parsed_year,
                     "electricity_per_day": electricity_per_day,
                     "electricity_rate": electricity_rate,
                     "electricity_days": int(electricity_days),
@@ -1059,12 +1147,20 @@ def _render_utility_schedule(payload: dict) -> None:
     last_row = rows[-1] if rows else _default_utility_row(len(rows))
     with st.form("add_utility_year"):
         st.markdown("#### Add Utility Year")
-        new_label_default = f"Year {len(rows) + 1}"
-        new_label = st.text_input(
-            "Years",
-            value=last_row.get("label", new_label_default),
-            key="utility_new_label",
+        if len(base_year_labels) > len(rows):
+            new_label_default = base_year_labels[len(rows)]
+        else:
+            new_label_default = last_row.get("label", f"Year {len(rows) + 1}")
+
+        new_label = _select_or_create_option(
+            st,
+            "Year",
+            year_catalog,
+            "utility_new_label",
+            current_value=str(new_label_default),
         )
+        if new_label and new_label not in year_catalog:
+            year_catalog.append(new_label)
         new_electricity_per_day = st.number_input(
             "Electricity per day (new)",
             value=float(last_row.get("electricity_per_day", 0.0)),
@@ -1138,43 +1234,52 @@ def _render_utility_schedule(payload: dict) -> None:
         submitted = st.form_submit_button("Add Year")
 
     if submitted:
-        label_value = new_label.strip() or f"Year {len(rows) + 1}"
-        rows.append(
-            {
-                "label": label_value,
-                "electricity_per_day": new_electricity_per_day,
-                "electricity_rate": new_electricity_rate,
-                "electricity_days": int(new_electricity_days),
-                "water_per_day": new_water_per_day,
-                "water_rate": new_water_rate,
-                "water_days": int(new_water_days),
-                "steam_per_hour": new_steam_per_hour,
-                "steam_rate": new_steam_rate,
-                "steam_days": int(new_steam_days),
-                "steam_hours": int(new_steam_hours),
-            }
-        )
-        st.session_state["utility_rows"] = rows
-        for key in (
-            "utility_new_label",
-            "utility_new_e_day",
-            "utility_new_e_rate",
-            "utility_new_e_days",
-            "utility_new_w_day",
-            "utility_new_w_rate",
-            "utility_new_w_days",
-            "utility_new_s_hour",
-            "utility_new_s_rate",
-            "utility_new_s_days",
-            "utility_new_s_hours",
-        ):
-            st.session_state.pop(key, None)
-        _rerun()
+        cleaned_label = new_label.strip()
+        if not cleaned_label:
+            st.warning("Year label is required to add a utility schedule entry.")
+        else:
+            parsed_year = _parse_year_value(cleaned_label, len(rows) + 1)
+            rows.append(
+                {
+                    "label": cleaned_label,
+                    "year": parsed_year,
+                    "electricity_per_day": new_electricity_per_day,
+                    "electricity_rate": new_electricity_rate,
+                    "electricity_days": int(new_electricity_days),
+                    "water_per_day": new_water_per_day,
+                    "water_rate": new_water_rate,
+                    "water_days": int(new_water_days),
+                    "steam_per_hour": new_steam_per_hour,
+                    "steam_rate": new_steam_rate,
+                    "steam_days": int(new_steam_days),
+                    "steam_hours": int(new_steam_hours),
+                }
+            )
+            st.session_state["utility_rows"] = rows
+            for key in (
+                "utility_new_label",
+                "utility_new_label_select",
+                "utility_new_label_custom",
+                "utility_new_e_day",
+                "utility_new_e_rate",
+                "utility_new_e_days",
+                "utility_new_w_day",
+                "utility_new_w_rate",
+                "utility_new_w_days",
+                "utility_new_s_hour",
+                "utility_new_s_rate",
+                "utility_new_s_days",
+                "utility_new_s_hours",
+            ):
+                st.session_state.pop(key, None)
+            _rerun()
 
 
 def _render_depreciation_schedule(payload: dict) -> None:
     rows: list[dict] = st.session_state.get("depreciation_rows", [])
     years = payload.get("years", [])
+    asset_catalog = _collect_asset_type_options(payload, rows)
+    asset_options = list(asset_catalog)
 
     if not rows:
         st.info("No fixed asset schedule configured. Use the form below to add entries.")
@@ -1186,11 +1291,15 @@ def _render_depreciation_schedule(payload: dict) -> None:
 
         cols = st.columns([2.2, 1.1, 1.1, 1.1, 1.3, 1.2, 1.1, 1.2, 1.3, 1.3, 0.7])
 
-        asset_input = cols[0].text_input(
+        asset_input = _select_or_create_option(
+            cols[0],
             "Asset Type",
-            value=str(row.get("asset_type", "")),
-            key=f"dep_asset_{index}",
+            asset_options,
+            f"dep_asset_{index}",
+            current_value=str(row.get("asset_type", "")),
         )
+        if asset_input and asset_input not in asset_options:
+            asset_options.append(asset_input)
 
         default_year = int(row.get("year", years[0] if years else 0))
         year_options: list[int] = list(dict.fromkeys([*years, default_year])) if years else [default_year]
@@ -1312,7 +1421,12 @@ def _render_depreciation_schedule(payload: dict) -> None:
     st.session_state["depreciation_rows"] = rows
 
     with st.form("add_depreciation_row"):
-        new_asset = st.text_input("Asset Type", key="dep_new_asset")
+        new_asset = _select_or_create_option(
+            st,
+            "Asset Type",
+            asset_options,
+            "dep_new_asset",
+        )
         default_year = int(years[0]) if years else 0
         year_options: list[int] = list(dict.fromkeys([*years, default_year])) if years else [default_year]
         try:
@@ -1375,6 +1489,8 @@ def _render_depreciation_schedule(payload: dict) -> None:
             st.session_state["depreciation_rows"] = rows
             for key in (
                 "dep_new_asset",
+                "dep_new_asset_select",
+                "dep_new_asset_custom",
                 "dep_new_year",
                 "dep_new_acquisition",
                 "dep_new_asset_cost",
@@ -2086,9 +2202,12 @@ def _extract_metric_pairs(summary) -> Sequence[Tuple[str, float]]:
     return []
 
 
-def _default_utility_row(index: int, label: str | None = None) -> dict:
+def _default_utility_row(index: int, label: str | None = None, year: int | None = None) -> dict:
+    label_value = label or (str(year) if year is not None else f"Year {index + 1}")
+    year_value = year if year is not None else _parse_year_value(label_value, index + 1)
     return {
-        "label": label or f"Year {index + 1}",
+        "label": label_value,
+        "year": year_value,
         "electricity_per_day": 0.0,
         "electricity_rate": 0.0,
         "electricity_days": 0,
@@ -2102,8 +2221,10 @@ def _default_utility_row(index: int, label: str | None = None) -> dict:
     }
 
 
-def _normalise_utility_row(row: Mapping | None, index: int, label: str | None = None) -> dict:
-    data = _default_utility_row(index, label)
+def _normalise_utility_row(
+    row: Mapping | None, index: int, label: str | None = None, year: int | None = None
+) -> dict:
+    data = _default_utility_row(index, label, year)
     if not isinstance(row, Mapping):
         return data
 
@@ -2111,6 +2232,15 @@ def _normalise_utility_row(row: Mapping | None, index: int, label: str | None = 
         raw_label = row.get("label") or row.get("Year") or row.get("Years")
         if raw_label:
             data["label"] = str(raw_label)
+
+    raw_year = row.get("year") if isinstance(row, Mapping) else None
+    if raw_year is not None:
+        try:
+            data["year"] = int(raw_year)
+        except Exception:  # pragma: no cover - defensive parsing
+            data["year"] = _parse_year_value(data.get("label"), data.get("year", index + 1))
+    elif "label" in data:
+        data["year"] = _parse_year_value(data.get("label"), data.get("year", index + 1))
 
     for field in UTILITY_FLOAT_FIELDS:
         value = row.get(field)
@@ -2164,7 +2294,14 @@ def _payload_to_utility_rows(payload: Mapping) -> list[dict]:
 
         for index in range(length):
             label_value = years[index] if index < len(years) else None
-            row = _default_utility_row(index, str(label_value) if label_value is not None else None)
+            year_value = None
+            if isinstance(label_value, (int, float)):
+                year_value = int(label_value)
+            row = _default_utility_row(
+                index,
+                str(label_value) if label_value is not None else None,
+                year_value,
+            )
             row["electricity_per_day"] = electricity_per_day
             row["electricity_rate"] = electricity_rate or 1.0
             row["electricity_days"] = int(days[index]) if index < len(days) else 0
@@ -2175,7 +2312,7 @@ def _payload_to_utility_rows(payload: Mapping) -> list[dict]:
             row["steam_rate"] = steam_rate or 1.0
             row["steam_days"] = 1 if steam_per_hour else 0
             row["steam_hours"] = int(hours[index]) if index < len(hours) else 0
-            rows.append(_normalise_utility_row(row, index))
+            rows.append(_normalise_utility_row(row, index, year=year_value))
 
     if not rows:
         rows = [_default_utility_row(0)]
@@ -2359,6 +2496,36 @@ def _depreciation_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> Non
         )
 
     payload.setdefault("depreciation", {})["rows"] = depreciation_rows
+
+
+def _collect_asset_type_options(payload: Mapping, rows: Sequence[Mapping]) -> list[str]:
+    catalogue: dict[str, None] = {}
+
+    depreciation = payload.get("depreciation")
+    if isinstance(depreciation, Mapping):
+        stored_options = depreciation.get("asset_types")
+        if isinstance(stored_options, Sequence):
+            for value in stored_options:
+                label = str(value).strip()
+                if label:
+                    catalogue[label] = None
+
+        stored_rows = depreciation.get("rows")
+        if isinstance(stored_rows, Sequence):
+            for item in stored_rows:
+                if not isinstance(item, Mapping):
+                    continue
+                label = str(item.get("asset_type", item.get("asset", "")) or "").strip()
+                if label:
+                    catalogue[label] = None
+
+    for row in rows:
+        label = str(row.get("asset_type", "") or "").strip()
+        if label:
+            catalogue[label] = None
+
+    return list(catalogue.keys())
+
 
 def _initialise_session_payload(payload: dict) -> None:
     st.session_state["input_payload"] = payload
@@ -2701,11 +2868,15 @@ def _align_payload_horizon(payload: dict, labels: Sequence[str], target_length: 
         else:
             source_row = _default_utility_row(index)
         label_override = labels[index] if index < len(labels) else None
+        year_override = None
+        if label_override is not None:
+            year_override = _parse_year_value(label_override, index + 1)
         resized_rows.append(
             _normalise_utility_row(
                 source_row,
                 index,
                 str(label_override) if label_override else None,
+                year_override,
             )
         )
     if not resized_rows:
