@@ -460,18 +460,6 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     st.markdown("### Risk Schedule")
     _render_risk_schedule(payload)
 
-    st.markdown("### Goal Seek Configuration")
-    _render_goal_seek(payload)
-
-    st.markdown("### Sensitivity Analysis Configuration")
-    _render_sensitivity_inputs(payload)
-
-    st.markdown("### Scenario / IFs Configuration")
-    _render_scenario_inputs(payload)
-
-    st.markdown("### Monte Carlo Simulation")
-    _render_monte_carlo_inputs(payload)
-
     _core_rows_to_payload(st.session_state.get("core_assumption_rows", []), payload)
     _utility_rows_to_payload(st.session_state.get("utility_rows", []), payload)
     _depreciation_rows_to_payload(st.session_state.get("depreciation_rows", []), payload)
@@ -698,6 +686,14 @@ def _render_statement_tab(title: str, df: pd.DataFrame) -> None:
 
 def _render_sensitivity(outputs: FinancialOutputs) -> None:
     st.subheader("Sensitivity Analysis")
+    payload = st.session_state.get("input_payload")
+    if payload is None:
+        payload = {}
+        st.session_state["input_payload"] = payload
+    st.markdown("### Sensitivity Analysis Configuration")
+    _render_sensitivity_inputs(payload)
+    st.session_state["input_payload"] = payload
+
     if not outputs.sensitivity_results:
         st.info("No sensitivity configurations provided in the assumptions file.")
         return
@@ -709,6 +705,20 @@ def _render_sensitivity(outputs: FinancialOutputs) -> None:
 
 def _render_scenarios(outputs: FinancialOutputs) -> None:
     st.subheader("Scenario / IFs Analysis")
+    payload = st.session_state.get("input_payload")
+    if payload is None:
+        payload = {}
+        st.session_state["input_payload"] = payload
+    st.markdown("### Goal Seek Configuration")
+    _render_goal_seek(payload)
+    st.markdown("### Scenario / IFs Configuration")
+    _render_scenario_inputs(payload)
+    st.session_state["input_payload"] = payload
+
+    if not outputs.scenario_results:
+        st.info("No scenario configurations provided in the assumptions file.")
+        return
+
     for name, df in outputs.scenario_results.items():
         st.markdown(f"#### {name}")
         st.dataframe(_with_year(df), use_container_width=True)
@@ -716,6 +726,14 @@ def _render_scenarios(outputs: FinancialOutputs) -> None:
 
 def _render_monte_carlo(outputs: FinancialOutputs) -> None:
     st.subheader("Monte Carlo Simulation")
+    payload = st.session_state.get("input_payload")
+    if payload is None:
+        payload = {}
+        st.session_state["input_payload"] = payload
+    st.markdown("### Monte Carlo Simulation Configuration")
+    _render_monte_carlo_inputs(payload)
+    st.session_state["input_payload"] = payload
+
     monte_carlo_df = _ensure_dataframe(outputs.monte_carlo)
     if px is None or pd is None:
         st.warning("Plotly unavailable. Displaying Monte Carlo results in tabular form.")
