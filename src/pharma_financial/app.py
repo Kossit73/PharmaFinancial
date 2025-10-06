@@ -58,6 +58,24 @@ def _rerun() -> None:
             continue
 
 
+def _set_widget_value(key: str, value: float) -> None:
+    """Synchronise a widget's value in ``st.session_state``.
+
+    Streamlit widgets retain their initial value once instantiated. To ensure
+    computed, read-only fields such as the total revenue and cost columns stay
+    in sync with their drivers (production units, price, and cost inputs), the
+    application updates the backing ``session_state`` entry prior to rendering
+    the widget.  When running outside of a Streamlit session—such as during
+    automated tests—the assignment may fail, so the helper guards against
+    runtime-specific exceptions.
+    """
+
+    try:
+        st.session_state[key] = value
+    except Exception:  # pragma: no cover - depends on Streamlit runtime
+        pass
+
+
 def _streamlit_runtime_exists() -> bool:
     """Return ``True`` when the Streamlit runtime has been initialised."""
 
@@ -279,17 +297,22 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
                 float(production) + float(freight) + float(markup)
             )
 
+            revenue_key = f"core_revenue_{index}"
+            cost_key = f"core_cost_{index}"
+            _set_widget_value(revenue_key, total_revenue)
+            _set_widget_value(cost_key, total_cost)
+
             cols[7].number_input(
                 "Total Revenue",
-                value=total_revenue,
-                key=f"core_revenue_{index}",
+                value=float(total_revenue),
+                key=revenue_key,
                 format="%.4f",
                 disabled=True,
             )
             cols[8].number_input(
                 "Total Cost",
-                value=total_cost,
-                key=f"core_cost_{index}",
+                value=float(total_cost),
+                key=cost_key,
                 format="%.4f",
                 disabled=True,
             )
