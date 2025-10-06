@@ -87,6 +87,8 @@ class FinancialModel:
         self._senior_outstanding_cache: List[float] | None = None
         self._revolver_interest_cache: List[float] | None = None
         self._revolver_outstanding_cache: List[float] | None = None
+        self._overdraft_interest_cache: List[float] | None = None
+        self._overdraft_outstanding_cache: List[float] | None = None
 
     # ------------------------------------------------------------------ core
     def _build_inflation_factors(self, series: Iterable[Number]) -> List[float]:
@@ -415,18 +417,34 @@ class FinancialModel:
         self._revolver_outstanding_cache = outstanding_schedule
         return interest_schedule, outstanding_schedule
 
+    def _overdraft_schedules(self) -> tuple[List[float], List[float]]:
+        if (
+            self._overdraft_interest_cache is not None
+            and self._overdraft_outstanding_cache is not None
+        ):
+            return self._overdraft_interest_cache, self._overdraft_outstanding_cache
+
+        interest_schedule, outstanding_schedule = self._compute_amortisation(
+            self.inputs.financing.overdraft_entries,
+            float(self.inputs.financing.cash_interest),
+        )
+
+        self._overdraft_interest_cache = interest_schedule
+        self._overdraft_outstanding_cache = outstanding_schedule
+        return interest_schedule, outstanding_schedule
+
     def _interest_schedule(self) -> List[float]:
         financing = self.inputs.financing
         senior_interest, _ = self._senior_debt_schedules()
         revolver_interest, _ = self._revolver_schedules()
-        overdraft_amounts = self._instrument_values(financing.overdraft_entries, "amount")
+        overdraft_interest, _ = self._overdraft_schedules()
 
         interest: List[float] = []
         for idx in range(len(self.years)):
             total_interest = (
                 senior_interest[idx]
                 + revolver_interest[idx]
-                + overdraft_amounts[idx] * financing.cash_interest
+                + overdraft_interest[idx]
             )
             interest.append(-total_interest)
         return interest
@@ -586,17 +604,11 @@ class FinancialModel:
             per_year[entry.year] = per_year.get(entry.year, 0.0) + value
         return [per_year.get(year, 0.0) for year in self.years]
 
-    def _instrument_changes(self, entries: List[DebtEntry]) -> List[float]:
-        schedule = self._instrument_values(entries, "outstanding")
-        if not schedule:
-            return [0.0 for _ in self.years]
-        return _difference(schedule)
-
     def _liability_balance(self) -> List[float]:
         financing = self.inputs.financing
         _, senior = self._senior_debt_schedules()
         _, revolver = self._revolver_schedules()
-        overdraft = self._instrument_values(financing.overdraft_entries, "outstanding")
+        _, overdraft = self._overdraft_schedules()
         return [senior[idx] + revolver[idx] + overdraft[idx] for idx in range(len(self.years))]
 
     def _financing_cash_flow(self) -> List[float]:
@@ -606,7 +618,8 @@ class FinancialModel:
         senior_changes = _difference(senior_outstanding)
         _, revolver_outstanding = self._revolver_schedules()
         revolver_changes = _difference(revolver_outstanding)
-        overdraft_changes = self._instrument_changes(financing.overdraft_entries)
+        _, overdraft_outstanding = self._overdraft_schedules()
+        overdraft_changes = _difference(overdraft_outstanding)
         debt_changes = [
             senior_changes[idx] + revolver_changes[idx] + overdraft_changes[idx]
             for idx in range(len(self.years))

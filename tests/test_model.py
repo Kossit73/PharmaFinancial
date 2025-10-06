@@ -73,19 +73,15 @@ class FinancialModelTest(unittest.TestCase):
             self.assertAlmostEqual(total_expenses[idx], expected_total, places=6)
 
     def test_interest_matches_financing_inputs(self):
-        financing = self.inputs.financing
         interest_column = self.outputs.income_statement.column("Interest")
         senior_interest, _ = self.model._senior_debt_schedules()
         revolver_interest, _ = self.model._revolver_schedules()
+        overdraft_interest, _ = self.model._overdraft_schedules()
         manual: list[float] = []
         for idx in range(len(self.inputs.years)):
             total = senior_interest[idx]
             total += revolver_interest[idx]
-            total += sum(
-                entry.amount * financing.cash_interest
-                for entry in financing.overdraft_entries
-                if entry.year == self.inputs.years[idx]
-            )
+            total += overdraft_interest[idx]
             manual.append(-total)
 
         self.assertEqual(len(interest_column), len(manual))
@@ -93,19 +89,15 @@ class FinancialModelTest(unittest.TestCase):
             self.assertAlmostEqual(actual, expected, places=6)
 
     def test_liabilities_include_outstanding_balances(self):
-        financing = self.inputs.financing
         liabilities = self.outputs.balance_sheet.column("Total Liabilities")
         _, senior_outstanding = self.model._senior_debt_schedules()
         _, revolver_outstanding = self.model._revolver_schedules()
+        _, overdraft_outstanding = self.model._overdraft_schedules()
         manual: list[float] = []
         for idx, year in enumerate(self.inputs.years):
             total = senior_outstanding[idx]
             total += revolver_outstanding[idx]
-            total += sum(
-                entry.outstanding
-                for entry in financing.overdraft_entries
-                if entry.year == year
-            )
+            total += overdraft_outstanding[idx]
             manual.append(total)
 
         self.assertEqual(len(liabilities), len(manual))
@@ -119,6 +111,11 @@ class FinancialModelTest(unittest.TestCase):
 
     def test_revolver_outstanding_clears_by_duration(self):
         _, outstanding = self.model._revolver_schedules()
+        if outstanding:
+            self.assertAlmostEqual(outstanding[-1], 0.0, places=6)
+
+    def test_overdraft_outstanding_clears_by_duration(self):
+        _, outstanding = self.model._overdraft_schedules()
         if outstanding:
             self.assertAlmostEqual(outstanding[-1], 0.0, places=6)
 

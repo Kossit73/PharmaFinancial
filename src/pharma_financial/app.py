@@ -1659,6 +1659,7 @@ def _render_cost_and_financing(payload: dict) -> None:
         interest_label="Cash Interest Payable",
         interest_rate=float(financing.get("cash_interest", 0.0)),
         years=years,
+        include_duration=True,
     )
 
     financing["dividend_payout"] = st.number_input(
