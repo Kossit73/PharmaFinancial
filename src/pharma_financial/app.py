@@ -30,16 +30,32 @@ DEFAULT_RISK_CATEGORIES = ["inherent", "climate", "political"]
 
 
 def _rerun() -> None:
-    """Trigger a Streamlit rerun using the available API."""
+    """Trigger a Streamlit rerun using the available API.
 
+    Streamlit has exposed multiple rerun helpers across releases. Newer
+    versions ship :func:`st.rerun` while older builds provide
+    :func:`st.experimental_rerun`.  When the dashboard runs outside of the
+    Streamlit runtime (for example during unit tests or direct script
+    execution) calling either helper raises ``StreamlitAPIException``.  The
+    function therefore attempts each available helper and swallows runtime
+    errors so the rest of the UI logic can continue gracefully.
+    """
+
+    candidates = []
     rerun = getattr(st, "rerun", None)
     if callable(rerun):  # pragma: no cover - depends on Streamlit version
-        rerun()
-        return
+        candidates.append(rerun)
 
     legacy = getattr(st, "experimental_rerun", None)
     if callable(legacy):  # pragma: no cover - depends on Streamlit version
-        legacy()
+        candidates.append(legacy)
+
+    for trigger in candidates:
+        try:
+            trigger()
+            break
+        except Exception:  # pragma: no cover - runtime specific failures
+            continue
 
 
 def _streamlit_runtime_exists() -> bool:
