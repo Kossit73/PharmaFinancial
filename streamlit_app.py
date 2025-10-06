@@ -26,5 +26,29 @@ except ModuleNotFoundError as exc:  # pragma: no cover - executed when deps miss
     raise
 
 
+def _running_with_streamlit() -> bool:
+    """Return ``True`` when executed via ``streamlit run``.
+
+    When the file is executed directly with ``python streamlit_app.py`` the Streamlit
+    runtime is not initialised which leads to ``st.session_state`` access raising the
+    exception reported by the user. Detect that situation early and exit with a clear
+    guidance message instead of letting the import stack fail deeper inside the app.
+    """
+
+    try:  # pragma: no cover - depends on Streamlit internals
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+    except Exception:  # pragma: no cover - older Streamlit versions
+        return False
+
+    return get_script_run_ctx() is not None
+
+
 if __name__ == "__main__":
-    main()
+    if _running_with_streamlit():
+        main()
+    else:  # pragma: no cover - executed only when run without ``streamlit run``
+        sys.stderr.write(
+            "This module is a Streamlit application. Launch it with "
+            "`streamlit run streamlit_app.py` instead of `python streamlit_app.py`.\n"
+        )
+        sys.stderr.flush()
