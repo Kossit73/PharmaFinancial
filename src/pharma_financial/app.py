@@ -275,7 +275,9 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
                 clamped_units = max_capacity
 
             total_revenue = clamped_units * float(selling)
-            total_cost = clamped_units * (float(production) + float(freight))
+            total_cost = clamped_units * (
+                float(production) + float(freight) + float(markup)
+            )
 
             cols[7].number_input(
                 "Total Revenue",
@@ -357,7 +359,7 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
                 st.error("Capacity exceeded")
                 clamped_units = new_capacity
             total_revenue = clamped_units * new_selling
-            total_cost = clamped_units * (new_production + new_freight)
+            total_cost = clamped_units * (new_production + new_freight + new_markup)
             rows.append(
                 {
                     "Product": new_description.strip(),
@@ -1194,6 +1196,7 @@ def _payload_to_core_rows(payload: Mapping) -> list[dict]:
         production_cost = float(values.get("production", 0.0))
         selling_price = float(values.get("price", 0.0))
         freight_cost = float(values.get("freight", 0.0))
+        markup_value = float(markup.get(name, 0.0))
         total_units = float(totals.get(name, 0.0))
         if total_units == 0.0 and isinstance(estimates, Mapping):
             estimate = estimates.get(name, [])
@@ -1202,14 +1205,14 @@ def _payload_to_core_rows(payload: Mapping) -> list[dict]:
         if max_capacity > 0.0 and total_units > max_capacity:
             total_units = max_capacity
         total_revenue = total_units * selling_price
-        total_cost = total_units * (production_cost + freight_cost)
+        total_cost = total_units * (production_cost + freight_cost + markup_value)
         rows.append(
             {
                 "Product": str(name),
                 "Production Cost": production_cost,
                 "Selling Price": selling_price,
                 "Freight Cost": freight_cost,
-                "Markup": float(markup.get(name, 0.0)),
+                "Markup": markup_value,
                 "Total Production Units": total_units,
                 "Max Capacity": max_capacity,
                 "Total Revenue": total_revenue,

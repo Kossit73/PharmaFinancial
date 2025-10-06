@@ -81,11 +81,12 @@ class RerunHelperTest(unittest.TestCase):
             selling = float(row["Selling Price"])
             production = float(row["Production Cost"])
             freight = float(row["Freight Cost"])
+            markup = float(row.get("Markup", 0.0))
             capacity = float(row.get("Max Capacity", 0.0))
 
             self.assertAlmostEqual(row["Total Revenue"], units * selling, places=8)
             self.assertAlmostEqual(
-                row["Total Cost"], units * (production + freight), places=8
+                row["Total Cost"], units * (production + freight + markup), places=8
             )
             if capacity > 0:
                 self.assertLessEqual(units, capacity + 1e-9)
