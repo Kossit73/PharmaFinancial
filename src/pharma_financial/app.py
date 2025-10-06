@@ -29,6 +29,19 @@ DEFAULT_INPUT_JSON = DEFAULT_INPUT_PATH.read_text(encoding="utf-8")
 DEFAULT_RISK_CATEGORIES = ["inherent", "climate", "political"]
 
 
+def _rerun() -> None:
+    """Trigger a Streamlit rerun using the available API."""
+
+    rerun = getattr(st, "rerun", None)
+    if callable(rerun):  # pragma: no cover - depends on Streamlit version
+        rerun()
+        return
+
+    legacy = getattr(st, "experimental_rerun", None)
+    if callable(legacy):  # pragma: no cover - depends on Streamlit version
+        legacy()
+
+
 def _streamlit_runtime_exists() -> bool:
     """Return ``True`` when the Streamlit runtime has been initialised."""
 
@@ -208,7 +221,7 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
             if cols[5].button("Remove", key=f"core_remove_{index}"):
                 del rows[index]
                 st.session_state["core_assumption_rows"] = rows
-                st.experimental_rerun()
+                _rerun()
 
         updated_rows.append(
             {
@@ -264,7 +277,7 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
                 "core_new_markup",
             ):
                 st.session_state.pop(key, None)
-            st.experimental_rerun()
+            _rerun()
 
     st.markdown("### Direct Labour Structure")
     _render_labor_section("direct", "direct_labor_rows", payload)
@@ -501,7 +514,7 @@ def _render_labor_section(section: str, state_key: str, payload: dict) -> None:
         if cols[2].button("Remove", key=f"{state_key}_remove_{index}"):
             del rows[index]
             st.session_state[state_key] = rows
-            st.experimental_rerun()
+            _rerun()
         updated.append({"Role": role.strip(), "Annual Cost": cost})
 
     if updated != rows:
@@ -526,7 +539,7 @@ def _render_labor_section(section: str, state_key: str, payload: dict) -> None:
             st.session_state[state_key] = rows
             for key in (f"{state_key}_new_role", f"{state_key}_new_cost"):
                 st.session_state.pop(key, None)
-            st.experimental_rerun()
+            _rerun()
 
     labor = payload.setdefault("labor", {})
     labor[section] = {
@@ -728,7 +741,7 @@ def _render_inflation_schedule(payload: dict) -> None:
         if cols[2].button("Remove", key=f"inflation_remove_{index}"):
             del rows[index]
             st.session_state["inflation_rows"] = rows
-            st.experimental_rerun()
+            _rerun()
         updated_rows.append({"Year": year_label.strip(), "Rate": rate_value})
 
     if updated_rows != rows:
@@ -754,7 +767,7 @@ def _render_inflation_schedule(payload: dict) -> None:
             st.session_state["inflation_rows"] = rows
             st.session_state.pop("inflation_new_year", None)
             st.session_state.pop("inflation_new_rate", None)
-            st.experimental_rerun()
+            _rerun()
 
 
 def _render_risk_schedule(payload: dict) -> None:
@@ -787,7 +800,7 @@ def _render_risk_schedule(payload: dict) -> None:
         if cols[-1].button("Remove", key=f"risk_remove_{index}"):
             del rows[index]
             st.session_state["risk_rows"] = rows
-            st.experimental_rerun()
+            _rerun()
 
         updated_rows.append(cleaned_row)
 
@@ -818,7 +831,7 @@ def _render_risk_schedule(payload: dict) -> None:
             st.session_state.pop("risk_new_year", None)
             for category in categories:
                 st.session_state.pop(f"risk_new_{category}", None)
-            st.experimental_rerun()
+            _rerun()
 
 
 def _render_sensitivity_inputs(payload: dict) -> None:
@@ -840,7 +853,7 @@ def _render_sensitivity_inputs(payload: dict) -> None:
         if cols[2].button("Remove", key=f"sensitivity_remove_{index}"):
             del rows[index]
             st.session_state["sensitivity_rows"] = rows
-            st.experimental_rerun()
+            _rerun()
         try:
             values = _parse_float_list(values_text)
         except ValueError as exc:
@@ -874,7 +887,7 @@ def _render_sensitivity_inputs(payload: dict) -> None:
                 st.session_state["sensitivity_rows"] = rows
                 for key in ("sensitivity_new_variable", "sensitivity_new_values"):
                     st.session_state.pop(key, None)
-                st.experimental_rerun()
+                _rerun()
             else:
                 st.warning("At least one multiplier is required.")
 
@@ -962,7 +975,7 @@ def _render_scenario_inputs(payload: dict) -> None:
                     "scenario_new_interest",
                 ):
                     st.session_state.pop(key, None)
-                st.experimental_rerun()
+                _rerun()
 
     payload["scenarios"] = updated
 
