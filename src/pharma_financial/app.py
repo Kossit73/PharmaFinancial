@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import re
 from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
 from typing import List, Tuple
@@ -141,6 +142,11 @@ def _resolve_inputs() -> ModelInputs:
         "core_assumption_rows", _payload_to_core_rows(payload)
     )
     _core_rows_to_payload(rows, payload)
+
+    inflation_rows = st.session_state.setdefault(
+        "inflation_rows", _payload_to_inflation_rows(payload)
+    )
+    _inflation_rows_to_payload(inflation_rows, payload)
 
     return parse_inputs(payload)
 
@@ -285,6 +291,7 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     _render_monte_carlo_inputs(payload)
 
     _core_rows_to_payload(st.session_state.get("core_assumption_rows", []), payload)
+    _inflation_rows_to_payload(st.session_state.get("inflation_rows", []), payload)
     st.session_state["input_payload"] = payload
 
 
@@ -685,17 +692,62 @@ def _render_tax_schedule(payload: dict) -> None:
 
 
 def _render_inflation_schedule(payload: dict) -> None:
-    years = payload.get("years", [])
-    series = _ensure_schedule_length(payload.get("inflation_series", []), len(years), fill=0.0)
-    for index, year in enumerate(years):
-        series[index] = st.number_input(
-            f"Inflation {year}",
-            value=float(series[index]),
+    rows: list[dict] = st.session_state.get("inflation_rows", [])
+
+    if not rows:
+        st.info("No inflation assumptions configured. Use the form below to add entries.")
+
+    header_cols = st.columns([3, 2, 1])
+    header_cols[0].markdown("**Years**")
+    header_cols[1].markdown("**Rate**")
+    header_cols[2].markdown(" ")
+
+    updated_rows: list[dict] = []
+    for index, row in enumerate(rows):
+        cols = st.columns([3, 2, 1])
+        year_label = cols[0].text_input(
+            "Years",
+            value=row.get("Year", ""),
+            key=f"inflation_year_{index}",
+        )
+        rate_value = cols[1].number_input(
+            "Rate",
+            value=float(row.get("Rate", 0.0)),
+            min_value=0.0,
             step=0.001,
             format="%.4f",
-            key=f"inflation_{index}",
+            key=f"inflation_rate_{index}",
         )
-    payload["inflation_series"] = series
+        if cols[2].button("Remove", key=f"inflation_remove_{index}"):
+            del rows[index]
+            st.session_state["inflation_rows"] = rows
+            st.experimental_rerun()
+        updated_rows.append({"Year": year_label.strip(), "Rate": rate_value})
+
+    if updated_rows != rows:
+        st.session_state["inflation_rows"] = updated_rows
+
+    with st.form("add_inflation_row"):
+        new_year = st.text_input("Year label", key="inflation_new_year")
+        new_rate = st.number_input(
+            "Rate",
+            value=0.0,
+            min_value=0.0,
+            step=0.001,
+            format="%.4f",
+            key="inflation_new_rate",
+        )
+        submitted = st.form_submit_button("Add")
+
+    if submitted:
+        if not new_year.strip():
+            st.warning("Year label is required to add an inflation entry.")
+        else:
+            rows.append({"Year": new_year.strip(), "Rate": new_rate})
+            st.session_state["inflation_rows"] = rows
+            st.session_state.pop("inflation_new_year", None)
+            st.session_state.pop("inflation_new_rate", None)
+            st.experimental_rerun()
 
 
 def _render_risk_schedule(payload: dict) -> None:
@@ -958,6 +1010,7 @@ def _initialise_session_payload(payload: dict) -> None:
         "Annual Cost",
     )
     st.session_state["sensitivity_rows"] = _payload_to_sensitivity_rows(payload)
+    st.session_state["inflation_rows"] = _payload_to_inflation_rows(payload)
 
 
 def _payload_to_core_rows(payload: Mapping) -> list[dict]:
@@ -1003,6 +1056,151 @@ def _core_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
     payload["markup"] = markup
     if production_estimate:
         payload["production_estimate"] = production_estimate
+
+
+def _payload_to_inflation_rows(payload: Mapping) -> list[dict]:
+    years = list(payload.get("years", []))
+    series = list(payload.get("inflation_series", []))
+    default_rate = float(payload.get("inflation_rate", 0.0))
+
+    rows: list[dict] = []
+    if years:
+        values = _ensure_schedule_length(series, len(years), fill=default_rate)
+        for position, year in enumerate(years):
+            rows.append({"Year": str(year), "Rate": float(values[position])})
+    elif series:
+        for index, value in enumerate(series, start=1):
+            rows.append({"Year": f"Year {index}", "Rate": float(value)})
+    else:
+        rows.append({"Year": "Year 1", "Rate": default_rate})
+
+    return rows
+
+
+def _inflation_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
+    if rows is None:
+        return
+
+    rates: list[float] = []
+    labels: list[str] = []
+    for index, row in enumerate(rows):
+        label = str(row.get("Year", "")).strip()
+        if not label:
+            label = f"Year {index + 1}"
+        labels.append(label)
+        try:
+            rate = float(row.get("Rate", 0.0))
+        except (TypeError, ValueError):
+            rate = 0.0
+        rates.append(rate)
+
+    if not rates:
+        payload["inflation_series"] = []
+        payload["inflation_labels"] = []
+        return
+
+    payload["inflation_series"] = list(rates)
+    payload["inflation_labels"] = labels
+    _align_payload_horizon(payload, labels, len(rates))
+
+
+def _align_payload_horizon(payload: dict, labels: Sequence[str], target_length: int) -> None:
+    if target_length <= 0:
+        return
+
+    years = list(payload.get("years", []))
+    derived_years = _derive_years_from_labels(labels)
+    payload["years"] = _resize_years(years, target_length, derived_years)
+
+    payload["inflation_series"] = _resize_sequence(
+        payload.get("inflation_series", []), target_length
+    )
+
+    production = payload.get("production_estimate", {})
+    for name, series in list(production.items()):
+        production[name] = _resize_sequence(series, target_length)
+
+    utility = payload.setdefault("utility_costs", {})
+    for field in ("days", "hours"):
+        utility[field] = _resize_sequence(utility.get(field, []), target_length)
+
+    tax = payload.setdefault("tax", {})
+    schedule = tax.get("schedule", [])
+    fill_rate = tax.get("rate", schedule[-1] if schedule else 0.0)
+    tax["schedule"] = _resize_sequence(schedule, target_length, fill=fill_rate)
+
+    risk = payload.setdefault("risk", {})
+    for category, values in list(risk.items()):
+        risk[category] = _resize_sequence(values, target_length)
+
+    working = payload.get("working_capital", {}).get("days", {})
+    for key, values in list(working.items()):
+        working[key] = _resize_sequence(values, target_length)
+
+    scenarios = payload.get("scenarios", {})
+    for scenario in scenarios.values():
+        if not isinstance(scenario, Mapping):
+            continue
+        if "inflation" in scenario:
+            scenario["inflation"] = _resize_sequence(scenario.get("inflation", []), target_length)
+        if "interest" in scenario:
+            scenario["interest"] = _resize_sequence(scenario.get("interest", []), target_length)
+
+
+def _resize_sequence(values: Iterable, target_length: int, fill=None) -> list:
+    items = list(values)
+    if target_length <= 0:
+        return []
+    if len(items) >= target_length:
+        return items[:target_length]
+    if fill is None:
+        fill = items[-1] if items else 0
+    items.extend([fill for _ in range(target_length - len(items))])
+    return items
+
+
+def _resize_years(current: Sequence[int], target_length: int, derived: Sequence[int]) -> list[int]:
+    if target_length <= 0:
+        return []
+    if derived and len(derived) == target_length:
+        return [int(value) for value in derived]
+    existing = list(current)
+    if len(existing) >= target_length:
+        return [int(value) for value in existing[:target_length]]
+    if existing:
+        if len(existing) >= 2:
+            step = existing[1] - existing[0]
+        else:
+            step = 1
+        base = existing[-1]
+        extension = [int(base + step * (index + 1)) for index in range(target_length - len(existing))]
+        return [int(value) for value in existing + extension]
+    return [index + 1 for index in range(target_length)]
+
+
+def _derive_years_from_labels(labels: Sequence[str]) -> list[int]:
+    derived: list[int] = []
+    for label in labels:
+        value = _parse_year_number(label)
+        if value is None:
+            return []
+        derived.append(value)
+    return derived
+
+
+def _parse_year_number(label: str) -> int | None:
+    if not label:
+        return None
+    try:
+        return int(float(label))
+    except ValueError:
+        match = re.search(r"-?\d+(?:\.\d+)?", label)
+        if match:
+            try:
+                return int(float(match.group()))
+            except ValueError:
+                return None
+    return None
 
 
 if __name__ == "__main__":  # pragma: no cover - Streamlit executes the script directly
