@@ -76,18 +76,15 @@ class FinancialModelTest(unittest.TestCase):
         financing = self.inputs.financing
         interest_column = self.outputs.income_statement.column("Interest")
         senior_interest, _ = self.model._senior_debt_schedules()
+        revolver_interest, _ = self.model._revolver_schedules()
         manual: list[float] = []
-        for idx, year in enumerate(self.inputs.years):
+        for idx in range(len(self.inputs.years)):
             total = senior_interest[idx]
-            total += sum(
-                entry.amount * financing.revolver_interest
-                for entry in financing.revolver_entries
-                if entry.year == year
-            )
+            total += revolver_interest[idx]
             total += sum(
                 entry.amount * financing.cash_interest
                 for entry in financing.overdraft_entries
-                if entry.year == year
+                if entry.year == self.inputs.years[idx]
             )
             manual.append(-total)
 
@@ -99,14 +96,11 @@ class FinancialModelTest(unittest.TestCase):
         financing = self.inputs.financing
         liabilities = self.outputs.balance_sheet.column("Total Liabilities")
         _, senior_outstanding = self.model._senior_debt_schedules()
+        _, revolver_outstanding = self.model._revolver_schedules()
         manual: list[float] = []
         for idx, year in enumerate(self.inputs.years):
             total = senior_outstanding[idx]
-            total += sum(
-                entry.outstanding
-                for entry in financing.revolver_entries
-                if entry.year == year
-            )
+            total += revolver_outstanding[idx]
             total += sum(
                 entry.outstanding
                 for entry in financing.overdraft_entries
@@ -122,6 +116,11 @@ class FinancialModelTest(unittest.TestCase):
         _, outstanding = self.model._senior_debt_schedules()
         self.assertTrue(outstanding)
         self.assertAlmostEqual(outstanding[-1], 0.0, places=6)
+
+    def test_revolver_outstanding_clears_by_duration(self):
+        _, outstanding = self.model._revolver_schedules()
+        if outstanding:
+            self.assertAlmostEqual(outstanding[-1], 0.0, places=6)
 
     def test_depreciation_schedule_feeds_statements(self):
         depreciation = self.model.depreciation_schedule()

@@ -1648,6 +1648,7 @@ def _render_cost_and_financing(payload: dict) -> None:
         interest_label="Revolver Interest Payable",
         interest_rate=float(financing.get("revolver_interest", 0.0)),
         years=years,
+        include_duration=True,
     )
 
     _render_debt_section(
