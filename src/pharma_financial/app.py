@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Mapping
+from collections.abc import Mapping, Sequence
+from typing import Tuple
 
 import streamlit as st
 
@@ -167,9 +168,13 @@ def _render_dashboard_tab(outputs: FinancialOutputs) -> None:
             st.plotly_chart(fig_ebitda, use_container_width=True)
 
     st.markdown("### Investment Metrics")
-    metrics = outputs.summary_metrics["Value"]
-    metric_cols = st.columns(len(metrics))
-    for col, (name, value) in zip(metric_cols, metrics.items()):
+    metric_pairs = _extract_metric_pairs(outputs.summary_metrics)
+    if not metric_pairs:
+        st.info("No investment metrics were generated for the current assumptions.")
+        return
+
+    metric_cols = st.columns(len(metric_pairs))
+    for col, (name, value) in zip(metric_cols, metric_pairs):
         with col:
             formatted = _format_number(value)
             st.metric(label=name, value=formatted)
@@ -257,7 +262,7 @@ def _ensure_dataframe(table) -> "pd.DataFrame | list":
             rows = []
             data = table.as_dict()
             for idx, label in enumerate(table.index):
-                row = {"Year": label}
+                row = {table.index_name: label}
                 for column, values in data.items():
                     row[column] = values[idx]
                 rows.append(row)
@@ -277,6 +282,38 @@ def _format_number(value: float) -> str:
     if abs(value) >= 1_000:
         return f"{value/1_000:,.2f}K"
     return f"{value:,.2f}"
+
+
+def _extract_metric_pairs(summary) -> Sequence[Tuple[str, float]]:
+    if isinstance(summary, Table):
+        return list(zip([str(label) for label in summary.index], summary.column("Value")))
+
+    if pd is not None and hasattr(summary, "reset_index"):
+        try:
+            frame = summary.reset_index()
+        except Exception:
+            frame = pd.DataFrame(summary)
+        label_column = summary.index.name if getattr(summary, "index", None) is not None else None
+        if not label_column or label_column not in frame.columns:
+            label_column = frame.columns[0]
+        value_column = "Value" if "Value" in frame.columns else frame.columns[-1]
+        return list(zip(frame[label_column].astype(str), frame[value_column].astype(float)))
+
+    if isinstance(summary, list):
+        pairs: list[Tuple[str, float]] = []
+        for position, row in enumerate(summary, start=1):
+            if isinstance(row, Mapping):
+                label = row.get("Metric") or row.get("Year") or f"Metric {position}"
+                value = float(row.get("Value", float("nan")))
+                pairs.append((str(label), value))
+        return pairs
+
+    if isinstance(summary, Mapping):
+        value = summary.get("Value")
+        if isinstance(value, Mapping):
+            return [(str(name), float(val)) for name, val in value.items()]
+
+    return []
 
 
 if __name__ == "__main__":  # pragma: no cover - Streamlit executes the script directly
