@@ -6,6 +6,18 @@
     "Liquid": [0.10,0.15,0.20,0.25,0.30,0.39,0.49,0.63,0.82,1.00],
     "Ointment": [0.01,0.02,0.02,0.03,0.03,0.04,0.05,0.06,0.08,0.10]
   },
+  "total_production_units": {
+    "Tablets": 1454.3,
+    "Capsules": 316.3,
+    "Liquid": 4.33,
+    "Ointment": 0.44
+  },
+  "production_capacity": {
+    "Tablets": 3500.0,
+    "Capsules": 750.0,
+    "Liquid": 10.0,
+    "Ointment": 1.0
+  },
   "unit_costs": {
     "Tablets": {"production": 0.03, "price": 0.047, "freight": 0.020},
     "Capsules": {"production": 0.05, "price": 0.080, "freight": 0.015},

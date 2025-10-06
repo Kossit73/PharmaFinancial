@@ -195,11 +195,29 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     if not rows:
         st.info("No core assumptions configured. Use the form below to add entries.")
 
+    production_estimate = payload.get("production_estimate", {})
+    total_unit_defaults = payload.get("total_production_units", {})
+    capacity_defaults = payload.get("production_capacity", {})
+
     updated_rows: list[dict] = []
     for index, row in enumerate(rows):
         container = st.container()
         with container:
-            cols = st.columns([3, 2, 2, 2, 2, 1])
+            row_product = str(row.get("Product", ""))
+            default_units = float(row.get("Total Production Units", 0.0))
+            if default_units == 0.0:
+                if row_product in total_unit_defaults:
+                    default_units = float(total_unit_defaults[row_product])
+                elif isinstance(production_estimate, Mapping) and row_product in production_estimate:
+                    default_units = sum(
+                        float(value)
+                        for value in production_estimate.get(row_product, [])
+                    )
+            default_capacity = float(row.get("Max Capacity", 0.0))
+            if default_capacity == 0.0 and row_product in capacity_defaults:
+                default_capacity = float(capacity_defaults[row_product])
+
+            cols = st.columns([3, 2, 2, 2, 2, 2, 2, 2, 2, 1])
             description = cols[0].text_input(
                 "Description",
                 value=row.get("Product", ""),
@@ -234,7 +252,46 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
                 step=0.01,
                 format="%.2f",
             )
-            if cols[5].button("Remove", key=f"core_remove_{index}"):
+            total_units = cols[5].number_input(
+                "Total Production Units",
+                value=default_units,
+                key=f"core_units_{index}",
+                step=1.0,
+                format="%.4f",
+                min_value=0.0,
+            )
+            max_capacity = cols[6].number_input(
+                "Max Capacity",
+                value=default_capacity,
+                key=f"core_capacity_{index}",
+                step=1.0,
+                format="%.4f",
+                min_value=0.0,
+            )
+
+            clamped_units = float(total_units)
+            if max_capacity > 0.0 and clamped_units > max_capacity + 1e-9:
+                cols[5].error("Capacity exceeded")
+                clamped_units = max_capacity
+
+            total_revenue = clamped_units * float(selling)
+            total_cost = clamped_units * (float(production) + float(freight))
+
+            cols[7].number_input(
+                "Total Revenue",
+                value=total_revenue,
+                key=f"core_revenue_{index}",
+                format="%.4f",
+                disabled=True,
+            )
+            cols[8].number_input(
+                "Total Cost",
+                value=total_cost,
+                key=f"core_cost_{index}",
+                format="%.4f",
+                disabled=True,
+            )
+            if cols[9].button("Remove", key=f"core_remove_{index}"):
                 del rows[index]
                 st.session_state["core_assumption_rows"] = rows
                 _rerun()
@@ -246,6 +303,10 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
                 "Selling Price": selling,
                 "Freight Cost": freight,
                 "Markup": markup,
+                "Total Production Units": clamped_units,
+                "Max Capacity": max_capacity,
+                "Total Revenue": total_revenue,
+                "Total Cost": total_cost,
             }
         )
 
@@ -269,12 +330,34 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
         new_markup = st.number_input(
             "Markup", value=0.0, step=0.01, format="%.2f", key="core_new_markup"
         )
+        new_units = st.number_input(
+            "Total Production Units",
+            value=0.0,
+            step=1.0,
+            format="%.4f",
+            key="core_new_units",
+            min_value=0.0,
+        )
+        new_capacity = st.number_input(
+            "Max Capacity",
+            value=0.0,
+            step=1.0,
+            format="%.4f",
+            key="core_new_capacity",
+            min_value=0.0,
+        )
         submitted = st.form_submit_button("Add")
 
     if submitted:
         if not new_description.strip():
             st.warning("Description is required to add a core assumption.")
         else:
+            clamped_units = new_units
+            if new_capacity > 0.0 and new_units > new_capacity + 1e-9:
+                st.warning("Capacity exceeded; using the maximum capacity for this product.")
+                clamped_units = new_capacity
+            total_revenue = clamped_units * new_selling
+            total_cost = clamped_units * (new_production + new_freight)
             rows.append(
                 {
                     "Product": new_description.strip(),
@@ -282,6 +365,10 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
                     "Selling Price": new_selling,
                     "Freight Cost": new_freight,
                     "Markup": new_markup,
+                    "Total Production Units": clamped_units,
+                    "Max Capacity": new_capacity,
+                    "Total Revenue": total_revenue,
+                    "Total Cost": total_cost,
                 }
             )
             st.session_state["core_assumption_rows"] = rows
@@ -291,6 +378,8 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
                 "core_new_sell",
                 "core_new_freight",
                 "core_new_markup",
+                "core_new_units",
+                "core_new_capacity",
             ):
                 st.session_state.pop(key, None)
             _rerun()
@@ -1097,15 +1186,34 @@ def _initialise_session_payload(payload: dict) -> None:
 def _payload_to_core_rows(payload: Mapping) -> list[dict]:
     unit_costs = payload.get("unit_costs", {})
     markup = payload.get("markup", {})
+    totals = payload.get("total_production_units", {})
+    capacities = payload.get("production_capacity", {})
+    estimates = payload.get("production_estimate", {})
     rows: list[dict] = []
     for name, values in unit_costs.items():
+        production_cost = float(values.get("production", 0.0))
+        selling_price = float(values.get("price", 0.0))
+        freight_cost = float(values.get("freight", 0.0))
+        total_units = float(totals.get(name, 0.0))
+        if total_units == 0.0 and isinstance(estimates, Mapping):
+            estimate = estimates.get(name, [])
+            total_units = sum(float(v) for v in estimate)
+        max_capacity = float(capacities.get(name, 0.0))
+        if max_capacity > 0.0 and total_units > max_capacity:
+            total_units = max_capacity
+        total_revenue = total_units * selling_price
+        total_cost = total_units * (production_cost + freight_cost)
         rows.append(
             {
                 "Product": str(name),
-                "Production Cost": float(values.get("production", 0.0)),
-                "Selling Price": float(values.get("price", 0.0)),
-                "Freight Cost": float(values.get("freight", 0.0)),
+                "Production Cost": production_cost,
+                "Selling Price": selling_price,
+                "Freight Cost": freight_cost,
                 "Markup": float(markup.get(name, 0.0)),
+                "Total Production Units": total_units,
+                "Max Capacity": max_capacity,
+                "Total Revenue": total_revenue,
+                "Total Cost": total_cost,
             }
         )
     return rows
@@ -1117,6 +1225,8 @@ def _core_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
     years = payload.get("years", [])
     existing_estimate = payload.get("production_estimate", {})
     production_estimate: dict[str, list[float]] = {}
+    total_units_map: dict[str, float] = {}
+    capacity_map: dict[str, float] = {}
 
     for row in rows:
         name = str(row.get("Product", "")).strip()
@@ -1128,15 +1238,49 @@ def _core_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
             "freight": float(row.get("Freight Cost", 0.0)),
         }
         markup[name] = float(row.get("Markup", 0.0))
+        max_capacity = float(row.get("Max Capacity", 0.0))
+        total_units = float(row.get("Total Production Units", 0.0))
+        if max_capacity > 0.0 and total_units > max_capacity:
+            total_units = max_capacity
+        total_units_map[name] = total_units
+        capacity_map[name] = max_capacity
+
         if isinstance(existing_estimate, Mapping) and name in existing_estimate:
-            production_estimate[name] = list(existing_estimate[name])
+            series = [float(value) for value in existing_estimate[name]]
         else:
-            production_estimate[name] = [0.0 for _ in years]
+            series = [0.0 for _ in years]
+
+        target_length = len(years)
+        if target_length:
+            if len(series) < target_length:
+                series = series + [0.0] * (target_length - len(series))
+            elif len(series) > target_length:
+                series = series[:target_length]
+
+        current_total = sum(series)
+        if target_length == 0:
+            scaled = []
+        elif current_total > 0:
+            factor = total_units / current_total
+            scaled = [value * factor for value in series]
+        else:
+            per_year = total_units / target_length if target_length else 0.0
+            scaled = [per_year for _ in range(target_length)]
+
+        production_estimate[name] = scaled
 
     payload["unit_costs"] = unit_costs
     payload["markup"] = markup
     if production_estimate:
         payload["production_estimate"] = production_estimate
+    if total_units_map:
+        payload["total_production_units"] = total_units_map
+    else:
+        payload.pop("total_production_units", None)
+    if capacity_map:
+        payload["production_capacity"] = capacity_map
+    else:
+        payload.pop("production_capacity", None)
 
 
 def _payload_to_inflation_rows(payload: Mapping) -> list[dict]:

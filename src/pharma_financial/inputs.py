@@ -79,6 +79,8 @@ class ModelInputs:
     production_estimate: Mapping[str, List[float]]
     unit_costs: Mapping[str, ProductParameters]
     markup: Mapping[str, float]
+    total_production_units: Mapping[str, float]
+    production_capacity: Mapping[str, float]
     inflation_series: List[float]
     raw_material_cost_per_unit: float
     utility_schedule: UtilitySchedule
@@ -198,6 +200,19 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         float(tax_data.get("rate", 0.0)) for _ in years
     ]
 
+    production_estimate = raw["production_estimate"]
+
+    total_units_raw = raw.get("total_production_units", {})
+    capacity_raw = raw.get("production_capacity", {})
+
+    total_units: Dict[str, float] = {}
+    capacity: Dict[str, float] = {}
+    for name in unit_costs:
+        estimate = production_estimate.get(name, [])
+        estimate_total = sum(float(value) for value in estimate)
+        total_units[name] = float(total_units_raw.get(name, estimate_total)) or 0.0
+        capacity[name] = float(capacity_raw.get(name, 0.0))
+
     risk_data = raw.get("risk", {})
     risk_schedule = {
         name: _coerce_schedule(values, len(years))
@@ -212,6 +227,8 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         production_estimate=raw["production_estimate"],
         unit_costs=unit_costs,
         markup=raw["markup"],
+        total_production_units=total_units,
+        production_capacity=capacity,
         inflation_series=raw["inflation_series"],
         raw_material_cost_per_unit=float(raw["raw_material_cost"]["per_unit"]),
         utility_schedule=utility,

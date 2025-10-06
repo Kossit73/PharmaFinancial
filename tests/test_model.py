@@ -34,6 +34,14 @@ class FinancialModelTest(unittest.TestCase):
         expected = ["NPV", "IRR", "Payback Period", "Discounted Payback"]
         self.assertEqual(summary.index, expected)
 
+    def test_total_units_respect_capacity(self):
+        totals = self.inputs.total_production_units
+        capacity = self.inputs.production_capacity
+        for product in self.inputs.products:
+            cap = capacity.get(product, 0.0)
+            if cap > 0:
+                self.assertLessEqual(totals.get(product, 0.0), cap)
+
     def test_npf_irr_handles_short_series(self):
         self.assertTrue(npf_irr([100]) != float("inf"))
 
