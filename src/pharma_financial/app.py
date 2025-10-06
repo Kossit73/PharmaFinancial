@@ -222,11 +222,17 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
                 }
             )
             st.session_state["core_assumption_rows"] = rows
-            st.session_state["core_new_description"] = ""
-            st.session_state["core_new_prod"] = 0.0
-            st.session_state["core_new_sell"] = 0.0
-            st.session_state["core_new_freight"] = 0.0
-            st.session_state["core_new_markup"] = 0.0
+            # Clearing the form widgets by removing their stored state avoids
+            # manipulating widget-managed keys directly, which previously
+            # triggered ``StreamlitAPIException`` in bare-mode executions.
+            for key in (
+                "core_new_description",
+                "core_new_prod",
+                "core_new_sell",
+                "core_new_freight",
+                "core_new_markup",
+            ):
+                st.session_state.pop(key, None)
             st.experimental_rerun()
 
     col1, col2 = st.columns(2)
