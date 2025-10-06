@@ -27,7 +27,27 @@ DEFAULT_INPUT_PATH = Path(__file__).resolve().parent / "data" / "default_inputs.
 DEFAULT_INPUT_JSON = DEFAULT_INPUT_PATH.read_text(encoding="utf-8")
 
 
+def _streamlit_runtime_exists() -> bool:
+    """Return ``True`` when the Streamlit runtime has been initialised."""
+
+    try:  # pragma: no cover - depends on Streamlit internals
+        from streamlit.runtime import exists
+    except Exception:  # pragma: no cover - runtime API unavailable
+        return False
+
+    try:  # pragma: no cover - defensive against older Streamlit versions
+        return bool(exists())
+    except Exception:
+        return False
+
+
 def main() -> None:
+    if not _streamlit_runtime_exists():  # pragma: no cover - requires Streamlit runner
+        raise RuntimeError(
+            "Streamlit runtime is not initialised. Launch the app with "
+            "`streamlit run streamlit_app.py` to enable interactive inputs."
+        )
+
     st.set_page_config(
         page_title="Longevity Pharmaceuticals Financial Model",
         page_icon="💊",
@@ -986,4 +1006,10 @@ def _core_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
 
 
 if __name__ == "__main__":  # pragma: no cover - Streamlit executes the script directly
-    main()
+    if _streamlit_runtime_exists():
+        main()
+    else:  # pragma: no cover - guidance for incorrect invocation
+        raise SystemExit(
+            "This module is a Streamlit application. Launch it with "
+            "`streamlit run streamlit_app.py` instead of executing it directly."
+        )
