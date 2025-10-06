@@ -354,7 +354,7 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
         else:
             clamped_units = new_units
             if new_capacity > 0.0 and new_units > new_capacity + 1e-9:
-                st.warning("Capacity exceeded; using the maximum capacity for this product.")
+                st.error("Capacity exceeded")
                 clamped_units = new_capacity
             total_revenue = clamped_units * new_selling
             total_cost = clamped_units * (new_production + new_freight)

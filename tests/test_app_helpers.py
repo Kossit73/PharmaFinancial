@@ -1,7 +1,9 @@
 import importlib
+import json
 import sys
 import types
 import unittest
+from pathlib import Path
 
 
 class _NoOp:
@@ -66,6 +68,27 @@ class RerunHelperTest(unittest.TestCase):
     def test_rerun_helper_handles_missing_runtime(self):
         self.app._rerun()
         self.assertEqual(self.stub.calls, ["rerun", "experimental_rerun"])
+
+    def test_core_rows_calculations_match_inputs(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+        )
+        rows = self.app._payload_to_core_rows(payload)
+        self.assertTrue(rows)
+
+        for row in rows:
+            units = float(row["Total Production Units"])
+            selling = float(row["Selling Price"])
+            production = float(row["Production Cost"])
+            freight = float(row["Freight Cost"])
+            capacity = float(row.get("Max Capacity", 0.0))
+
+            self.assertAlmostEqual(row["Total Revenue"], units * selling, places=8)
+            self.assertAlmostEqual(
+                row["Total Cost"], units * (production + freight), places=8
+            )
+            if capacity > 0:
+                self.assertLessEqual(units, capacity + 1e-9)
 
 
 if __name__ == "__main__":  # pragma: no cover
