@@ -213,6 +213,11 @@ def _resolve_inputs() -> ModelInputs:
     )
     _utility_rows_to_payload(utility_rows, payload)
 
+    depreciation_rows = st.session_state.setdefault(
+        "depreciation_rows", _payload_to_depreciation_rows(payload)
+    )
+    _depreciation_rows_to_payload(depreciation_rows, payload)
+
     inflation_rows = st.session_state.setdefault(
         "inflation_rows", _payload_to_inflation_rows(payload)
     )
@@ -440,6 +445,9 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     st.markdown("### Utility Schedule")
     _render_utility_schedule(payload)
 
+    st.markdown("### Fixed Assets Schedule")
+    _render_depreciation_schedule(payload)
+
     st.markdown("### Cost & Financing Assumptions")
     _render_cost_and_financing(payload)
 
@@ -466,6 +474,7 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
 
     _core_rows_to_payload(st.session_state.get("core_assumption_rows", []), payload)
     _utility_rows_to_payload(st.session_state.get("utility_rows", []), payload)
+    _depreciation_rows_to_payload(st.session_state.get("depreciation_rows", []), payload)
     _risk_rows_to_payload(st.session_state.get("risk_rows", []), payload)
     _inflation_rows_to_payload(st.session_state.get("inflation_rows", []), payload)
     _debt_rows_to_payload(st.session_state.get("senior_debt_rows", []), payload, "senior_debt")
@@ -1143,6 +1152,211 @@ def _render_utility_schedule(payload: dict) -> None:
         ):
             st.session_state.pop(key, None)
         _rerun()
+
+
+def _render_depreciation_schedule(payload: dict) -> None:
+    rows: list[dict] = st.session_state.get("depreciation_rows", [])
+    years = payload.get("years", [])
+
+    if not rows:
+        st.info("No fixed asset schedule configured. Use the form below to add entries.")
+
+    for index in range(len(rows)):
+        derived = _calculate_depreciation_preview(rows)
+        row = rows[index]
+        data = derived[index] if index < len(derived) else {}
+
+        cols = st.columns([2.2, 1.1, 1.1, 1.1, 1.3, 1.2, 1.1, 1.2, 1.3, 1.3, 0.7])
+
+        asset_input = cols[0].text_input(
+            "Asset Type",
+            value=str(row.get("asset_type", "")),
+            key=f"dep_asset_{index}",
+        )
+
+        default_year = int(row.get("year", years[0] if years else 0))
+        year_input = cols[1].number_input(
+            "Year",
+            value=default_year,
+            key=f"dep_year_{index}",
+            step=1,
+            format="%d",
+        )
+
+        acquisition_input = cols[2].number_input(
+            "Acquisition",
+            value=float(row.get("acquisition", 0.0)),
+            key=f"dep_acq_{index}",
+            step=0.001,
+            format="%.4f",
+        )
+
+        asset_cost_input = cols[3].number_input(
+            "Asset Cost",
+            value=float(row.get("asset_cost", row.get("acquisition", 0.0) or 0.0)),
+            key=f"dep_cost_{index}",
+            step=0.001,
+            format="%.4f",
+        )
+
+        prior_net_book = float(data.get("prior_net_book", row.get("opening_net_book", 0.0) or 0.0))
+        prior_cumulative = float(data.get("prior_cumulative", row.get("opening_cumulative", 0.0) or 0.0))
+        opening_input = cols[4].number_input(
+            "Net Book Value (prev year)",
+            value=float(row.get("opening_net_book", prior_net_book)),
+            key=f"dep_open_nb_{index}",
+            step=0.001,
+            format="%.4f",
+        )
+
+        depreciation_rate_input = cols[5].number_input(
+            "Depreciation Rate",
+            value=float(row.get("depreciation_rate", 0.0)),
+            key=f"dep_rate_{index}",
+            step=0.0001,
+            format="%.5f",
+        )
+
+        total_asset_cost = asset_cost_input + prior_net_book
+        total_depreciation = total_asset_cost * depreciation_rate_input
+        cumulative_depreciation = prior_cumulative + total_depreciation
+        if cumulative_depreciation > total_asset_cost and total_asset_cost >= 0:
+            allowable = max(total_asset_cost - prior_cumulative, 0.0)
+            total_depreciation = allowable
+            cumulative_depreciation = prior_cumulative + total_depreciation
+        net_book_value = max(total_asset_cost - cumulative_depreciation, 0.0)
+
+        _set_widget_value(f"dep_total_cost_{index}", total_asset_cost)
+        cols[6].number_input(
+            "Total Asset cost",
+            value=total_asset_cost,
+            key=f"dep_total_cost_{index}",
+            format="%.4f",
+            disabled=True,
+        )
+
+        _set_widget_value(f"dep_total_dep_{index}", total_depreciation)
+        cols[7].number_input(
+            "Total Depreciation",
+            value=total_depreciation,
+            key=f"dep_total_dep_{index}",
+            format="%.4f",
+            disabled=True,
+        )
+
+        _set_widget_value(f"dep_cum_dep_{index}", cumulative_depreciation)
+        cols[8].number_input(
+            "Cumulative Depreciation",
+            value=cumulative_depreciation,
+            key=f"dep_cum_dep_{index}",
+            format="%.4f",
+            disabled=True,
+        )
+
+        _set_widget_value(f"dep_net_book_{index}", net_book_value)
+        cols[9].number_input(
+            "Net Book Value",
+            value=net_book_value,
+            key=f"dep_net_book_{index}",
+            format="%.4f",
+            disabled=True,
+        )
+
+        if cols[10].button("Remove", key=f"dep_remove_{index}"):
+            del rows[index]
+            st.session_state["depreciation_rows"] = rows
+            _rerun()
+
+        override_net_book = (
+            abs(opening_input - prior_net_book) > 1e-6
+            or bool(row.get("override_net_book"))
+            or bool(data.get("is_first", False))
+        )
+        override_cumulative = bool(row.get("override_cumulative")) or bool(data.get("is_first", False))
+
+        new_row = {
+            "asset_type": asset_input.strip(),
+            "year": int(year_input),
+            "acquisition": float(acquisition_input),
+            "asset_cost": float(asset_cost_input),
+            "depreciation_rate": float(depreciation_rate_input),
+            "opening_net_book": float(opening_input),
+            "opening_cumulative": prior_cumulative,
+            "override_net_book": override_net_book,
+            "override_cumulative": override_cumulative,
+        }
+        rows[index] = new_row
+
+    st.session_state["depreciation_rows"] = rows
+
+    with st.form("add_depreciation_row"):
+        new_asset = st.text_input("Asset Type", key="dep_new_asset")
+        default_year = years[0] if years else 0
+        new_year = st.number_input(
+            "Year",
+            value=int(default_year),
+            step=1,
+            format="%d",
+            key="dep_new_year",
+        )
+        new_acquisition = st.number_input(
+            "Acquisition",
+            value=0.0,
+            step=0.001,
+            format="%.4f",
+            key="dep_new_acquisition",
+        )
+        new_asset_cost = st.number_input(
+            "Asset Cost",
+            value=0.0,
+            step=0.001,
+            format="%.4f",
+            key="dep_new_asset_cost",
+        )
+        new_opening_nb = st.number_input(
+            "Opening Net Book Value",
+            value=0.0,
+            step=0.001,
+            format="%.4f",
+            key="dep_new_opening_nb",
+        )
+        new_rate = st.number_input(
+            "Depreciation Rate",
+            value=0.0,
+            step=0.0001,
+            format="%.5f",
+            key="dep_new_rate",
+        )
+        submitted = st.form_submit_button("Add")
+
+    if submitted:
+        if not new_asset.strip():
+            st.warning("Asset type is required to add a depreciation entry.")
+        else:
+            rows.append(
+                {
+                    "asset_type": new_asset.strip(),
+                    "year": int(new_year),
+                    "acquisition": float(new_acquisition),
+                    "asset_cost": float(new_asset_cost),
+                    "depreciation_rate": float(new_rate),
+                    "opening_net_book": float(new_opening_nb),
+                    "opening_cumulative": 0.0,
+                    "override_net_book": abs(new_opening_nb) > 1e-6,
+                    "override_cumulative": True,
+                }
+            )
+            st.session_state["depreciation_rows"] = rows
+            for key in (
+                "dep_new_asset",
+                "dep_new_year",
+                "dep_new_acquisition",
+                "dep_new_asset_cost",
+                "dep_new_opening_nb",
+                "dep_new_rate",
+            ):
+                st.session_state.pop(key, None)
+            _rerun()
 
 
 def _render_cost_and_financing(payload: dict) -> None:
@@ -1954,6 +2168,172 @@ def _utility_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
         utility.pop(legacy, None)
 
 
+def _calculate_depreciation_preview(rows: Sequence[Mapping]) -> list[dict]:
+    preview: list[dict] = [{} for _ in rows]
+    grouped: dict[str, list[tuple[int, Mapping]]] = {}
+
+    for index, row in enumerate(rows):
+        asset = str(row.get("asset_type", "") or "").strip()
+        key = asset or f"Asset {index + 1}"
+        grouped.setdefault(key, []).append((index, row))
+
+    for entries in grouped.values():
+        entries.sort(key=lambda item: (int(item[1].get("year", 0)), item[0]))
+        previous_net_book: float | None = None
+        previous_cumulative: float | None = None
+
+        for position, row in entries:
+            override_net = bool(row.get("override_net_book"))
+            override_cum = bool(row.get("override_cumulative"))
+            opening_net_book = float(row.get("opening_net_book", 0.0) or 0.0)
+            opening_cumulative = float(row.get("opening_cumulative", 0.0) or 0.0)
+
+            if previous_net_book is None or override_net:
+                prior_net_book = opening_net_book
+            else:
+                prior_net_book = previous_net_book
+
+            if previous_cumulative is None or override_cum:
+                prior_cumulative = opening_cumulative
+            else:
+                prior_cumulative = previous_cumulative
+
+            asset_cost = float(row.get("asset_cost", row.get("acquisition", 0.0)) or 0.0)
+            depreciation_rate = float(row.get("depreciation_rate", 0.0) or 0.0)
+
+            total_asset_cost = asset_cost + prior_net_book
+            total_depreciation = total_asset_cost * depreciation_rate
+            cumulative_depreciation = prior_cumulative + total_depreciation
+            if cumulative_depreciation > total_asset_cost and total_asset_cost >= 0:
+                allowable = max(total_asset_cost - prior_cumulative, 0.0)
+                total_depreciation = allowable
+                cumulative_depreciation = prior_cumulative + total_depreciation
+            net_book_value = max(total_asset_cost - cumulative_depreciation, 0.0)
+
+            preview[position] = {
+                "prior_net_book": prior_net_book,
+                "prior_cumulative": prior_cumulative,
+                "total_asset_cost": total_asset_cost,
+                "total_depreciation": total_depreciation,
+                "cumulative_depreciation": cumulative_depreciation,
+                "net_book_value": net_book_value,
+                "is_first": previous_net_book is None,
+            }
+
+            previous_net_book = net_book_value
+            previous_cumulative = cumulative_depreciation
+
+    return preview
+
+
+def _legacy_depreciation_rows(payload: Mapping) -> list[dict]:
+    depreciation = payload.get("depreciation")
+    years = payload.get("years", [])
+    if not isinstance(depreciation, Mapping) or not years:
+        return []
+
+    rows: list[dict] = []
+    for asset, values in depreciation.items():
+        if not isinstance(values, Mapping):
+            continue
+        base_value = float(values.get("value", 0.0) or 0.0)
+        life_value = values.get("life")
+        try:
+            life = int(life_value) if life_value not in (None, "") else None
+        except (TypeError, ValueError):
+            life = None
+
+        previous_net_book = 0.0
+        previous_cumulative = 0.0
+
+        for idx, year in enumerate(years):
+            acquisition = base_value if idx == 0 else 0.0
+            asset_cost = acquisition
+
+            if life and life > 0 and idx < life:
+                annual = base_value / life
+            else:
+                annual = 0.0
+
+            total_asset_cost = asset_cost + previous_net_book
+            rate = annual / total_asset_cost if total_asset_cost else 0.0
+
+            rows.append(
+                {
+                    "asset_type": str(asset),
+                    "year": int(year),
+                    "acquisition": acquisition,
+                    "asset_cost": asset_cost,
+                    "depreciation_rate": rate,
+                    "opening_net_book": previous_net_book,
+                    "opening_cumulative": previous_cumulative,
+                    "override_net_book": idx == 0,
+                    "override_cumulative": idx == 0,
+                }
+            )
+
+            previous_cumulative += annual
+            net_book = total_asset_cost - previous_cumulative
+            if net_book < 0 and annual > 0:
+                net_book = 0.0
+                previous_cumulative = total_asset_cost
+            previous_net_book = net_book
+
+    return rows
+
+
+def _payload_to_depreciation_rows(payload: Mapping) -> list[dict]:
+    depreciation = payload.get("depreciation", {})
+    rows: list[dict] = []
+
+    if isinstance(depreciation, Mapping):
+        stored = depreciation.get("rows")
+        if isinstance(stored, Sequence):
+            for item in stored:
+                if not isinstance(item, Mapping):
+                    continue
+                rows.append(
+                    {
+                        "asset_type": str(item.get("asset_type", item.get("asset", ""))),
+                        "year": int(item.get("year", 0)),
+                        "acquisition": float(item.get("acquisition", 0.0) or 0.0),
+                        "asset_cost": float(item.get("asset_cost", item.get("acquisition", 0.0) or 0.0)),
+                        "depreciation_rate": float(item.get("depreciation_rate", item.get("rate", 0.0)) or 0.0),
+                        "opening_net_book": float(item.get("opening_net_book", 0.0) or 0.0),
+                        "opening_cumulative": float(item.get("opening_cumulative", 0.0) or 0.0),
+                        "override_net_book": bool(item.get("override_net_book", False)),
+                        "override_cumulative": bool(item.get("override_cumulative", False)),
+                    }
+                )
+
+    if rows:
+        return rows
+
+    return _legacy_depreciation_rows(payload)
+
+
+def _depreciation_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
+    depreciation_rows: list[dict] = []
+    for row in rows:
+        asset = str(row.get("asset_type", "")).strip()
+        if not asset:
+            continue
+        depreciation_rows.append(
+            {
+                "asset_type": asset,
+                "year": int(row.get("year", 0)),
+                "acquisition": float(row.get("acquisition", 0.0) or 0.0),
+                "asset_cost": float(row.get("asset_cost", row.get("acquisition", 0.0) or 0.0)),
+                "depreciation_rate": float(row.get("depreciation_rate", 0.0) or 0.0),
+                "opening_net_book": float(row.get("opening_net_book", 0.0) or 0.0),
+                "opening_cumulative": float(row.get("opening_cumulative", 0.0) or 0.0),
+                "override_net_book": bool(row.get("override_net_book", False)),
+                "override_cumulative": bool(row.get("override_cumulative", False)),
+            }
+        )
+
+    payload.setdefault("depreciation", {})["rows"] = depreciation_rows
+
 def _initialise_session_payload(payload: dict) -> None:
     st.session_state["input_payload"] = payload
     st.session_state["core_assumption_rows"] = _payload_to_core_rows(payload)
@@ -1968,6 +2348,7 @@ def _initialise_session_payload(payload: dict) -> None:
         "Annual Cost",
     )
     st.session_state["utility_rows"] = _payload_to_utility_rows(payload)
+    st.session_state["depreciation_rows"] = _payload_to_depreciation_rows(payload)
     st.session_state["sensitivity_rows"] = _payload_to_sensitivity_rows(payload)
     st.session_state["inflation_rows"] = _payload_to_inflation_rows(payload)
     st.session_state["risk_rows"] = _payload_to_risk_rows(payload)

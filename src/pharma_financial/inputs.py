@@ -54,16 +54,16 @@ class UtilitySchedule:
 
 
 @dataclass
-class DepreciationItem:
-    asset: str
-    value: float
-    useful_life: Optional[int]
-
-    @property
-    def annual_depreciation(self) -> float:
-        if not self.useful_life or self.useful_life <= 0:
-            return 0.0
-        return self.value / self.useful_life
+class DepreciationRow:
+    asset_type: str
+    year: int
+    acquisition: float
+    asset_cost: float
+    depreciation_rate: float
+    opening_net_book: float = 0.0
+    opening_cumulative: float = 0.0
+    override_net_book: bool = False
+    override_cumulative: bool = False
 
 
 @dataclass
@@ -133,7 +133,7 @@ class ModelInputs:
     utility_schedule: UtilitySchedule
     direct_labor_costs: Mapping[str, float]
     indirect_labor_costs: Mapping[str, float]
-    depreciation_items: List[DepreciationItem]
+    depreciation_schedule: List[DepreciationRow]
     capital_expenditure: Mapping[str, float]
     financing: FinancingParameters
     working_capital_days: WorkingCapitalDays
@@ -165,17 +165,111 @@ def _parse_product_parameters(data: Mapping[str, Mapping[str, float]],
     }
 
 
-def _parse_depreciation(data: Mapping[str, Mapping[str, Optional[float]]]) -> List[DepreciationItem]:
-    items: List[DepreciationItem] = []
-    for asset, values in data.items():
-        items.append(
-            DepreciationItem(
-                asset=asset,
-                value=float(values.get("value", 0.0)),
-                useful_life=values.get("life") if values.get("life") is not None else None,
+def _parse_depreciation_schedule(
+    data: object, years: Iterable[int]
+) -> List[DepreciationRow]:
+    rows: List[DepreciationRow] = []
+
+    if isinstance(data, Mapping):
+        raw_rows = data.get("rows")
+    else:
+        raw_rows = None
+
+    if isinstance(raw_rows, Iterable):
+        for item in raw_rows:
+            if not isinstance(item, Mapping):
+                continue
+            asset = str(item.get("asset_type") or item.get("asset") or "").strip()
+            if not asset:
+                continue
+            year_value = item.get("year")
+            try:
+                year = int(year_value)
+            except (TypeError, ValueError):
+                continue
+            acquisition = float(item.get("acquisition", 0.0) or 0.0)
+            asset_cost = float(item.get("asset_cost", acquisition) or 0.0)
+            rate = float(
+                item.get("depreciation_rate", item.get("rate", 0.0)) or 0.0
             )
-        )
-    return items
+            has_opening_nb = "opening_net_book" in item
+            has_opening_cum = "opening_cumulative" in item
+            opening_net_book = float(item.get("opening_net_book", 0.0) or 0.0)
+            opening_cumulative = float(item.get("opening_cumulative", 0.0) or 0.0)
+            rows.append(
+                DepreciationRow(
+                    asset_type=asset,
+                    year=year,
+                    acquisition=acquisition,
+                    asset_cost=asset_cost,
+                    depreciation_rate=rate,
+                    opening_net_book=opening_net_book,
+                    opening_cumulative=opening_cumulative,
+                    override_net_book=has_opening_nb,
+                    override_cumulative=has_opening_cum,
+                )
+            )
+
+    if rows:
+        rows.sort(key=lambda row: (row.asset_type, row.year))
+        return rows
+
+    # Backwards compatibility for the legacy straight-line mapping format.
+    if not isinstance(data, Mapping):
+        return rows
+
+    sequence_years = list(years)
+    fallback: List[DepreciationRow] = []
+    for asset, values in data.items():
+        if not isinstance(values, Mapping):
+            continue
+        base_value = float(values.get("value", 0.0) or 0.0)
+        life_value = values.get("life")
+        useful_life: Optional[int]
+        try:
+            useful_life = int(life_value) if life_value not in (None, "") else None
+        except (TypeError, ValueError):
+            useful_life = None
+
+        previous_net_book = 0.0
+        previous_cumulative = 0.0
+
+        for index, year in enumerate(sequence_years):
+            acquisition = base_value if index == 0 else 0.0
+            asset_cost = acquisition
+
+            if useful_life and useful_life > 0 and index < useful_life:
+                annual_depreciation = base_value / useful_life
+            else:
+                annual_depreciation = 0.0
+
+            total_asset_cost = asset_cost + previous_net_book
+            rate = annual_depreciation / total_asset_cost if total_asset_cost else 0.0
+            cumulative = previous_cumulative + annual_depreciation
+            net_book = total_asset_cost - cumulative
+            if net_book < 0 and annual_depreciation > 0:
+                net_book = 0.0
+                cumulative = total_asset_cost
+
+            fallback.append(
+                DepreciationRow(
+                    asset_type=str(asset),
+                    year=int(year),
+                    acquisition=acquisition,
+                    asset_cost=asset_cost,
+                    depreciation_rate=rate,
+                    opening_net_book=previous_net_book,
+                    opening_cumulative=previous_cumulative,
+                    override_net_book=index == 0,
+                    override_cumulative=index == 0,
+                )
+            )
+
+            previous_net_book = net_book
+            previous_cumulative = cumulative
+
+    fallback.sort(key=lambda row: (row.asset_type, row.year))
+    return fallback
 
 
 def _parse_working_capital(days: Mapping[str, List[int]]) -> WorkingCapitalDays:
@@ -254,7 +348,7 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
     """Parse a mapping of raw inputs into :class:`ModelInputs`."""
     years = [int(year) for year in raw["years"]]
     unit_costs = _parse_product_parameters(raw["unit_costs"], raw["markup"])
-    depreciation_items = _parse_depreciation(raw["depreciation"])
+    depreciation_schedule = _parse_depreciation_schedule(raw.get("depreciation", {}), years)
     working_capital = _parse_working_capital(raw["working_capital"]["days"])
     financing = _parse_financing(raw["financing"])
     sensitivity = _parse_sensitivity(raw["sensitivity"]["variables"])
@@ -373,7 +467,7 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         utility_schedule=utility,
         direct_labor_costs=raw["labor"]["direct"],
         indirect_labor_costs=raw["labor"]["indirect"],
-        depreciation_items=depreciation_items,
+        depreciation_schedule=depreciation_schedule,
         capital_expenditure=raw["capital_expenditure"],
         financing=financing,
         working_capital_days=working_capital,
@@ -402,7 +496,7 @@ __all__ = [
     "ModelInputs",
     "ProductParameters",
     "UtilitySchedule",
-    "DepreciationItem",
+    "DepreciationRow",
     "FinancingParameters",
     "DebtEntry",
     "WorkingCapitalDays",

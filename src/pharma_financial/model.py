@@ -82,6 +82,7 @@ class FinancialModel:
         self.products = inputs.products
         self._inflation = self._build_inflation_factors(inputs.inflation_series)
         self._risk_factors_cache: List[float] | None = None
+        self._depreciation_cache: "tuple[list[dict], dict[int, float], dict[int, float]] | None" = None
 
     # ------------------------------------------------------------------ core
     def _build_inflation_factors(self, series: Iterable[Number]) -> List[float]:
@@ -183,26 +184,72 @@ class FinancialModel:
             },
         )
 
-    def depreciation_schedule(self) -> List[float]:
-        depreciation = [0.0 for _ in self.years]
-        for item in self.inputs.depreciation_items:
-            if not item.useful_life or item.useful_life <= 0:
-                continue
-            annual = item.value / item.useful_life
-            for idx in range(len(self.years)):
-                depreciation[idx] += annual
+    def _depreciation_rollforward(self) -> "tuple[list[dict], dict[int, float], dict[int, float]]":
+        if self._depreciation_cache is not None:
+            return self._depreciation_cache
 
-        additions = self.inputs.capital_expenditure.get("annual_additions", {})
-        for year_str, value in additions.items():
-            year = int(year_str)
-            if year not in self.years:
-                continue
-            start_idx = self.years.index(year)
-            years_remaining = len(self.years) - start_idx
-            annual = value / max(years_remaining, 1)
-            for idx in range(start_idx, len(self.years)):
-                depreciation[idx] += annual
-        return depreciation
+        per_year_depreciation: dict[int, float] = {int(year): 0.0 for year in self.years}
+        per_year_net_book: dict[int, float] = {int(year): 0.0 for year in self.years}
+        details: list[dict] = []
+
+        schedule = sorted(
+            self.inputs.depreciation_schedule,
+            key=lambda row: (row.asset_type, row.year),
+        )
+        last_net_book: dict[str, float] = {}
+        last_cumulative: dict[str, float] = {}
+
+        for row in schedule:
+            asset = row.asset_type
+            previous_net_book = last_net_book.get(asset)
+            previous_cumulative = last_cumulative.get(asset)
+
+            if previous_net_book is None or row.override_net_book:
+                previous_net_book = row.opening_net_book
+            if previous_cumulative is None or row.override_cumulative:
+                previous_cumulative = row.opening_cumulative
+
+            previous_net_book = float(previous_net_book or 0.0)
+            previous_cumulative = float(previous_cumulative or 0.0)
+
+            total_asset_cost = row.asset_cost + previous_net_book
+            total_depreciation = total_asset_cost * row.depreciation_rate
+            cumulative_depreciation = previous_cumulative + total_depreciation
+            net_book_value = total_asset_cost - cumulative_depreciation
+
+            if net_book_value < 0 and total_asset_cost >= 0:
+                allowable = max(total_asset_cost - previous_cumulative, 0.0)
+                total_depreciation = allowable
+                cumulative_depreciation = previous_cumulative + total_depreciation
+                net_book_value = max(total_asset_cost - cumulative_depreciation, 0.0)
+
+            per_year_depreciation[row.year] = per_year_depreciation.get(row.year, 0.0) + total_depreciation
+            per_year_net_book[row.year] = per_year_net_book.get(row.year, 0.0) + net_book_value
+
+            last_net_book[asset] = net_book_value
+            last_cumulative[asset] = cumulative_depreciation
+
+            details.append(
+                {
+                    "asset_type": asset,
+                    "year": row.year,
+                    "acquisition": row.acquisition,
+                    "asset_cost": row.asset_cost,
+                    "opening_net_book": previous_net_book,
+                    "total_asset_cost": total_asset_cost,
+                    "depreciation_rate": row.depreciation_rate,
+                    "total_depreciation": total_depreciation,
+                    "cumulative_depreciation": cumulative_depreciation,
+                    "net_book_value": net_book_value,
+                }
+            )
+
+        self._depreciation_cache = (details, per_year_depreciation, per_year_net_book)
+        return self._depreciation_cache
+
+    def depreciation_schedule(self) -> List[float]:
+        _, per_year, _ = self._depreciation_rollforward()
+        return [per_year.get(year, 0.0) for year in self.years]
 
     # ----------------------------------------------------------- main outputs
     def income_statement(self) -> Table:
@@ -236,6 +283,7 @@ class FinancialModel:
                 "Total Expenses": total_expenses,
                 "EBITDA": ebitda,
                 "Depreciation": depreciation,
+                "Total Depreciation Expense": depreciation,
                 "EBIT": ebit,
                 "Interest": interest,
                 "EBT": ebt,
@@ -401,6 +449,10 @@ class FinancialModel:
         return _difference(balances)
 
     def _net_ppe_schedule(self) -> List[float]:
+        if self.inputs.depreciation_schedule:
+            _, _, per_year_net = self._depreciation_rollforward()
+            return [per_year_net.get(year, 0.0) for year in self.years]
+
         capex = self._capex_series()
         depreciation = self.depreciation_schedule()
         cumulative_capex = _cumulative(capex)

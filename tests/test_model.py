@@ -21,6 +21,7 @@ class FinancialModelTest(unittest.TestCase):
         self.assertEqual(income.index, self.inputs.years)
         self.assertIn("Net Revenue", income.data)
         self.assertIn("EBITDA", income.data)
+        self.assertIn("Total Depreciation Expense", income.data)
 
     def test_cash_flow_consistency(self):
         cash_flow = self.outputs.cash_flow
@@ -112,6 +113,22 @@ class FinancialModelTest(unittest.TestCase):
         self.assertEqual(len(liabilities), len(manual))
         for actual, expected in zip(liabilities, manual):
             self.assertAlmostEqual(actual, expected, places=6)
+
+    def test_depreciation_schedule_feeds_statements(self):
+        depreciation = self.model.depreciation_schedule()
+        income_dep = self.outputs.income_statement.column("Depreciation")
+        dep_expense = self.outputs.income_statement.column("Total Depreciation Expense")
+        self.assertEqual(depreciation, income_dep)
+        for actual, expense in zip(depreciation, dep_expense):
+            self.assertAlmostEqual(actual, expense, places=6)
+
+        details, per_year_depr, per_year_nb = self.model._depreciation_rollforward()
+        self.assertTrue(details)
+
+        net_ppe = self.outputs.balance_sheet.column("Net PP&E")
+        for idx, year in enumerate(self.inputs.years):
+            self.assertAlmostEqual(per_year_depr.get(year, 0.0), depreciation[idx], places=6)
+            self.assertAlmostEqual(per_year_nb.get(year, 0.0), net_ppe[idx], places=6)
 
 
 if __name__ == "__main__":
