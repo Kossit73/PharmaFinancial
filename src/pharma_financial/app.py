@@ -522,7 +522,7 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     st.markdown("### Utility Schedule")
     _render_utility_schedule(payload)
 
-    st.markdown("### Inventory Input Table")
+    st.markdown("### Inventory & Accounts Payable Input Table")
     _render_inventory_inputs(payload)
 
     st.markdown("### Fixed Assets Schedule")
@@ -1342,7 +1342,7 @@ def _render_inventory_inputs(payload: dict) -> None:
     for index, row in enumerate(rows):
         container = st.container()
         with container:
-            cols = st.columns([2.0, 1.2, 1.2, 0.7])
+            cols = st.columns([2.0, 1.2, 1.2, 1.2, 0.7])
 
             current_label = str(
                 row.get(
@@ -1382,7 +1382,15 @@ def _render_inventory_inputs(payload: dict) -> None:
                 step=1,
             )
 
-            if cols[3].button("Remove", key=f"inventory_remove_{index}"):
+            payable_days = cols[3].number_input(
+                "Accounts Payable Days",
+                value=int(row.get("accounts_payable_days", 0)),
+                key=f"inventory_accounts_payable_days_{index}",
+                min_value=0,
+                step=1,
+            )
+
+            if cols[4].button("Remove", key=f"inventory_remove_{index}"):
                 del rows[index]
                 st.session_state["inventory_rows"] = rows
                 _rerun()
@@ -1393,6 +1401,7 @@ def _render_inventory_inputs(payload: dict) -> None:
                     "year": parsed_year,
                     "days_in_year": int(days_in_year),
                     "inventory_days": int(inventory_days),
+                    "accounts_payable_days": int(payable_days),
                 }
             )
 
@@ -1434,6 +1443,13 @@ def _render_inventory_inputs(payload: dict) -> None:
             min_value=0,
             step=1,
         )
+        new_payable_days = st.number_input(
+            "Accounts Payable Days (new)",
+            value=int(reference.get("accounts_payable_days", 0)),
+            key="inventory_new_payable",
+            min_value=0,
+            step=1,
+        )
         submitted = st.form_submit_button("Add Year")
 
     if submitted:
@@ -1448,6 +1464,7 @@ def _render_inventory_inputs(payload: dict) -> None:
                     "year": parsed_year,
                     "days_in_year": int(new_days),
                     "inventory_days": int(new_inventory_days),
+                    "accounts_payable_days": int(new_payable_days),
                 }
             )
             st.session_state["inventory_rows"] = rows
@@ -1457,6 +1474,7 @@ def _render_inventory_inputs(payload: dict) -> None:
                 "inventory_new_label_custom",
                 "inventory_new_days",
                 "inventory_new_inventory",
+                "inventory_new_payable",
             ):
                 st.session_state.pop(key, None)
             _rerun()
@@ -2933,13 +2951,19 @@ def _payload_to_inventory_rows(payload: Mapping) -> list[dict]:
     else:
         inventory_days = []
 
+    payable_source = raw_days.get("accounts_payable", [])
+    if isinstance(payable_source, Iterable) and not isinstance(payable_source, (str, bytes)):
+        payable_days = [int(float(value)) for value in payable_source]
+    else:
+        payable_days = []
+
     calendar_source = working.get("calendar_days", [])
     if isinstance(calendar_source, Iterable) and not isinstance(calendar_source, (str, bytes)):
         calendar_days = [int(float(value)) for value in calendar_source]
     else:
         calendar_days = []
 
-    max_length = max(len(years), len(inventory_days), len(calendar_days), 1)
+    max_length = max(len(years), len(inventory_days), len(payable_days), len(calendar_days), 1)
     rows: list[dict] = []
 
     for index in range(max_length):
@@ -2963,12 +2987,18 @@ def _payload_to_inventory_rows(payload: Mapping) -> list[dict]:
         else:
             inventory_day = 0
 
+        if index < len(payable_days):
+            payable_day = int(payable_days[index])
+        else:
+            payable_day = 0
+
         rows.append(
             {
                 "label": label,
                 "year": year_value,
                 "days_in_year": days_in_year,
                 "inventory_days": inventory_day,
+                "accounts_payable_days": payable_day,
             }
         )
 
@@ -2991,12 +3021,14 @@ def _inventory_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
 
     if not rows:
         days_mapping["inventory"] = []
+        days_mapping["accounts_payable"] = []
         working["calendar_days"] = []
         return
 
     labels: list[str] = []
     calendar_days: list[int] = []
     inventory_days: list[int] = []
+    accounts_payable_days: list[int] = []
 
     for index, row in enumerate(rows):
         label = str(row.get("label", row.get("Year", "")) or "").strip()
@@ -3016,7 +3048,22 @@ def _inventory_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
             inventory_value = 0
         inventory_days.append(inventory_value)
 
+        try:
+            payable_value = int(
+                float(
+                    row.get(
+                        "accounts_payable_days",
+                        row.get("Accounts Payable Days", 0),
+                    )
+                    or 0
+                )
+            )
+        except (TypeError, ValueError):
+            payable_value = 0
+        accounts_payable_days.append(payable_value)
+
     days_mapping["inventory"] = inventory_days
+    days_mapping["accounts_payable"] = accounts_payable_days
     working["calendar_days"] = calendar_days
 
     _align_payload_horizon(payload, labels, len(rows))

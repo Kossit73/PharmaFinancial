@@ -99,16 +99,20 @@ class RerunHelperTest(unittest.TestCase):
         self.assertTrue(rows)
 
         rows[0]["inventory_days"] = float(rows[0]["inventory_days"]) + 5
+        rows[0]["accounts_payable_days"] = float(rows[0]["accounts_payable_days"]) + 3
         rows[0]["days_in_year"] = float(rows[0]["days_in_year"]) - 1
 
         self.app._inventory_rows_to_payload(rows, payload)
 
         working = payload.get("working_capital", {})
         calendar = working.get("calendar_days", [])
-        inventory = working.get("days", {}).get("inventory", [])
+        day_mapping = working.get("days", {})
+        inventory = day_mapping.get("inventory", [])
+        payables = day_mapping.get("accounts_payable", [])
 
         self.assertAlmostEqual(calendar[0], rows[0]["days_in_year"], places=6)
         self.assertAlmostEqual(inventory[0], rows[0]["inventory_days"], places=6)
+        self.assertAlmostEqual(payables[0], rows[0]["accounts_payable_days"], places=6)
 
 
 if __name__ == "__main__":  # pragma: no cover
