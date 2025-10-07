@@ -84,6 +84,24 @@ class FinancialModelTest(unittest.TestCase):
             expected_total = raw[idx] + utilities[idx] + direct[idx] + general[idx]
             self.assertAlmostEqual(total_expenses[idx], expected_total, places=6)
 
+    def test_revenue_schedule_breakdown_matches_net_revenue(self):
+        schedule = self.model.revenue_schedule()
+        gross = schedule.column("Gross Revenue")
+        commission = schedule.column("Distributors Commission")
+        net = schedule.column("Net Revenue")
+
+        self.assertEqual(len(gross), len(self.inputs.years))
+        self.assertEqual(len(commission), len(self.inputs.years))
+        self.assertEqual(len(net), len(self.inputs.years))
+
+        for g, c, n in zip(gross, commission, net):
+            self.assertAlmostEqual(g - c, n, places=6)
+
+        product_columns = [schedule.column(product) for product in self.inputs.products]
+        for idx in range(len(self.inputs.years)):
+            expected_total = sum(column[idx] for column in product_columns)
+            self.assertAlmostEqual(expected_total, gross[idx], places=6)
+
     def test_interest_matches_financing_inputs(self):
         interest_column = self.outputs.income_statement.column("Interest")
         senior_interest, _ = self.model._senior_debt_schedules()

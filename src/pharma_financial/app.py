@@ -862,6 +862,18 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
     st.subheader("Statement of Financial Performance")
     st.dataframe(_with_year(outputs.income_statement), use_container_width=True)
 
+    st.markdown("#### Gross Revenue Schedule")
+    try:
+        revenue_schedule = model.revenue_schedule()
+    except Exception as exc:  # pragma: no cover - defensive guard for runtime issues
+        st.warning(f"Unable to calculate gross revenue schedule: {exc}")
+    else:
+        st.dataframe(_with_year(revenue_schedule), use_container_width=True)
+        st.caption(
+            "Gross Revenue is decomposed into product-level sales, distributor commissions, "
+            "and resulting net revenue."
+        )
+
     st.markdown("#### Total Expenses Schedule")
     try:
         expense_schedule = model.cost_structure()
