@@ -39,6 +39,7 @@ DEPRECIATION_LABEL_TO_VALUE = {
 
 MAX_VISIBLE_INVENTORY_ROWS = 2
 MAX_VISIBLE_INFLATION_ROWS = 2
+MAX_VISIBLE_RISK_ROWS = 2
 
 
 def _rerun() -> None:
@@ -2537,49 +2538,133 @@ def _render_inflation_schedule(payload: dict) -> None:
 
 
 def _render_risk_schedule(payload: dict) -> None:
-    rows = st.session_state.get("risk_rows", [])
+    rows: list[dict] = st.session_state.get("risk_rows", [])
     categories = _risk_categories(payload, rows)
 
     if not rows:
         st.info("No risk assumptions configured. Use the form below to add entries.")
 
-    updated_rows: list[dict] = []
-    for index, row in enumerate(rows):
-        cols = st.columns([2] + [1 for _ in categories] + [0.6])
-        year_label = cols[0].text_input(
-            "Year", value=str(row.get("Year", "")), key=f"risk_year_{index}"
+    updated_rows: list[dict] = list(rows)
+
+    def _build_year_catalog() -> list[str]:
+        payload_years = payload.get("years") or []
+        base_years = [str(year) for year in payload_years if year is not None]
+        existing = [
+            str(row.get("Year", "")).strip() for row in updated_rows if row.get("Year")
+        ]
+        catalog = list(dict.fromkeys([*base_years, *existing]))
+        if not catalog:
+            max_length = max(len(updated_rows), len(payload_years), 1)
+            catalog = [f"Year {index + 1}" for index in range(max_length)]
+        return catalog
+
+    visible_count = min(len(updated_rows), MAX_VISIBLE_RISK_ROWS)
+
+    if visible_count and len(updated_rows) > MAX_VISIBLE_RISK_ROWS:
+        st.caption(
+            "Select which risk year to edit using the dropdowns below. Additional years "
+            "remain part of the model and can be chosen from the selectors."
         )
 
-        cleaned_row = {"Year": year_label.strip()}
-        for position, category in enumerate(categories, start=1):
-            value = float(row.get(category, 0.0))
-            cleaned_row[category] = cols[position].number_input(
-                f"{category.title()} Risk",
-                value=value,
-                min_value=0.0,
-                max_value=1.0,
-                step=0.01,
-                format="%.4f",
-                key=f"risk_{category}_{index}",
+    for slot in range(visible_count):
+        if not updated_rows:
+            break
+
+        option_indices = list(range(len(updated_rows)))
+        default_index = min(slot, len(option_indices) - 1)
+
+        container = st.container()
+        with container:
+            selected_index = container.selectbox(
+                "Risk year",
+                option_indices,
+                index=option_indices.index(default_index),
+                format_func=lambda idx: str(
+                    updated_rows[idx].get("Year") or f"Year {idx + 1}"
+                ),
+                key=f"risk_row_selector_{slot}",
             )
 
-        if cols[-1].button("Remove", key=f"risk_remove_{index}"):
-            del rows[index]
-            st.session_state["risk_rows"] = rows
-            _rerun()
+            row = updated_rows[selected_index]
+            year_catalog = _build_year_catalog()
 
-        updated_rows.append(cleaned_row)
+            column_widths = [2.0] + [1.0 for _ in categories] + [0.7]
+            cols = st.columns(column_widths)
+
+            current_label = str(
+                row.get("Year")
+                or (
+                    year_catalog[selected_index]
+                    if selected_index < len(year_catalog)
+                    else f"Year {selected_index + 1}"
+                )
+            )
+            selected_label = _select_or_create_option(
+                cols[0],
+                "Year",
+                year_catalog,
+                f"risk_label_{slot}_{selected_index}",
+                current_value=current_label,
+            )
+            if selected_label and selected_label not in year_catalog:
+                year_catalog.append(selected_label)
+
+            label = (selected_label or current_label).strip()
+            if not label:
+                label = f"Year {selected_index + 1}"
+
+            cleaned_row = {"Year": label}
+            for position, category in enumerate(categories, start=1):
+                value = float(row.get(category, 0.0))
+                cleaned_row[category] = cols[position].number_input(
+                    f"{category.title()} Risk",
+                    value=value,
+                    min_value=0.0,
+                    max_value=1.0,
+                    step=0.01,
+                    format="%.4f",
+                    key=f"risk_{category}_{slot}_{selected_index}",
+                )
+
+            if cols[-1].button("Remove", key=f"risk_remove_{slot}_{selected_index}"):
+                del updated_rows[selected_index]
+                st.session_state["risk_rows"] = updated_rows
+                _rerun()
+                continue
+
+            updated_rows[selected_index] = cleaned_row
 
     if updated_rows != rows:
         st.session_state["risk_rows"] = updated_rows
+        rows = updated_rows
+
+    year_catalog = _build_year_catalog()
+    reference = rows[-1] if rows else {"Year": year_catalog[0] if year_catalog else "Year 1"}
 
     with st.form("add_risk_row"):
-        new_year = st.text_input("Year", key="risk_new_year")
+        st.markdown("#### Add risk entry")
+        if len(year_catalog) > len(rows):
+            fallback_label = year_catalog[len(rows)]
+        elif year_catalog:
+            fallback_label = year_catalog[-1]
+        else:
+            fallback_label = f"Year {len(rows) + 1}"
+
+        new_label = _select_or_create_option(
+            st,
+            "Year",
+            year_catalog,
+            "risk_new_label",
+            current_value=str(reference.get("Year", fallback_label)),
+        )
+        if new_label and new_label not in year_catalog:
+            year_catalog.append(new_label)
+
         new_values: dict[str, float] = {}
         for category in categories:
             new_values[category] = st.number_input(
                 f"{category.title()} Risk",
-                value=float(st.session_state.get(f"risk_new_{category}", 0.0)),
+                value=float(reference.get(category, 0.0)),
                 min_value=0.0,
                 max_value=1.0,
                 step=0.01,
@@ -2589,15 +2674,19 @@ def _render_risk_schedule(payload: dict) -> None:
         submitted = st.form_submit_button("Add")
 
     if submitted:
-        if not new_year.strip():
-            st.warning("Year label is required to add a risk entry.")
-        else:
-            rows.append({"Year": new_year.strip(), **new_values})
-            st.session_state["risk_rows"] = rows
-            st.session_state.pop("risk_new_year", None)
-            for category in categories:
-                st.session_state.pop(f"risk_new_{category}", None)
-            _rerun()
+        clean_label = (new_label or "").strip() or f"Year {len(rows) + 1}"
+        updated_rows = list(rows)
+        updated_rows.append({"Year": clean_label, **new_values})
+        st.session_state["risk_rows"] = updated_rows
+        for key in (
+            "risk_new_label",
+            "risk_new_label_select",
+            "risk_new_label_custom",
+        ):
+            st.session_state.pop(key, None)
+        for category in categories:
+            st.session_state.pop(f"risk_new_{category}", None)
+        _rerun()
 
 
 def _render_goal_seek(payload: dict) -> None:
