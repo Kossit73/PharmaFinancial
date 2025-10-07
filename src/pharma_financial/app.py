@@ -38,6 +38,7 @@ DEPRECIATION_LABEL_TO_VALUE = {
 }
 
 MAX_VISIBLE_INVENTORY_ROWS = 2
+MAX_VISIBLE_INFLATION_ROWS = 2
 
 
 def _rerun() -> None:
@@ -2397,45 +2398,122 @@ def _render_tax_schedule(payload: dict) -> None:
 
 def _render_inflation_schedule(payload: dict) -> None:
     rows: list[dict] = st.session_state.get("inflation_rows", [])
+    payload_years = payload.get("years", [])
+    updated_rows: list[dict] = list(rows)
 
     if not rows:
         st.info("No inflation assumptions configured. Use the form below to add entries.")
 
-    header_cols = st.columns([3, 2, 1])
-    header_cols[0].markdown("**Years**")
-    header_cols[1].markdown("**Rate**")
-    header_cols[2].markdown(" ")
+    def _build_year_catalog() -> list[str]:
+        base_years = [str(year) for year in payload_years if year is not None]
+        existing = [
+            str(row.get("Year", "")).strip() for row in updated_rows if row.get("Year")
+        ]
+        catalog = list(dict.fromkeys([*base_years, *existing]))
+        if not catalog:
+            max_length = max(len(updated_rows), len(payload_years), 1)
+            catalog = [f"Year {index + 1}" for index in range(max_length)]
+        return catalog
 
-    updated_rows: list[dict] = []
-    for index, row in enumerate(rows):
-        cols = st.columns([3, 2, 1])
-        year_label = cols[0].text_input(
-            "Years",
-            value=row.get("Year", ""),
-            key=f"inflation_year_{index}",
+    visible_count = min(len(updated_rows), MAX_VISIBLE_INFLATION_ROWS)
+
+    if visible_count and len(updated_rows) > MAX_VISIBLE_INFLATION_ROWS:
+        st.caption(
+            "Select which inflation year to edit using the dropdowns below. Additional "
+            "years remain part of the model and can be chosen from the selectors."
         )
-        rate_value = cols[1].number_input(
-            "Rate",
-            value=float(row.get("Rate", 0.0)),
-            min_value=0.0,
-            step=0.001,
-            format="%.4f",
-            key=f"inflation_rate_{index}",
-        )
-        if cols[2].button("Remove", key=f"inflation_remove_{index}"):
-            del rows[index]
-            st.session_state["inflation_rows"] = rows
-            _rerun()
-        updated_rows.append({"Year": year_label.strip(), "Rate": rate_value})
+
+    for slot in range(visible_count):
+        if not updated_rows:
+            break
+
+        option_indices = list(range(len(updated_rows)))
+        default_index = min(slot, len(option_indices) - 1)
+
+        container = st.container()
+        with container:
+            selected_index = container.selectbox(
+                "Inflation year",
+                option_indices,
+                index=option_indices.index(default_index),
+                format_func=lambda idx: str(
+                    updated_rows[idx].get("Year") or f"Year {idx + 1}"
+                ),
+                key=f"inflation_row_selector_{slot}",
+            )
+
+            row = updated_rows[selected_index]
+            year_catalog = _build_year_catalog()
+
+            cols = st.columns([2.0, 1.2, 0.7])
+            current_label = str(
+                row.get("Year")
+                or (
+                    year_catalog[selected_index]
+                    if selected_index < len(year_catalog)
+                    else f"Year {selected_index + 1}"
+                )
+            )
+            selected_label = _select_or_create_option(
+                cols[0],
+                "Year",
+                year_catalog,
+                f"inflation_label_{slot}_{selected_index}",
+                current_value=current_label,
+            )
+            if selected_label and selected_label not in year_catalog:
+                year_catalog.append(selected_label)
+
+            label = (selected_label or current_label).strip()
+            if not label:
+                label = f"Year {selected_index + 1}"
+
+            rate_value = cols[1].number_input(
+                "Rate",
+                value=float(row.get("Rate", 0.0)),
+                min_value=0.0,
+                step=0.001,
+                format="%.4f",
+                key=f"inflation_rate_{slot}_{selected_index}",
+            )
+
+            if cols[2].button("Remove", key=f"inflation_remove_{slot}_{selected_index}"):
+                del updated_rows[selected_index]
+                st.session_state["inflation_rows"] = updated_rows
+                _rerun()
+                continue
+
+            updated_rows[selected_index] = {"Year": label, "Rate": float(rate_value)}
 
     if updated_rows != rows:
         st.session_state["inflation_rows"] = updated_rows
+        rows = updated_rows
 
+    year_catalog = _build_year_catalog()
+    reference = rows[-1] if rows else {"Year": year_catalog[0] if year_catalog else "Year 1"}
+
+    st.markdown("#### Add inflation entry")
     with st.form("add_inflation_row"):
-        new_year = st.text_input("Year label", key="inflation_new_year")
+        if len(year_catalog) > len(rows):
+            fallback_label = year_catalog[len(rows)]
+        elif year_catalog:
+            fallback_label = year_catalog[-1]
+        else:
+            fallback_label = f"Year {len(rows) + 1}"
+
+        new_label = _select_or_create_option(
+            st,
+            "Year",
+            year_catalog,
+            "inflation_new_label",
+            current_value=str(reference.get("Year", fallback_label)),
+        )
+        if new_label and new_label not in year_catalog:
+            year_catalog.append(new_label)
+
         new_rate = st.number_input(
             "Rate",
-            value=0.0,
+            value=float(reference.get("Rate", 0.0)),
             min_value=0.0,
             step=0.001,
             format="%.4f",
@@ -2444,14 +2522,18 @@ def _render_inflation_schedule(payload: dict) -> None:
         submitted = st.form_submit_button("Add")
 
     if submitted:
-        if not new_year.strip():
-            st.warning("Year label is required to add an inflation entry.")
-        else:
-            rows.append({"Year": new_year.strip(), "Rate": new_rate})
-            st.session_state["inflation_rows"] = rows
-            st.session_state.pop("inflation_new_year", None)
-            st.session_state.pop("inflation_new_rate", None)
-            _rerun()
+        clean_label = (new_label or "").strip() or f"Year {len(rows) + 1}"
+        updated_rows = list(rows)
+        updated_rows.append({"Year": clean_label, "Rate": float(new_rate)})
+        st.session_state["inflation_rows"] = updated_rows
+        for key in (
+            "inflation_new_label",
+            "inflation_new_label_select",
+            "inflation_new_label_custom",
+            "inflation_new_rate",
+        ):
+            st.session_state.pop(key, None)
+        _rerun()
 
 
 def _render_risk_schedule(payload: dict) -> None:
