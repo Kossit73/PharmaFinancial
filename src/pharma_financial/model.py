@@ -343,7 +343,7 @@ class FinancialModel:
         self, entries: List[DebtEntry], rate: float
     ) -> tuple[List[float], List[float]]:
         length = len(self.years)
-        interest_schedule, outstanding_schedule, _, _ = amortise_entries(
+        interest_schedule, _, outstanding_schedule, _ = amortise_entries(
             entries, rate, self.years
         )
         if len(interest_schedule) < length:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from itertools import accumulate
 from typing import Iterable, List, Sequence, Tuple
 
 from .inputs import DebtEntry
@@ -14,8 +13,9 @@ class DebtPeriod:
     """Represents a single period within a debt amortisation schedule."""
 
     year: int
+    interest: float
+    principal: float
     payment: float
-    cumulative: float
     outstanding: float
 
 
@@ -42,9 +42,13 @@ def amortise_entry(entry: DebtEntry, rate: float, years: Sequence[int]) -> List[
     except ValueError:
         return schedule
 
-    principal = max(float(entry.amount), float(entry.outstanding))
-    opening_outstanding = min(float(entry.outstanding), principal)
-    cumulative_paid = principal - opening_outstanding
+    principal = float(entry.amount)
+    if principal <= 0.0:
+        return schedule
+
+    opening_outstanding = float(entry.outstanding or principal)
+    opening_outstanding = min(opening_outstanding, principal)
+    balance = max(opening_outstanding, 0.0)
     duration = max(int(entry.duration or 0), 1)
 
     for offset in range(duration):
@@ -52,29 +56,29 @@ def amortise_entry(entry: DebtEntry, rate: float, years: Sequence[int]) -> List[
         if idx >= len(years):
             break
 
-        current_outstanding = max(principal - cumulative_paid, 0.0)
-        if current_outstanding <= 0.0:
+        if balance <= 0.0:
             break
 
         remaining_periods = duration - offset
-        principal_share = (
-            current_outstanding / remaining_periods
-            if remaining_periods > 0
-            else current_outstanding
-        )
-        payment = max(current_outstanding * float(rate), principal_share)
-        if payment > current_outstanding:
-            payment = current_outstanding
+        remaining_periods = max(remaining_periods, 1)
 
-        cumulative_paid += payment
-        outstanding_after = max(principal - cumulative_paid, 0.0)
+        interest_payment = balance * float(rate)
+
+        principal_payment = balance / remaining_periods
+        if principal_payment > balance:
+            principal_payment = balance
+
+        total_payment = interest_payment + principal_payment
+
+        balance = max(balance - principal_payment, 0.0)
 
         schedule.append(
             DebtPeriod(
                 year=years[idx],
-                payment=payment,
-                cumulative=cumulative_paid,
-                outstanding=outstanding_after,
+                interest=interest_payment,
+                principal=principal_payment,
+                payment=total_payment,
+                outstanding=balance,
             )
         )
 
@@ -88,6 +92,7 @@ def amortise_entries(
 
     horizon = len(years)
     interest_schedule = [0.0 for _ in range(horizon)]
+    principal_schedule = [0.0 for _ in range(horizon)]
     outstanding_schedule = [0.0 for _ in range(horizon)]
     entry_schedules: List[List[DebtPeriod]] = []
 
@@ -99,8 +104,8 @@ def amortise_entries(
                 idx = years.index(period.year)
             except ValueError:
                 continue
-            interest_schedule[idx] += period.payment
+            interest_schedule[idx] += period.interest
+            principal_schedule[idx] += period.principal
             outstanding_schedule[idx] += period.outstanding
 
-    cumulative_schedule = list(accumulate(interest_schedule)) if horizon else []
-    return interest_schedule, outstanding_schedule, cumulative_schedule, entry_schedules
+    return interest_schedule, principal_schedule, outstanding_schedule, entry_schedules
