@@ -2767,32 +2767,102 @@ def _render_debt_section(
 def _render_tax_schedule(payload: dict) -> None:
     tax = payload.setdefault("tax", {})
     years = payload.get("years", [])
-    base_rate = st.number_input(
-        "Base tax rate",
-        value=float(tax.get("rate", 0.0)),
-        step=0.01,
-        format="%.4f",
-        key="tax_base_rate",
-    )
-    tax["rate"] = base_rate
-    tax["timing_adjustment"] = st.number_input(
-        "Timing adjustment",
-        value=float(tax.get("timing_adjustment", 0.0)),
-        step=0.01,
-        format="%.4f",
-        key="tax_timing",
-    )
 
-    schedule = _ensure_schedule_length(tax.get("schedule", []), len(years), fill=base_rate)
-    for index, year in enumerate(years):
-        schedule[index] = st.number_input(
-            f"Tax rate {year}",
-            value=float(schedule[index]),
+    if not years:
+        st.info(
+            "No projection years available. Configure projection years to edit tax "
+            "assumptions."
+        )
+        return
+
+    base_rate = float(tax.get("rate", 0.0))
+    timing_adjustment = float(tax.get("timing_adjustment", 0.0))
+
+    col_base, col_timing = st.columns(2)
+    with col_base:
+        base_rate = col_base.number_input(
+            "Base tax rate",
+            value=base_rate,
             step=0.01,
             format="%.4f",
-            key=f"tax_rate_{index}",
+            key="tax_base_rate",
         )
-    tax["schedule"] = schedule
+    with col_timing:
+        timing_adjustment = col_timing.number_input(
+            "Timing adjustment",
+            value=timing_adjustment,
+            step=0.01,
+            format="%.4f",
+            key="tax_timing",
+        )
+
+    tax["rate"] = float(base_rate)
+    tax["timing_adjustment"] = float(timing_adjustment)
+
+    schedule = _ensure_schedule_length(tax.get("schedule", []), len(years), fill=base_rate)
+
+    default_rows = [
+        {
+            "Year": str(year if year is not None else f"Year {index + 1}"),
+            "Rate": float(schedule[index]),
+        }
+        for index, year in enumerate(years)
+    ]
+
+    rows_key = "tax_rows"
+    if rows_key not in st.session_state:
+        st.session_state[rows_key] = default_rows
+
+    rows: list[dict] = st.session_state.get(rows_key, default_rows)
+    if len(rows) != len(default_rows):
+        rows = default_rows
+        st.session_state[rows_key] = rows
+
+    # keep the editor compact while still allowing inline edits
+    edited = st.data_editor(
+        rows,
+        hide_index=True,
+        use_container_width=True,
+        key="tax_schedule_editor",
+        column_config={
+            "Year": st.column_config.Column(
+                "Year",
+                width="medium",
+                help="Projection year associated with the tax rate.",
+            ),
+            "Rate": st.column_config.NumberColumn(
+                "Tax Rate",
+                min_value=0.0,
+                format="%.4f",
+                help="Effective tax rate applied for the selected year.",
+            ),
+        },
+        height=200,
+    )
+
+    if hasattr(edited, "to_dict"):
+        edited_rows = edited.to_dict("records")
+    else:
+        edited_rows = list(edited)
+
+    st.session_state[rows_key] = edited_rows
+
+    # rebuild the ordered schedule matching the projection years
+    rate_lookup: dict[str, float] = {
+        str(row.get("Year", "")).strip(): float(row.get("Rate", base_rate))
+        for row in edited_rows
+        if row.get("Year") is not None
+    }
+
+    resolved_schedule: list[float] = []
+    for index, year in enumerate(years):
+        key = str(year)
+        fallback_key = f"Year {index + 1}"
+        resolved_schedule.append(
+            rate_lookup.get(key, rate_lookup.get(fallback_key, float(schedule[index])))
+        )
+
+    tax["schedule"] = resolved_schedule
 
 
 def _render_inflation_schedule(payload: dict) -> None:
