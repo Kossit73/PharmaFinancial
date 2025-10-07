@@ -586,6 +586,13 @@ class FinancialModel:
         balances = self._working_capital_balances().column("Net Working Capital")
         return _difference(balances)
 
+    def working_capital_schedule(self) -> Table:
+        """Expose working-capital balances alongside year-over-year changes."""
+
+        balances = self._working_capital_balances()
+        changes = self._working_capital_changes()
+        return balances.with_columns(**{"Change in Net Working Capital": changes})
+
     def inventory_schedule(self) -> Table:
         """Reconcile inventory inputs to the balance-sheet values."""
 

@@ -121,6 +121,38 @@ class FinancialModelTest(unittest.TestCase):
                 expected_day = configured_days[idx] if idx < len(configured_days) else configured_days[-1]
             self.assertAlmostEqual(inventory_days[idx], expected_day, places=6)
 
+    def test_working_capital_schedule_matches_balance_sheet(self):
+        schedule = self.model.working_capital_schedule()
+        balance = self.outputs.balance_sheet
+        self.assertEqual(schedule.index, self.inputs.years)
+
+        for column in [
+            "Accounts Receivable",
+            "Inventory",
+            "Prepaid Expenses",
+            "Other Assets",
+        ]:
+            schedule_values = schedule.column(column)
+            balance_values = balance.column(column)
+            for actual, expected in zip(schedule_values, balance_values):
+                self.assertAlmostEqual(actual, expected, places=6)
+
+        payables = schedule.column("Accounts Payable")
+        other_liabilities = schedule.column("Other Liabilities")
+        # Total liabilities on the balance sheet already aggregates debt balances.
+        # Ensure working-capital payables remain non-negative.
+        for value in payables + other_liabilities:
+            self.assertGreaterEqual(value, 0.0)
+
+        net_working = schedule.column("Net Working Capital")
+        changes = schedule.column("Change in Net Working Capital")
+        for idx, value in enumerate(net_working):
+            if idx == 0:
+                expected_change = value
+            else:
+                expected_change = value - net_working[idx - 1]
+            self.assertAlmostEqual(changes[idx], expected_change, places=6)
+
     def test_senior_debt_outstanding_clears_by_horizon(self):
         _, outstanding = self.model._senior_debt_schedules()
         self.assertTrue(outstanding)

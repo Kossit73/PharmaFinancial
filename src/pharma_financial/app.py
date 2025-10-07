@@ -542,19 +542,37 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     _debt_rows_to_payload(st.session_state.get("overdraft_rows", []), payload, "overdraft")
     st.session_state["input_payload"] = payload
 
-    st.markdown("### Inventory Schedule")
+    schedule_model: FinancialModel | None = None
     try:
         schedule_inputs = parse_inputs(payload)
         schedule_model = FinancialModel(schedule_inputs)
-        inventory_table = schedule_model.inventory_schedule()
-        st.dataframe(_with_year(inventory_table), use_container_width=True)
-        st.caption(
-            "Inventory is derived as cost of sales divided by calendar days "
-            "and multiplied by the configured inventory days, matching the "
-            "balance sheet totals."
-        )
     except Exception as exc:  # pragma: no cover - defensive user feedback
-        st.warning(f"Unable to compute inventory schedule: {exc}")
+        st.warning(f"Unable to initialise schedules: {exc}")
+
+    if schedule_model is not None:
+        st.markdown("### Working Capital Schedule")
+        try:
+            working_capital = schedule_model.working_capital_schedule()
+            st.dataframe(_with_year(working_capital), use_container_width=True)
+            st.caption(
+                "Working capital balances reconcile receivables, inventory, and "
+                "payables with the statement of financial position while "
+                "showing year-over-year changes."
+            )
+        except Exception as exc:  # pragma: no cover - defensive user feedback
+            st.warning(f"Unable to compute working capital schedule: {exc}")
+
+        st.markdown("### Inventory Schedule")
+        try:
+            inventory_table = schedule_model.inventory_schedule()
+            st.dataframe(_with_year(inventory_table), use_container_width=True)
+            st.caption(
+                "Inventory is derived as cost of sales divided by calendar days "
+                "and multiplied by the configured inventory days, matching the "
+                "balance sheet totals."
+            )
+        except Exception as exc:  # pragma: no cover - defensive user feedback
+            st.warning(f"Unable to compute inventory schedule: {exc}")
 
 
 def _render_dashboard_tab(outputs: FinancialOutputs) -> None:
