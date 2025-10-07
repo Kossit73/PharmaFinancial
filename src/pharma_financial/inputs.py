@@ -179,6 +179,7 @@ class ModelInputs:
     tax_timing_adjustment: float
     risk_schedule: Mapping[str, List[float]]
     scenarios: Mapping[str, Mapping[str, List[float]]]
+    scenario_tools: Mapping[str, List[str]]
     sensitivity: SensitivityParameters
     monte_carlo: MonteCarloParameters
     goal_seek: Optional[GoalSeekParameters]
@@ -595,6 +596,23 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
     if not risk_schedule:
         risk_schedule = {"inherent": [0.0 for _ in years]}
 
+    scenario_tools_raw = raw.get("scenario_tools", {})
+    scenario_tools: Dict[str, List[str]] = {}
+    if isinstance(scenario_tools_raw, Mapping):
+        for key, values in scenario_tools_raw.items():
+            key_name = str(key).strip()
+            if not key_name:
+                continue
+            cleaned: List[str] = []
+            if isinstance(values, Iterable):
+                for value in values:
+                    text = str(value).strip()
+                    if text:
+                        cleaned.append(text)
+            scenario_tools[key_name] = cleaned
+    else:
+        scenario_tools = {}
+
     goal_seek = None
     goal_data = raw.get("goal_seek")
     if isinstance(goal_data, Mapping):
@@ -630,6 +648,7 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         tax_timing_adjustment=float(tax_data.get("timing_adjustment", 0.0)),
         risk_schedule=risk_schedule,
         scenarios=raw["scenarios"],
+        scenario_tools=scenario_tools,
         sensitivity=sensitivity,
         monte_carlo=monte_carlo,
         goal_seek=goal_seek,

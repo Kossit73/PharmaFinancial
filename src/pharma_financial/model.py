@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Mapping, MutableMapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional
 
 from .debt import amortise_entries
 from .inputs import BreakEvenRow, DebtEntry, ModelInputs, ProductParameters
@@ -25,6 +25,13 @@ class FinancialOutputs:
     scenario_results: Dict[str, Table]
     sensitivity_results: Dict[str, Table]
     monte_carlo: Table
+    scenario_tool_results: Mapping[str, "ScenarioToolResult"]
+
+
+@dataclass
+class ScenarioToolResult:
+    rows: List[Mapping[str, Any]]
+    interpretation: str
 
 
 def _cumulative(values: Iterable[Number]) -> List[float]:
@@ -753,6 +760,256 @@ class FinancialModel:
         self._risk_factors_cache = None
         return results
 
+    def scenario_toolkit(self, scenarios: Mapping[str, Table]) -> Dict[str, ScenarioToolResult]:
+        configured = getattr(self.inputs, "scenario_tools", {}) or {}
+        if not scenarios or not configured:
+            return {}
+
+        scenario_names = list(scenarios.keys())
+        if not scenario_names:
+            return {}
+
+        base_name = None
+        for name in scenario_names:
+            if name.lower() == "base":
+                base_name = name
+                break
+        if base_name is None:
+            base_name = scenario_names[0]
+
+        def _final_values(variable: str) -> Dict[str, float]:
+            values: Dict[str, float] = {}
+            for scenario_name, table in scenarios.items():
+                if variable not in table.data:
+                    continue
+                series = table.column(variable)
+                if not series:
+                    continue
+                values[scenario_name] = float(series[-1])
+            return values
+
+        def _series_for(variable: str, scenario_name: str) -> List[float]:
+            table = scenarios.get(scenario_name)
+            if table is None or variable not in table.data:
+                return []
+            return table.column(variable)
+
+        results: Dict[str, ScenarioToolResult] = {}
+
+        # Decision tree analysis
+        decision_variables = configured.get("decision_tree", [])
+        if decision_variables:
+            decision_rows: List[Mapping[str, Any]] = []
+            narratives: List[str] = []
+            for variable in decision_variables:
+                finals = _final_values(variable)
+                if not finals:
+                    continue
+                best_scenario = max(finals, key=finals.get)
+                worst_scenario = min(finals, key=finals.get)
+                best_value = finals[best_scenario]
+                worst_value = finals[worst_scenario]
+                expected = sum(finals.values()) / len(finals)
+                decision_rows.append(
+                    {
+                        "Variable": variable,
+                        "Best Scenario": best_scenario,
+                        "Best Value": best_value,
+                        "Worst Scenario": worst_scenario,
+                        "Worst Value": worst_value,
+                        "Expected Value": expected,
+                    }
+                )
+                narratives.append(
+                    f"{variable} peaks under {best_scenario} and softens the most under {worst_scenario}."
+                )
+            if decision_rows:
+                interpretation = " ".join(narratives) or "Decision tree insights derived from configured scenarios."
+                results["decision_tree"] = ScenarioToolResult(rows=decision_rows, interpretation=interpretation)
+
+        # Stress testing
+        stress_variables = configured.get("stress_testing", [])
+        if stress_variables:
+            stress_rows: List[Mapping[str, Any]] = []
+            narratives: List[str] = []
+            for variable in stress_variables:
+                finals = _final_values(variable)
+                if not finals:
+                    continue
+                upside = max(finals.values())
+                downside = min(finals.values())
+                base_value = finals.get(base_name, sum(finals.values()) / len(finals))
+                stress_range = upside - downside
+                stress_rows.append(
+                    {
+                        "Variable": variable,
+                        "Base": base_value,
+                        "Downside": downside,
+                        "Upside": upside,
+                        "Stress Range": stress_range,
+                    }
+                )
+                narratives.append(
+                    f"{variable} endures a swing of {stress_range:,.2f} across configured stress scenarios."
+                )
+            if stress_rows:
+                results["stress_testing"] = ScenarioToolResult(
+                    rows=stress_rows,
+                    interpretation=" ".join(narratives) or "Stress testing compares upside and downside spans.",
+                )
+
+        # Backtesting
+        backtesting_variables = configured.get("backtesting", [])
+        if backtesting_variables:
+            back_rows: List[Mapping[str, Any]] = []
+            narratives: List[str] = []
+            for variable in backtesting_variables:
+                base_series = _series_for(variable, base_name)
+                if not base_series:
+                    continue
+                comparisons: List[float] = []
+                final_errors: List[float] = []
+                for scenario_name, table in scenarios.items():
+                    if scenario_name == base_name or variable not in table.data:
+                        continue
+                    series = _series_for(variable, scenario_name)
+                    if len(series) != len(base_series):
+                        continue
+                    errors = [abs(a - b) for a, b in zip(series, base_series)]
+                    if not errors:
+                        continue
+                    comparisons.append(sum(errors) / len(errors))
+                    final_errors.append(abs(series[-1] - base_series[-1]))
+                if not comparisons:
+                    continue
+                average_error = sum(comparisons) / len(comparisons)
+                max_error = max(final_errors) if final_errors else 0.0
+                back_rows.append(
+                    {
+                        "Variable": variable,
+                        "Reference Scenario": base_name,
+                        "Mean Absolute Error": average_error,
+                        "Worst Final Deviation": max_error,
+                    }
+                )
+                narratives.append(
+                    f"{variable} deviates on average by {average_error:,.2f} from the {base_name} path."
+                )
+            if back_rows:
+                results["backtesting"] = ScenarioToolResult(
+                    rows=back_rows,
+                    interpretation=" ".join(narratives) or "Backtesting compares alternative scenarios to the reference path.",
+                )
+
+        # Walk-forward testing
+        walk_forward_variables = configured.get("walk_forward", configured.get("walk_forward_testing", []))
+        if not isinstance(walk_forward_variables, list):
+            walk_forward_variables = list(walk_forward_variables)  # type: ignore[arg-type]
+        if walk_forward_variables:
+            walk_rows: List[Mapping[str, Any]] = []
+            narratives: List[str] = []
+            for variable in walk_forward_variables:
+                base_series = _series_for(variable, base_name)
+                if len(base_series) < 2:
+                    continue
+                growth_rates = []
+                for idx in range(1, len(base_series)):
+                    previous = base_series[idx - 1]
+                    current = base_series[idx]
+                    growth_rates.append(_safe_ratio(current - previous, previous))
+                if not growth_rates:
+                    continue
+                average_growth = sum(growth_rates) / len(growth_rates)
+                variance = sum((rate - average_growth) ** 2 for rate in growth_rates) / len(growth_rates)
+                volatility = variance ** 0.5
+                walk_rows.append(
+                    {
+                        "Variable": variable,
+                        "Average Growth": average_growth,
+                        "Volatility": volatility,
+                    }
+                )
+                narratives.append(
+                    f"{variable} grows on average {average_growth:.2%} with volatility of {volatility:.2%}."
+                )
+            if walk_rows:
+                results["walk_forward"] = ScenarioToolResult(
+                    rows=walk_rows,
+                    interpretation=" ".join(narratives) or "Walk-forward analysis summarises stability in the reference scenario.",
+                )
+
+        # Driver-based modelling
+        driver_variables = configured.get("driver_based", configured.get("driver_based_modeling", []))
+        if not isinstance(driver_variables, list):
+            driver_variables = list(driver_variables)  # type: ignore[arg-type]
+        if driver_variables:
+            driver_rows: List[Mapping[str, Any]] = []
+            narratives: List[str] = []
+            revenue_series = _series_for("Net Revenue", base_name)
+            for variable in driver_variables:
+                variable_series = _series_for(variable, base_name)
+                if not revenue_series or not variable_series:
+                    continue
+                ratios = [
+                    _safe_ratio(var, rev)
+                    for var, rev in zip(variable_series, revenue_series)
+                    if abs(rev) > 1e-12
+                ]
+                if not ratios:
+                    continue
+                final_ratio = ratios[-1]
+                average_ratio = sum(ratios) / len(ratios)
+                driver_rows.append(
+                    {
+                        "Variable": variable,
+                        "Average Contribution": average_ratio,
+                        "Latest Contribution": final_ratio,
+                    }
+                )
+                narratives.append(
+                    f"{variable} contributes {final_ratio:.2%} of revenue in the latest projection."
+                )
+            if driver_rows:
+                results["driver_based"] = ScenarioToolResult(
+                    rows=driver_rows,
+                    interpretation=" ".join(narratives) or "Driver-based modelling links value drivers to revenue.",
+                )
+
+        # Real options analysis
+        roa_variables = configured.get("real_options", configured.get("real_options_analysis", []))
+        if not isinstance(roa_variables, list):
+            roa_variables = list(roa_variables)  # type: ignore[arg-type]
+        if roa_variables:
+            roa_rows: List[Mapping[str, Any]] = []
+            narratives: List[str] = []
+            for variable in roa_variables:
+                finals = _final_values(variable)
+                if not finals:
+                    continue
+                base_value = finals.get(base_name)
+                if base_value is None:
+                    base_value = sum(finals.values()) / len(finals)
+                upside = max(finals.values())
+                option_value = max(upside - base_value, 0.0)
+                roa_rows.append(
+                    {
+                        "Variable": variable,
+                        "Reference": base_value,
+                        "Best Case": upside,
+                        "Option Value": option_value,
+                    }
+                )
+                narratives.append(
+                    f"{variable} offers an upside optionality of {option_value:,.2f} relative to the reference path."
+                )
+            if roa_rows:
+                results["real_options"] = ScenarioToolResult(
+                    rows=roa_rows,
+                    interpretation=" ".join(narratives) or "Real options quantify strategic upside over the reference scenario.",
+                )
+
+        return results
+
     def sensitivity_analysis(self) -> Dict[str, Table]:
         results: Dict[str, Table] = {}
         for variable, adjustments in self.inputs.sensitivity.variables.items():
@@ -1095,6 +1352,7 @@ class FinancialModel:
         payback = self.payback_schedule()
         discounted_payback = self.discounted_payback_schedule()
         scenarios = self.scenario_analysis()
+        scenario_tools = self.scenario_toolkit(scenarios)
         sensitivity = self.sensitivity_analysis()
         monte_carlo = self.monte_carlo_simulation()
         return FinancialOutputs(
@@ -1109,6 +1367,7 @@ class FinancialModel:
             scenario_results=scenarios,
             sensitivity_results=sensitivity,
             monte_carlo=monte_carlo,
+            scenario_tool_results=scenario_tools,
         )
 
 
@@ -1130,5 +1389,5 @@ def npf_irr(cashflows: Iterable[Number]) -> float:
     return float("nan")
 
 
-__all__ = ["FinancialModel", "FinancialOutputs", "npf_irr"]
+__all__ = ["FinancialModel", "FinancialOutputs", "ScenarioToolResult", "npf_irr"]
 

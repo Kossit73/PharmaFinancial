@@ -54,6 +54,17 @@ class FinancialModelTest(unittest.TestCase):
             if cap > 0:
                 self.assertLessEqual(totals.get(product, 0.0), cap)
 
+    def test_scenario_tools_present_interpretations(self):
+        tools = self.inputs.scenario_tools
+        self.assertTrue(tools)
+        outputs = self.outputs.scenario_tool_results
+        self.assertTrue(outputs)
+        for key, result in outputs.items():
+            self.assertIn(key, tools)
+            self.assertTrue(result.rows)
+            self.assertIsInstance(result.interpretation, str)
+            self.assertTrue(result.interpretation.strip())
+
     def test_npf_irr_handles_short_series(self):
         self.assertTrue(npf_irr([100]) != float("inf"))
 

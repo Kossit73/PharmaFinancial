@@ -42,6 +42,19 @@ MAX_VISIBLE_INFLATION_ROWS = 2
 MAX_VISIBLE_RISK_ROWS = 2
 MAX_VISIBLE_UTILITY_ROWS = 2
 MAX_VISIBLE_RECEIVABLE_ROWS = 2
+SCENARIO_TOOL_LABELS = {
+    "decision_tree": "Decision Tree Tools",
+    "stress_testing": "Stress Testing",
+    "backtesting": "Backtesting",
+    "walk_forward": "Walk-forward Testing",
+    "driver_based": "Driver-based Modeling",
+    "real_options": "Real Options Analysis (ROA)",
+}
+SCENARIO_TOOL_ALIASES = {
+    "walk_forward_testing": "walk_forward",
+    "driver_based_modeling": "driver_based",
+    "real_options_analysis": "real_options",
+}
 
 
 def _rerun() -> None:
@@ -840,15 +853,26 @@ def _render_scenarios(outputs: FinancialOutputs) -> None:
     _render_goal_seek(payload)
     st.markdown("### Scenario / IFs Configuration")
     _render_scenario_inputs(payload)
+    st.markdown("### Scenario Tool Configuration")
+    _render_scenario_tool_inputs(payload)
     st.session_state["input_payload"] = payload
 
     if not outputs.scenario_results:
         st.info("No scenario configurations provided in the assumptions file.")
-        return
+    else:
+        for name, df in outputs.scenario_results.items():
+            st.markdown(f"#### {name}")
+            st.dataframe(_with_year(df), use_container_width=True)
 
-    for name, df in outputs.scenario_results.items():
-        st.markdown(f"#### {name}")
-        st.dataframe(_with_year(df), use_container_width=True)
+    st.markdown("### Scenario Tool Insights")
+    if outputs.scenario_tool_results:
+        for key, result in outputs.scenario_tool_results.items():
+            label = SCENARIO_TOOL_LABELS.get(key, key.replace("_", " ").title())
+            st.markdown(f"#### {label}")
+            st.dataframe(_ensure_dataframe(result.rows), use_container_width=True)
+            st.caption(result.interpretation)
+    else:
+        st.caption("No scenario tools have been configured.")
 
 
 def _render_monte_carlo(outputs: FinancialOutputs) -> None:
@@ -3237,6 +3261,61 @@ def _render_scenario_inputs(payload: dict) -> None:
                 _rerun()
 
     payload["scenarios"] = updated
+
+
+def _render_scenario_tool_inputs(payload: dict) -> None:
+    tools = payload.setdefault("scenario_tools", {})
+
+    # normalise alias keys so uploaded payloads remain compatible
+    for alias, canonical in SCENARIO_TOOL_ALIASES.items():
+        if alias in tools:
+            values = tools.pop(alias)
+            if canonical in tools:
+                existing = tools[canonical]
+                merged = list(dict.fromkeys([*(existing or []), *(values or [])]))
+                tools[canonical] = merged
+            else:
+                tools[canonical] = list(values or [])
+
+    for key in SCENARIO_TOOL_LABELS:
+        tools.setdefault(key, [])
+
+    for key, label in SCENARIO_TOOL_LABELS.items():
+        st.markdown(f"#### {label}")
+        entries = list(tools.get(key) or [])
+        updated_entries: List[str] = []
+        if not entries:
+            st.caption("No variables configured yet. Use the form below to add one.")
+
+        for index, value in enumerate(entries):
+            cols = st.columns([0.8, 0.2])
+            cleaned = cols[0].text_input(
+                "Variable",
+                value=value,
+                key=f"scenario_tool_{key}_{index}",
+            )
+            remove = cols[1].button("Remove", key=f"scenario_tool_remove_{key}_{index}")
+            if remove:
+                continue
+            if cleaned.strip():
+                updated_entries.append(cleaned.strip())
+        tools[key] = updated_entries
+
+        with st.form(f"scenario_tool_add_{key}"):
+            new_value = st.text_input("Variable", key=f"scenario_tool_new_{key}")
+            submitted = st.form_submit_button("Add Variable")
+
+        if submitted:
+            if not new_value.strip():
+                st.warning(f"Provide a variable name before adding to {label}.")
+            else:
+                updated_entries.append(new_value.strip())
+                tools[key] = updated_entries
+                for suffix in ("", "_select", "_custom"):
+                    st.session_state.pop(f"scenario_tool_new_{key}{suffix}", None)
+                _rerun()
+
+    payload["scenario_tools"] = tools
 
 
 def _render_monte_carlo_inputs(payload: dict) -> None:

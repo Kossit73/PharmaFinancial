@@ -634,6 +634,29 @@
       ]
     }
   },
+  "scenario_tools": {
+    "decision_tree": [
+      "Net Revenue",
+      "Net Income"
+    ],
+    "stress_testing": [
+      "Net Revenue",
+      "EBITDA"
+    ],
+    "backtesting": [
+      "Net Revenue"
+    ],
+    "walk_forward": [
+      "Net Revenue"
+    ],
+    "driver_based": [
+      "EBITDA",
+      "EBIT"
+    ],
+    "real_options": [
+      "Net Income"
+    ]
+  },
   "monte_carlo": {
     "iterations": 1000,
     "revenue_growth_range": [
