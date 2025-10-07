@@ -37,6 +37,8 @@ DEPRECIATION_LABEL_TO_VALUE = {
     label: value for value, label in DEPRECIATION_METHOD_LABELS.items()
 }
 
+MAX_VISIBLE_INVENTORY_ROWS = 2
+
 
 def _rerun() -> None:
     """Trigger a Streamlit rerun using the available API.
@@ -1513,49 +1515,89 @@ def _render_receivable_inputs(payload: dict) -> None:
 def _render_inventory_inputs(payload: dict) -> None:
     rows: list[dict] = st.session_state.get("inventory_rows", [])
     payload_years = payload.get("years", [])
-    base_year_labels = [str(year) for year in payload_years if year is not None]
-    existing_labels = [str(row.get("label", "")) for row in rows if row.get("label")]
-    year_catalog = list(dict.fromkeys([*base_year_labels, *existing_labels]))
-    if not year_catalog:
-        max_length = max(len(rows), len(payload_years), 1)
-        year_catalog = [f"Year {index + 1}" for index in range(max_length)]
+
+    updated_rows: list[dict] = list(rows)
 
     if not rows:
         st.info("No inventory assumptions configured. Use the form below to add entries.")
 
-    updated_rows: list[dict] = []
+    def _build_year_catalog() -> list[str]:
+        base_year_labels = [str(year) for year in payload_years if year is not None]
+        existing_labels = [
+            str(row.get("label", "")) for row in updated_rows if row.get("label")
+        ]
+        catalog = list(dict.fromkeys([*base_year_labels, *existing_labels]))
+        if not catalog:
+            max_length = max(len(updated_rows), len(payload_years), 1)
+            catalog = [f"Year {index + 1}" for index in range(max_length)]
+        return catalog
 
-    for index, row in enumerate(rows):
+    visible_count = min(len(updated_rows), MAX_VISIBLE_INVENTORY_ROWS)
+
+    if visible_count and len(updated_rows) > MAX_VISIBLE_INVENTORY_ROWS:
+        st.caption(
+            "Select which inventory year to edit using the dropdowns below. Additional "
+            "years remain available in the model and can be chosen from the selectors."
+        )
+
+    for slot in range(visible_count):
+        year_catalog = _build_year_catalog()
+        option_indices = list(range(len(updated_rows)))
+        if not option_indices:
+            break
+
+        default_index = option_indices[min(slot, len(option_indices) - 1)]
         container = st.container()
         with container:
+            selected_index = container.selectbox(
+                "Inventory year",
+                option_indices,
+                index=option_indices.index(default_index),
+                format_func=lambda idx: str(
+                    updated_rows[idx].get("label")
+                    or updated_rows[idx].get("Year")
+                    or f"Year {idx + 1}"
+                ),
+                key=f"inventory_row_selector_{slot}",
+            )
+
+            row = updated_rows[selected_index]
+
             cols = st.columns([2.0, 1.2, 1.2, 1.2, 0.7])
 
             current_label = str(
                 row.get(
                     "label",
-                    year_catalog[index] if index < len(year_catalog) else f"Year {index + 1}",
+                    year_catalog[selected_index]
+                    if selected_index < len(year_catalog)
+                    else f"Year {selected_index + 1}",
                 )
             )
             selected_label = _select_or_create_option(
                 cols[0],
                 "Year",
                 year_catalog,
-                f"inventory_label_{index}",
+                f"inventory_label_{slot}_{selected_index}",
                 current_value=current_label,
             )
             if selected_label and selected_label not in year_catalog:
                 year_catalog.append(selected_label)
-            label = selected_label or f"Year {index + 1}"
+            label = selected_label or f"Year {selected_index + 1}"
 
             fallback_year = row.get("year")
             if not isinstance(fallback_year, (int, float)):
-                fallback_year = payload_years[index] if index < len(payload_years) else index + 1
-            parsed_year = _parse_year_value(label, int(fallback_year) if fallback_year else index + 1)
+                if selected_index < len(payload_years):
+                    fallback_year = payload_years[selected_index]
+                else:
+                    fallback_year = selected_index + 1
+            parsed_year = _parse_year_value(
+                label, int(fallback_year) if fallback_year else selected_index + 1
+            )
 
             days_in_year = cols[1].number_input(
                 "Days in Year",
                 value=int(row.get("days_in_year", 365)),
-                key=f"inventory_days_in_year_{index}",
+                key=f"inventory_days_in_year_{slot}_{selected_index}",
                 min_value=0,
                 step=1,
             )
@@ -1563,7 +1605,7 @@ def _render_inventory_inputs(payload: dict) -> None:
             inventory_days = cols[2].number_input(
                 "Inventory Days",
                 value=int(row.get("inventory_days", 0)),
-                key=f"inventory_inventory_days_{index}",
+                key=f"inventory_inventory_days_{slot}_{selected_index}",
                 min_value=0,
                 step=1,
             )
@@ -1571,29 +1613,29 @@ def _render_inventory_inputs(payload: dict) -> None:
             payable_days = cols[3].number_input(
                 "Accounts Payable Days",
                 value=int(row.get("accounts_payable_days", 0)),
-                key=f"inventory_accounts_payable_days_{index}",
+                key=f"inventory_accounts_payable_days_{slot}_{selected_index}",
                 min_value=0,
                 step=1,
             )
 
-            if cols[4].button("Remove", key=f"inventory_remove_{index}"):
-                del rows[index]
-                st.session_state["inventory_rows"] = rows
+            if cols[4].button("Remove", key=f"inventory_remove_{slot}_{selected_index}"):
+                del updated_rows[selected_index]
+                st.session_state["inventory_rows"] = updated_rows
                 _rerun()
 
-            updated_rows.append(
-                {
-                    "label": label,
-                    "year": parsed_year,
-                    "days_in_year": int(days_in_year),
-                    "inventory_days": int(inventory_days),
-                    "accounts_payable_days": int(payable_days),
-                }
-            )
+            updated_rows[selected_index] = {
+                "label": label,
+                "year": parsed_year,
+                "days_in_year": int(days_in_year),
+                "inventory_days": int(inventory_days),
+                "accounts_payable_days": int(payable_days),
+            }
 
     if updated_rows != rows:
         st.session_state["inventory_rows"] = updated_rows
         rows = updated_rows
+
+    year_catalog = _build_year_catalog()
 
     reference = rows[-1] if rows else {"label": year_catalog[0] if year_catalog else "Year 1"}
 
