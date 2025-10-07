@@ -102,6 +102,28 @@ class FinancialModelTest(unittest.TestCase):
             expected_total = sum(column[idx] for column in product_columns)
             self.assertAlmostEqual(expected_total, gross[idx], places=6)
 
+    def test_distributor_commission_uses_configured_rates(self):
+        schedule = self.model.revenue_schedule()
+        commission_column = schedule.column("Distributors Commission")
+        parameters = self.model._commission_parameters()
+        inflation = self.model._inflation
+
+        expected: list[float] = []
+        for idx, year in enumerate(self.inputs.years):
+            year_params = parameters.get(int(year), {})
+            total = 0.0
+            for product in self.inputs.products:
+                units = float(self.inputs.production_estimate[product][idx])
+                price = self.inputs.unit_costs[product].selling_price
+                gross_value = units * price * inflation[idx]
+                rate, share, _ = year_params.get(product, (0.0, 1.0, 0))
+                total += gross_value * rate * share
+            expected.append(total)
+
+        self.assertEqual(len(commission_column), len(expected))
+        for actual, expected_value in zip(commission_column, expected):
+            self.assertAlmostEqual(actual, expected_value, places=6)
+
     def test_interest_matches_financing_inputs(self):
         interest_column = self.outputs.income_statement.column("Interest")
         senior_interest, _ = self.model._senior_debt_schedules()

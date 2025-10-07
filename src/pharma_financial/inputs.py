@@ -27,6 +27,15 @@ class BreakEvenRow:
 
 
 @dataclass
+class DistributorCommissionRow:
+    year: int
+    product: str
+    rate: float
+    payment_days: int = 0
+    revenue_share: float = 1.0
+
+
+@dataclass
 class UtilitySchedule:
     electricity_per_day: List[float]
     electricity_rate: List[float]
@@ -182,6 +191,7 @@ class ModelInputs:
     direct_labor_costs: Mapping[str, float]
     indirect_labor_costs: Mapping[str, float]
     depreciation_schedule: List[DepreciationRow]
+    distributor_commission: List[DistributorCommissionRow]
     capital_expenditure: Mapping[str, float]
     financing: FinancingParameters
     working_capital_days: WorkingCapitalDays
@@ -339,6 +349,72 @@ def _parse_depreciation_schedule(
 
     fallback.sort(key=lambda row: (row.asset_type, row.year))
     return fallback
+
+
+def _coerce_percentage(value: object) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if numeric > 1.0:
+        return numeric / 100.0
+    if numeric < 0.0:
+        return 0.0
+    return numeric
+
+
+def _parse_distributor_commission(
+    data: object,
+    years: Sequence[int],
+    unit_costs: Mapping[str, ProductParameters],
+) -> List[DistributorCommissionRow]:
+    rows: list[DistributorCommissionRow] = []
+
+    if isinstance(data, Mapping):
+        raw_rows = data.get("rows")
+        if raw_rows is None and all(
+            key in data for key in ("year", "product", "rate")
+        ):
+            raw_rows = [data]
+    else:
+        raw_rows = data if isinstance(data, Iterable) else []
+
+    if isinstance(raw_rows, Iterable):
+        for item in raw_rows:
+            if not isinstance(item, Mapping):
+                continue
+            product = str(item.get("product", "")).strip()
+            if not product:
+                continue
+            year_value = item.get("year")
+            try:
+                year = int(year_value)
+            except (TypeError, ValueError):
+                continue
+            rate = _coerce_percentage(item.get("rate", item.get("percentage", 0.0)))
+            payment_days_value = item.get("payment_days", item.get("days", 0))
+            try:
+                payment_days = int(payment_days_value)
+            except (TypeError, ValueError):
+                payment_days = 0
+            revenue_share = _coerce_percentage(
+                item.get("revenue_share", item.get("share", 1.0))
+            )
+            rows.append(
+                DistributorCommissionRow(
+                    year=year,
+                    product=product,
+                    rate=rate,
+                    payment_days=payment_days,
+                    revenue_share=revenue_share if revenue_share > 0 else 1.0,
+                )
+            )
+
+    if rows:
+        rows.sort(key=lambda row: (row.year, row.product.lower()))
+        return rows
+
+    return []
 
 
 def _parse_ai(data: object) -> AIParameters:
@@ -550,6 +626,9 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
     years = [int(year) for year in raw["years"]]
     unit_costs = _parse_product_parameters(raw["unit_costs"], raw["markup"])
     depreciation_schedule = _parse_depreciation_schedule(raw.get("depreciation", {}), years)
+    commission_rows = _parse_distributor_commission(
+        raw.get("distributor_commission"), years, unit_costs
+    )
     working_capital = _parse_working_capital(raw["working_capital"], years)
     financing = _parse_financing(raw["financing"])
     sensitivity = _parse_sensitivity(raw["sensitivity"]["variables"])
@@ -696,6 +775,7 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         direct_labor_costs=raw["labor"]["direct"],
         indirect_labor_costs=raw["labor"]["indirect"],
         depreciation_schedule=depreciation_schedule,
+        distributor_commission=commission_rows,
         capital_expenditure=raw["capital_expenditure"],
         financing=financing,
         working_capital_days=working_capital,
@@ -731,6 +811,7 @@ __all__ = [
     "FinancingParameters",
     "DebtEntry",
     "WorkingCapitalDays",
+    "DistributorCommissionRow",
     "MonteCarloParameters",
     "SensitivityParameters",
     "GoalSeekParameters",

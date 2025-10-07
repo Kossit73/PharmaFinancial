@@ -99,6 +99,7 @@ class FinancialModel:
         self._revolver_outstanding_cache: List[float] | None = None
         self._overdraft_interest_cache: List[float] | None = None
         self._overdraft_outstanding_cache: List[float] | None = None
+        self._commission_cache: dict[int, dict[str, tuple[float, float, int]]] | None = None
 
     # ------------------------------------------------------------------ core
     def _build_inflation_factors(self, series: Iterable[Number]) -> List[float]:
@@ -118,6 +119,45 @@ class FinancialModel:
     def _unit_costs(self) -> Dict[str, float]:
         return {name: params.production_cost for name, params in self.inputs.unit_costs.items()}
 
+    def _commission_parameters(self) -> dict[int, dict[str, tuple[float, float, int]]]:
+        if self._commission_cache is not None:
+            return self._commission_cache
+
+        fallback_rates: dict[str, float] = {}
+        for name, params in self.inputs.unit_costs.items():
+            price = params.selling_price
+            if price:
+                fallback_rates[name] = max(params.freight_cost / price, 0.0)
+            else:
+                fallback_rates[name] = 0.0
+
+        schedule: dict[int, dict[str, tuple[float, float, int]]] = {}
+        for idx, year in enumerate(self.years):
+            factor = self._inflation[idx] if idx < len(self._inflation) else 1.0
+            if not factor:
+                factor = 1.0
+            per_product: dict[str, tuple[float, float, int]] = {}
+            for product in self.products:
+                base_rate = fallback_rates.get(product, 0.0)
+                adjusted_rate = base_rate / factor if factor else base_rate
+                per_product[product] = (adjusted_rate, 1.0, 0)
+            schedule[int(year)] = per_product
+
+        for row in self.inputs.distributor_commission:
+            year = int(row.year)
+            if year not in schedule:
+                continue
+            product = row.product
+            if product not in schedule[year]:
+                continue
+            rate = max(float(row.rate), 0.0)
+            share = float(row.revenue_share) if row.revenue_share > 0 else 1.0
+            payment_days = max(int(row.payment_days), 0)
+            schedule[year][product] = (rate, share, payment_days)
+
+        self._commission_cache = schedule
+        return schedule
+
     def _freight_costs(self) -> Dict[str, float]:
         return {name: params.freight_cost for name, params in self.inputs.unit_costs.items()}
 
@@ -134,7 +174,7 @@ class FinancialModel:
     def revenue_schedule(self) -> Table:
         production = self._production()
         prices = self._unit_prices()
-        freight = self._freight_costs()
+        commission_params = self._commission_parameters()
 
         gross_totals: List[float] = []
         commission: List[float] = []
@@ -145,12 +185,15 @@ class FinancialModel:
         for idx, year in enumerate(self.years):
             gross_year = 0.0
             commission_year = 0.0
+            year_rates = commission_params.get(int(year), {})
             for product in self.products:
                 units = production[product][idx]
                 gross_value = units * prices[product] * self._inflation[idx]
                 columns[product].append(gross_value)
                 gross_year += gross_value
-                commission_year += units * freight[product]
+                rate, share, _ = year_rates.get(product, (0.0, 1.0, 0))
+                commission_amount = gross_value * max(share, 0.0) * max(rate, 0.0)
+                commission_year += commission_amount
             gross_totals.append(gross_year)
             commission.append(commission_year)
             net_revenue.append(gross_year - commission_year)

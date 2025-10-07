@@ -48,6 +48,7 @@ MAX_VISIBLE_INFLATION_ROWS = 2
 MAX_VISIBLE_RISK_ROWS = 2
 MAX_VISIBLE_UTILITY_ROWS = 2
 MAX_VISIBLE_RECEIVABLE_ROWS = 2
+MAX_VISIBLE_COMMISSION_ROWS = 6
 SCENARIO_TOOL_LABELS = {
     "decision_tree": "Decision Tree Tools",
     "stress_testing": "Stress Testing",
@@ -326,6 +327,11 @@ def _resolve_inputs() -> ModelInputs:
     )
     _core_rows_to_payload(rows, payload)
 
+    commission_rows = st.session_state.setdefault(
+        "commission_rows", _payload_to_commission_rows(payload)
+    )
+    _commission_rows_to_payload(commission_rows, payload)
+
     utility_rows = st.session_state.setdefault(
         "utility_rows", _payload_to_utility_rows(payload)
     )
@@ -569,6 +575,9 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
                 st.session_state.pop(key, None)
             _rerun()
 
+    st.markdown("### Distributors Commission Input Table")
+    _render_distributor_commission(payload)
+
     st.markdown("### Direct Labour Structure")
     _render_labor_section("direct", "direct_labor_rows", payload)
 
@@ -603,6 +612,7 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     _render_ai_summary(payload)
 
     _core_rows_to_payload(st.session_state.get("core_assumption_rows", []), payload)
+    _commission_rows_to_payload(st.session_state.get("commission_rows", []), payload)
     _utility_rows_to_payload(st.session_state.get("utility_rows", []), payload)
     _receivable_rows_to_payload(st.session_state.get("receivable_rows", []), payload)
     _inventory_rows_to_payload(st.session_state.get("inventory_rows", []), payload)
@@ -2159,6 +2169,167 @@ def _render_inventory_inputs(payload: dict) -> None:
             ):
                 st.session_state.pop(key, None)
             _rerun()
+
+
+def _render_distributor_commission(payload: Mapping) -> None:
+    rows: list[dict] = st.session_state.get("commission_rows", [])
+    updated_rows = list(rows)
+
+    if pd is not None and rows:
+        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+    elif rows:
+        st.json(rows)
+    else:
+        st.info("No distributor commission entries configured. Use the form below to add rows.")
+
+    years = [int(year) for year in payload.get("years", [])] if isinstance(payload, Mapping) else []
+    unit_costs = payload.get("unit_costs", {}) if isinstance(payload, Mapping) else {}
+    product_options = [str(name) for name in unit_costs.keys()] if isinstance(unit_costs, Mapping) else []
+
+    if updated_rows:
+        indices = list(range(len(updated_rows)))
+        selected_index = st.selectbox(
+            "Select commission entry to edit",
+            indices,
+            format_func=lambda idx: f"{updated_rows[idx].get('Year', '')} – {updated_rows[idx].get('Product', '')}",
+            key="commission_selected_index",
+        )
+
+        entry = dict(updated_rows[selected_index])
+        edit_cols = st.columns([1, 2, 2, 2, 1])
+        if years:
+            try:
+                default_year_index = years.index(int(entry.get("Year", years[0])))
+            except ValueError:
+                default_year_index = 0
+        else:
+            default_year_index = 0
+        year_value = edit_cols[0].selectbox(
+            "Year",
+            years or [entry.get("Year", 0)],
+            index=default_year_index,
+            key=f"commission_year_{selected_index}",
+        )
+        product_value = _select_or_create_option(
+            edit_cols[1],
+            "Product",
+            product_options,
+            f"commission_product_{selected_index}",
+            current_value=str(entry.get("Product", "")),
+        )
+        rate_value = edit_cols[2].number_input(
+            "Commission (%)",
+            value=float(entry.get("Commission (%)", 0.0)),
+            step=0.05,
+            format="%.4f",
+            key=f"commission_rate_{selected_index}",
+        )
+        share_value = edit_cols[3].number_input(
+            "Revenue Share (%)",
+            value=float(entry.get("Revenue Share (%)", 100.0)),
+            step=1.0,
+            min_value=0.0,
+            max_value=100.0,
+            key=f"commission_share_{selected_index}",
+        )
+        payment_value = edit_cols[4].number_input(
+            "Payment Days",
+            value=int(entry.get("Payment Days", 0)),
+            step=1,
+            min_value=0,
+            key=f"commission_days_{selected_index}",
+        )
+
+        factors = _inflation_factors_from_payload(payload)
+        production = payload.get("production_estimate", {}) if isinstance(payload, Mapping) else {}
+        try:
+            year_position = years.index(year_value)
+        except ValueError:
+            year_position = 0
+        units_series = production.get(product_value, []) if isinstance(production, Mapping) else []
+        units = 0.0
+        if isinstance(units_series, Sequence) and year_position < len(units_series):
+            try:
+                units = float(units_series[year_position])
+            except (TypeError, ValueError):
+                units = 0.0
+        price_mapping = unit_costs.get(product_value, {}) if isinstance(unit_costs, Mapping) else {}
+        price = float(price_mapping.get("price", 0.0) or 0.0)
+        factor = factors[year_position] if year_position < len(factors) and factors[year_position] else 1.0
+        revenue_estimate = units * price * factor
+        commission_estimate = revenue_estimate * (rate_value / 100.0) * (share_value / 100.0)
+        st.caption(
+            f"Estimated gross revenue for {product_value} in {year_value}: {revenue_estimate:,.2f}. "
+            f"Commission impact: {commission_estimate:,.2f}."
+        )
+
+        updated_rows[selected_index] = {
+            "Year": int(year_value),
+            "Product": product_value.strip(),
+            "Commission (%)": float(rate_value),
+            "Revenue Share (%)": float(share_value),
+            "Payment Days": int(payment_value),
+        }
+
+        if st.button(
+            "Remove selected commission entry",
+            key=f"commission_remove_{selected_index}",
+        ):
+            del updated_rows[selected_index]
+            st.session_state["commission_rows"] = updated_rows
+            _rerun()
+
+    add_container = st.container()
+    add_container.markdown("#### Add commission entry")
+    with add_container.form("commission_add_form"):
+        add_year = st.selectbox("Year", years or [0], key="commission_add_year")
+        add_product = _select_or_create_option(
+            st, "Product", product_options, "commission_add_product"
+        )
+        add_rate = st.number_input(
+            "Commission (%)", value=0.0, step=0.05, format="%.4f", key="commission_add_rate"
+        )
+        add_share = st.number_input(
+            "Revenue Share (%)",
+            value=100.0,
+            step=1.0,
+            min_value=0.0,
+            max_value=100.0,
+            key="commission_add_share",
+        )
+        add_days = st.number_input(
+            "Payment Days", value=30, step=1, min_value=0, key="commission_add_days"
+        )
+        submitted = st.form_submit_button("Add commission")
+
+    if submitted:
+        product_clean = add_product.strip()
+        if not product_clean:
+            st.warning("Product is required to add a distributor commission entry.")
+        else:
+            updated_rows.append(
+                {
+                    "Year": int(add_year),
+                    "Product": product_clean,
+                    "Commission (%)": float(add_rate),
+                    "Revenue Share (%)": float(add_share),
+                    "Payment Days": int(add_days),
+                }
+            )
+            st.session_state["commission_rows"] = updated_rows
+            for key in (
+                "commission_add_year",
+                "commission_add_product_select",
+                "commission_add_product_custom",
+                "commission_add_rate",
+                "commission_add_share",
+                "commission_add_days",
+            ):
+                st.session_state.pop(key, None)
+            _rerun()
+
+    if updated_rows != rows:
+        st.session_state["commission_rows"] = updated_rows
 
 
 def _render_depreciation_schedule(payload: dict) -> None:
@@ -4967,6 +5138,131 @@ def _inflation_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
     payload["inflation_labels"] = labels
     _align_payload_horizon(payload, labels, len(rates))
 
+
+def _inflation_factors_from_payload(payload: Mapping) -> list[float]:
+    series = payload.get("inflation_series", []) if isinstance(payload, Mapping) else []
+    factors: list[float] = []
+    running = 1.0
+    if isinstance(series, Iterable):
+        for value in series:
+            try:
+                rate = float(value)
+            except (TypeError, ValueError):
+                rate = 0.0
+            running *= 1.0 + rate
+            factors.append(running)
+    return factors
+
+
+def _payload_to_commission_rows(payload: Mapping) -> list[dict]:
+    section = payload.get("distributor_commission") if isinstance(payload, Mapping) else None
+    if isinstance(section, Mapping):
+        raw_rows = section.get("rows", section)
+    else:
+        raw_rows = section
+
+    rows: list[dict] = []
+    if isinstance(raw_rows, Iterable) and not isinstance(raw_rows, (str, bytes)):
+        for item in raw_rows:
+            if not isinstance(item, Mapping):
+                continue
+            product = str(item.get("product", "")).strip()
+            if not product:
+                continue
+            year_value = item.get("year")
+            try:
+                year = int(year_value)
+            except (TypeError, ValueError):
+                continue
+            rate = float(item.get("rate", 0.0) or 0.0) * 100.0
+            share = float(item.get("revenue_share", 1.0) or 0.0) * 100.0
+            payment_days = int(float(item.get("payment_days", 0) or 0))
+            rows.append(
+                {
+                    "Year": year,
+                    "Product": product,
+                    "Commission (%)": rate,
+                    "Revenue Share (%)": share if share > 0 else 100.0,
+                    "Payment Days": max(payment_days, 0),
+                }
+            )
+
+    if rows:
+        rows.sort(key=lambda row: (row["Year"], str(row["Product"]).lower()))
+        return rows
+
+    years = payload.get("years", []) if isinstance(payload, Mapping) else []
+    unit_costs = payload.get("unit_costs", {}) if isinstance(payload, Mapping) else {}
+    factors = _inflation_factors_from_payload(payload)
+    fallback: list[dict] = []
+    if isinstance(unit_costs, Mapping):
+        for idx, year in enumerate(years):
+            factor = factors[idx] if idx < len(factors) else 1.0
+            if not factor:
+                factor = 1.0
+            for product, values in unit_costs.items():
+                if not isinstance(values, Mapping):
+                    continue
+                price = float(values.get("price", 0.0) or 0.0)
+                freight = float(values.get("freight", 0.0) or 0.0)
+                rate = (freight / price) / factor if price else 0.0
+                fallback.append(
+                    {
+                        "Year": int(year),
+                        "Product": str(product),
+                        "Commission (%)": rate * 100.0,
+                        "Revenue Share (%)": 100.0,
+                        "Payment Days": 30,
+                    }
+                )
+
+    fallback.sort(key=lambda row: (row["Year"], str(row["Product"]).lower()))
+    return fallback
+
+
+def _commission_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
+    cleaned: list[dict] = []
+    for row in rows or []:
+        if not isinstance(row, Mapping):
+            continue
+        year_value = row.get("Year")
+        try:
+            year = int(year_value)
+        except (TypeError, ValueError):
+            continue
+        product = str(row.get("Product", "")).strip()
+        if not product:
+            continue
+        rate_value = row.get("Commission (%)", row.get("Commission", 0.0))
+        share_value = row.get("Revenue Share (%)", row.get("Revenue Share", 100.0))
+        payment_value = row.get("Payment Days", 0)
+        try:
+            rate = max(float(rate_value) / 100.0, 0.0)
+        except (TypeError, ValueError):
+            rate = 0.0
+        try:
+            share = max(float(share_value) / 100.0, 0.0)
+        except (TypeError, ValueError):
+            share = 1.0
+        try:
+            payment_days = max(int(float(payment_value)), 0)
+        except (TypeError, ValueError):
+            payment_days = 0
+        cleaned.append(
+            {
+                "year": year,
+                "product": product,
+                "rate": rate,
+                "revenue_share": share if share > 0 else 1.0,
+                "payment_days": payment_days,
+            }
+        )
+
+    cleaned.sort(key=lambda entry: (entry["year"], entry["product"].lower()))
+    if cleaned:
+        payload["distributor_commission"] = {"rows": cleaned}
+    else:
+        payload.pop("distributor_commission", None)
 
 def _payload_to_risk_rows(payload: Mapping) -> list[dict]:
     source: Mapping[str, Sequence[float]] = payload.get("risk", {}) or {}
