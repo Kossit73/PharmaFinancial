@@ -206,7 +206,8 @@ def main() -> None:
     )
 
     inputs = _resolve_inputs()
-    outputs = FinancialModel(inputs).run()
+    model = FinancialModel(inputs)
+    outputs = model.run()
 
     tabs = st.tabs(
         [
@@ -225,7 +226,7 @@ def main() -> None:
     with tabs[0]:
         _render_inputs_tab(inputs)
     with tabs[1]:
-        _render_dashboard_tab(outputs)
+        _render_dashboard_tab(model, outputs)
     with tabs[2]:
         _render_statement_tab("Statement of Financial Performance", outputs.income_statement)
     with tabs[3]:
@@ -572,40 +573,8 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     _debt_rows_to_payload(st.session_state.get("overdraft_rows", []), payload, "overdraft")
     st.session_state["input_payload"] = payload
 
-    schedule_model: FinancialModel | None = None
-    try:
-        schedule_inputs = parse_inputs(payload)
-        schedule_model = FinancialModel(schedule_inputs)
-    except Exception as exc:  # pragma: no cover - defensive user feedback
-        st.warning(f"Unable to initialise schedules: {exc}")
 
-    if schedule_model is not None:
-        st.markdown("### Working Capital Schedule")
-        try:
-            working_capital = schedule_model.working_capital_schedule()
-            st.dataframe(_with_year(working_capital), use_container_width=True)
-            st.caption(
-                "Working capital balances reconcile receivables, inventory, and "
-                "payables with the statement of financial position while "
-                "showing year-over-year changes."
-            )
-        except Exception as exc:  # pragma: no cover - defensive user feedback
-            st.warning(f"Unable to compute working capital schedule: {exc}")
-
-        st.markdown("### Inventory Schedule")
-        try:
-            inventory_table = schedule_model.inventory_schedule()
-            st.dataframe(_with_year(inventory_table), use_container_width=True)
-            st.caption(
-                "Inventory is derived as cost of sales divided by calendar days "
-                "and multiplied by the configured inventory days, matching the "
-                "balance sheet totals."
-            )
-        except Exception as exc:  # pragma: no cover - defensive user feedback
-            st.warning(f"Unable to compute inventory schedule: {exc}")
-
-
-def _render_dashboard_tab(outputs: FinancialOutputs) -> None:
+def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> None:
     income = _with_year(outputs.income_statement)
     supports_plotly = px is not None and pd is not None
 
@@ -627,13 +596,12 @@ def _render_dashboard_tab(outputs: FinancialOutputs) -> None:
     metric_pairs = _extract_metric_pairs(outputs.summary_metrics)
     if not metric_pairs:
         st.info("No investment metrics were generated for the current assumptions.")
-        return
-
-    metric_cols = st.columns(len(metric_pairs))
-    for col, (name, value) in zip(metric_cols, metric_pairs):
-        with col:
-            formatted = _format_number(value)
-            st.metric(label=name, value=formatted)
+    else:
+        metric_cols = st.columns(len(metric_pairs))
+        for col, (name, value) in zip(metric_cols, metric_pairs):
+            with col:
+                formatted = _format_number(value)
+                st.metric(label=name, value=formatted)
 
     st.markdown("### Goal Seek Metric")
     goal_data = _ensure_dataframe(outputs.goal_seek)
@@ -664,6 +632,30 @@ def _render_dashboard_tab(outputs: FinancialOutputs) -> None:
             st.dataframe(display, use_container_width=True)
         else:
             st.dataframe(goal_data, use_container_width=True)
+
+    st.markdown("### Working Capital Schedule")
+    try:
+        working_capital = model.working_capital_schedule()
+        st.dataframe(_with_year(working_capital), use_container_width=True)
+        st.caption(
+            "Working capital balances reconcile receivables, inventory, and payables "
+            "with the statement of financial position while showing year-over-year "
+            "changes."
+        )
+    except Exception as exc:  # pragma: no cover - defensive user feedback
+        st.warning(f"Unable to compute working capital schedule: {exc}")
+
+    st.markdown("### Inventory Schedule")
+    try:
+        inventory_table = model.inventory_schedule()
+        st.dataframe(_with_year(inventory_table), use_container_width=True)
+        st.caption(
+            "Inventory is derived as cost of sales divided by calendar days and "
+            "multiplied by the configured inventory days, matching the balance "
+            "sheet totals."
+        )
+    except Exception as exc:  # pragma: no cover - defensive user feedback
+        st.warning(f"Unable to compute inventory schedule: {exc}")
 
     st.markdown("### Key Analysis Dashboard")
     if not supports_plotly:
