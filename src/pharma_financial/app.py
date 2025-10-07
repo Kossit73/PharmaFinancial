@@ -2236,31 +2236,39 @@ def _render_debt_section(
         st.session_state[session_key] = updated_rows
 
     if show_cumulative and include_duration and updated_rows:
-        entries = [
-            DebtEntry(
-                year=row["Year"],
-                amount=row["Amount"],
-                outstanding=row.get("Outstanding", row["Amount"]),
-                duration=row.get("Duration", 1),
+        (
+            interest_series,
+            outstanding_series,
+            cumulative_series,
+            _,
+        ) = amortise_entries(entries, float(interest_rate), years)
+
+        active_indices = [
+            idx
+            for idx, (interest_value, outstanding_value) in enumerate(
+                zip(interest_series, outstanding_series)
             )
-            for row in updated_rows
+            if interest_value or outstanding_value
         ]
-        _, _, _, schedules = amortise_entries(entries, float(interest_rate), years)
+
         schedule_rows: List[dict] = []
-        for entry_index, (row, schedule) in enumerate(zip(updated_rows, schedules), start=1):
-            label = f"Entry {entry_index}" if len(updated_rows) > 1 else "Entry"
-            for period in schedule:
+        if active_indices:
+            start = active_indices[0]
+            end = active_indices[-1] + 1
+            for idx in range(start, end):
+                if idx >= len(years):
+                    break
                 schedule_rows.append(
                     {
-                        "Entry": label,
-                        "Year": period.year,
-                        interest_label: period.payment,
-                        "Cumulative Interest": period.cumulative,
-                        outstanding_label: period.outstanding,
+                        "Year": years[idx],
+                        interest_label: interest_series[idx],
+                        "Cumulative Interest": cumulative_series[idx],
+                        outstanding_label: outstanding_series[idx],
                     }
                 )
+
         if schedule_rows:
-            st.markdown("**Senior Debt Amortisation Schedule**")
+            st.markdown(f"**{title} Amortisation Schedule**")
             st.dataframe(
                 _ensure_dataframe(schedule_rows),
                 use_container_width=True,
