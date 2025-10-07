@@ -2029,22 +2029,26 @@ def _render_cost_and_financing(payload: dict) -> None:
         title="Revolver Loan",
         session_key="revolver_rows",
         amount_label="Revolver Balance",
-        outstanding_label="Outstanding Liability",
-        interest_label="Revolver Interest Payable",
+        outstanding_label="Remaining Revolver Balance",
+        interest_label="Interest Payment",
+        principal_label="Principal Payment",
         interest_rate=float(financing.get("revolver_interest", 0.0)),
         years=years,
         include_duration=True,
+        show_amortisation=True,
     )
 
     _render_debt_section(
         title="Overdraft",
         session_key="overdraft_rows",
         amount_label="Overdraft Balance",
-        outstanding_label="Outstanding Liability",
-        interest_label="Cash Interest Payable",
+        outstanding_label="Remaining Overdraft Balance",
+        interest_label="Interest Payment",
+        principal_label="Principal Payment",
         interest_rate=float(financing.get("cash_interest", 0.0)),
         years=years,
         include_duration=True,
+        show_amortisation=True,
     )
 
     financing["dividend_payout"] = st.number_input(
