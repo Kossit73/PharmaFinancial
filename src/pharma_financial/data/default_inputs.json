@@ -644,6 +644,9 @@
       "NPV",
       "Average Net Income",
       "Average EBITDA"
+    ],
+    "variables": [
+      "revenue_growth"
     ]
   },
   "goal_seek": {

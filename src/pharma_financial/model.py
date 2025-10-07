@@ -786,8 +786,13 @@ class FinancialModel:
     def monte_carlo_simulation(self) -> Table:
         iterations = self.inputs.monte_carlo.iterations
         low, high = self.inputs.monte_carlo.revenue_growth_range
-        base_revenue = self.income_statement().column("Net Revenue")
-        total_costs = self.cost_structure().column("Total Expenses")
+        base_income = self.income_statement()
+        base_costs = self.cost_structure()
+        base_revenue = base_income.column("Net Revenue")
+        raw_materials = base_costs.column("Raw Materials")
+        utilities = base_costs.column("Utilities")
+        direct_labor = base_costs.column("Direct Labor")
+        indirect_labor = base_costs.column("General & Admin")
         discount_rate = self.inputs.financing.discount_rate
         depreciation = self.depreciation_schedule()
         interest = self._interest_schedule()
@@ -807,19 +812,91 @@ class FinancialModel:
         if "NPV" not in metrics_to_track:
             metrics_to_track.insert(0, "NPV")
 
+        variable_codes = [
+            value
+            for value in getattr(self.inputs.monte_carlo, "variables", ["revenue_growth"])
+            if value
+        ]
+        if not variable_codes:
+            variable_codes = ["revenue_growth"]
+        if "revenue_growth" not in variable_codes:
+            variable_codes.insert(0, "revenue_growth")
+
         results: Dict[str, List[float]] = {metric: [] for metric in metrics_to_track}
         for _ in range(iterations):
-            growth_rates = [random.uniform(low, high) for _ in self.years]
-            simulated_revenue = [rev * (1 + growth) for rev, growth in zip(base_revenue, growth_rates)]
-            ebitda = [rev - cost for rev, cost in zip(simulated_revenue, total_costs)]
-            ebit = [ea - depreciation[idx] for idx, ea in enumerate(ebitda)]
-            ebt = [ea - interest[idx] for idx, ea in enumerate(ebit)]
-            taxes = [ea * tax_schedule[idx] for idx, ea in enumerate(ebt)]
-            net_income = [
-                (ebt[idx] - taxes[idx]) * risk_factors[idx]
+            if "revenue_growth" in variable_codes:
+                growth_rates = [random.uniform(low, high) for _ in self.years]
+            else:
+                growth_rates = [0.0 for _ in self.years]
+
+            raw_factor = 1.0
+            if "raw_material_cost" in variable_codes:
+                raw_factor += random.uniform(low, high)
+
+            labor_factor = 1.0
+            if "labor_cost" in variable_codes:
+                labor_factor += random.uniform(low, high)
+
+            utility_factor = 1.0
+            if "utility_cost" in variable_codes:
+                utility_factor += random.uniform(low, high)
+
+            interest_factor = 1.0
+            if "senior_debt" in variable_codes:
+                interest_factor += random.uniform(low, high)
+
+            tax_factor = 1.0
+            if "tax_rate" in variable_codes:
+                tax_factor += random.uniform(low, high)
+
+            risk_adjustment = 1.0
+            if "other" in variable_codes:
+                risk_adjustment = max(0.0, 1.0 - random.uniform(low, high))
+
+            simulated_revenue = [
+                rev * (1 + growth)
+                for rev, growth in zip(base_revenue, growth_rates)
+            ]
+
+            raw_series = [value * raw_factor for value in raw_materials]
+            utility_series = [value * utility_factor for value in utilities]
+            direct_series = [value * labor_factor for value in direct_labor]
+            indirect_series = [value * labor_factor for value in indirect_labor]
+            total_costs = [
+                raw_series[idx]
+                + utility_series[idx]
+                + direct_series[idx]
+                + indirect_series[idx]
                 for idx in range(len(self.years))
             ]
-            cash_flows = [ebitda[idx] * risk_factors[idx] for idx in range(len(self.years))]
+
+            ebitda = [rev - cost for rev, cost in zip(simulated_revenue, total_costs)]
+            ebit = [ea - depreciation[idx] for idx, ea in enumerate(ebitda)]
+
+            interest_series = [
+                -((-interest[idx]) * interest_factor)
+                for idx in range(len(interest))
+            ] if "senior_debt" in variable_codes else list(interest)
+
+            ebt = [ea - interest_series[idx] for idx, ea in enumerate(ebit)]
+
+            effective_tax = [
+                min(1.0, max(0.0, rate * tax_factor))
+                for rate in tax_schedule
+            ] if "tax_rate" in variable_codes else list(tax_schedule)
+
+            taxes = [ebt[idx] * effective_tax[idx] for idx in range(len(self.years))]
+
+            effective_risk = [factor * risk_adjustment for factor in risk_factors]
+            net_income = [
+                (ebt[idx] - taxes[idx]) * effective_risk[idx]
+                for idx in range(len(self.years))
+            ]
+            cash_flows = [
+                ebitda[idx] * effective_risk[idx]
+                for idx in range(len(self.years))
+            ]
+
             discounted = [
                 cf / (1 + discount_rate) ** (idx + 1)
                 for idx, cf in enumerate(cash_flows)

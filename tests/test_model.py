@@ -120,6 +120,28 @@ class FinancialModelTest(unittest.TestCase):
         for actual, expected in zip(payable_column, payables):
             self.assertAlmostEqual(actual, expected, places=6)
 
+    def test_monte_carlo_defaults_include_revenue_growth(self):
+        self.assertIn("revenue_growth", self.inputs.monte_carlo.variables)
+
+    def test_monte_carlo_handles_multiple_variables(self):
+        payload = json.loads(Path("src/pharma_financial/data/default_inputs.json").read_text())
+        payload["monte_carlo"]["variables"] = [
+            "revenue_growth",
+            "raw_material_cost",
+            "labor_cost",
+            "tax_rate",
+            "utility_cost",
+            "senior_debt",
+            "other",
+        ]
+        inputs = parse_inputs(payload)
+        model = FinancialModel(inputs)
+        table = model.monte_carlo_simulation()
+        self.assertEqual(table.index_name, "Iteration")
+        self.assertEqual(len(table.index), inputs.monte_carlo.iterations)
+        expected_columns = set(["NPV"] + [metric for metric in inputs.monte_carlo.metrics if metric != "NPV"])
+        self.assertTrue(expected_columns.issubset(set(table.columns())))
+
     def test_inventory_schedule_reconciles_to_balance_sheet(self):
         schedule = self.model.inventory_schedule()
         calculated = schedule.column("Calculated Inventory")

@@ -140,6 +140,7 @@ class MonteCarloParameters:
     iterations: int
     revenue_growth_range: Iterable[float]
     metrics: List[str] = field(default_factory=lambda: ["NPV"])
+    variables: List[str] = field(default_factory=lambda: ["revenue_growth"])
 
 
 @dataclass
@@ -557,6 +558,11 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         iterations=int(monte_source["iterations"]),
         revenue_growth_range=monte_source["revenue_growth_range"],
         metrics=list(monte_source.get("metrics", ["NPV"])),
+        variables=[
+            str(value)
+            for value in monte_source.get("variables", ["revenue_growth"])
+            if str(value)
+        ],
     )
 
     tax_data = raw["tax"]

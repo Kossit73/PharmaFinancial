@@ -3294,6 +3294,33 @@ def _render_monte_carlo_inputs(payload: dict) -> None:
     monte["revenue_growth_range"] = [float(min_growth), float(max_growth)]
     monte["metrics"] = metrics
 
+    variable_options = [
+        ("revenue_growth", "Revenue Growth"),
+        ("raw_material_cost", "Cost of Materials"),
+        ("labor_cost", "Labour"),
+        ("tax_rate", "Tax Rate"),
+        ("utility_cost", "Utility"),
+        ("senior_debt", "Senior Debt"),
+        ("other", "Other"),
+    ]
+    variable_map = {code: label for code, label in variable_options}
+    stored_variables = [
+        code for code in monte.get("variables", ["revenue_growth"]) if code in variable_map
+    ]
+    default_labels = [variable_map[code] for code in stored_variables]
+    selected_labels = st.multiselect(
+        "Variables to randomise",
+        options=[label for _, label in variable_options],
+        default=default_labels if default_labels else [variable_map["revenue_growth"]],
+        key="monte_variables",
+    )
+    selected_codes = [
+        code for code, label in variable_options if label in selected_labels
+    ]
+    if "revenue_growth" not in selected_codes:
+        selected_codes.insert(0, "revenue_growth")
+    monte["variables"] = selected_codes
+
 
 def _extract_metric_pairs(summary) -> Sequence[Tuple[str, float]]:
     if isinstance(summary, Table):
