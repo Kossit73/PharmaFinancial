@@ -1,5 +1,6 @@
 import importlib
 import json
+import json
 import sys
 import types
 import unittest
@@ -139,6 +140,24 @@ class RerunHelperTest(unittest.TestCase):
         self.assertAlmostEqual(receivable[0], rows[0]["accounts_receivable_days"], places=6)
         self.assertAlmostEqual(prepaid[0], rows[0]["prepaid_expense_days"], places=6)
         self.assertAlmostEqual(other_assets[0], rows[0]["other_asset_days"], places=6)
+
+    def test_ai_settings_roundtrip(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+        )
+        settings = self.app._payload_to_ai_settings(payload)
+        settings["provider"] = "Azure OpenAI"
+        settings["model"] = "gpt-custom"
+        settings["ml_methods"] = ["linear_regression", "moving_average"]
+        settings["generative_features"] = ["summary", "risk_review"]
+        settings["api_key"] = "test-key"
+        self.app._ai_settings_to_payload(settings, payload)
+        updated = self.app._payload_to_ai_settings(payload)
+        self.assertEqual(updated["provider"], "Azure OpenAI")
+        self.assertEqual(updated["model"], "gpt-custom")
+        self.assertIn("moving_average", updated["ml_methods"])
+        self.assertIn("risk_review", updated["generative_features"])
+        self.assertEqual(updated["api_key"], "test-key")
 
 
 if __name__ == "__main__":  # pragma: no cover

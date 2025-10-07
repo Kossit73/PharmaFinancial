@@ -10,6 +10,7 @@ This project provides a Python implementation of the Longevity Pharmaceuticals f
 - Scenario, sensitivity, and Monte Carlo simulation tooling.
 - Break-even and payback analytics.
 - Streamlit web application delivering dashboards and statements, complemented by a CLI that exports schedules to CSV files.
+- Integrated machine-learning forecasts and optional generative AI summaries with configurable providers and API keys.
 
 ## Getting Started
 
@@ -55,6 +56,24 @@ This project provides a Python implementation of the Longevity Pharmaceuticals f
 ## Customising Assumptions
 
 All modelling assumptions are defined in [`src/pharma_financial/data/default_inputs.json`](src/pharma_financial/data/default_inputs.json). Duplicate this file and pass the new path to the CLI using `--inputs` to evaluate alternative cases. The structure mirrors the specification shared in the project brief, covering production volumes, cost inflation, labour structures, financing, and working capital.
+
+### AI, Machine Learning, and Generative Insights
+
+The Input Landing Page now includes an **AI & Machine Learning Configuration** section. Use it to:
+
+- Enable or disable AI enhancements for the current session.
+- Select a provider (OpenAI, Azure OpenAI, Anthropic, Vertex AI, or a custom endpoint) and specify the deployed model name.
+- Choose the machine-learning algorithms (linear regression, CAGR, moving average) used to forecast net revenue beyond the base projection horizon.
+- Pick the focus areas for the generative summary (executive overview, risk review, cash-flow highlights).
+- Supply an API key to call the selected provider. Keys are stored only in the active Streamlit session and are not written to disk or bundled JSON files.
+
+When no API key is provided, the dashboard falls back to deterministic heuristic commentary so that insights remain available in offline environments. To use OpenAI models install the optional dependency and export your key before launching Streamlit:
+
+```bash
+pip install openai
+export OPENAI_API_KEY="sk-your-key"
+streamlit run streamlit_app.py
+```
 
 ## Project Structure
 

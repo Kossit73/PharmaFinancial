@@ -157,6 +157,17 @@ class GoalSeekParameters:
 
 
 @dataclass
+class AIParameters:
+    enabled: bool = False
+    provider: str = "OpenAI"
+    model: str = "gpt-4"
+    api_key: Optional[str] = None
+    forecast_horizon: int = 3
+    ml_methods: List[str] = field(default_factory=lambda: ["linear_regression"])
+    generative_features: List[str] = field(default_factory=lambda: ["summary"])
+
+
+@dataclass
 class ModelInputs:
     years: List[int]
     production_estimate: Mapping[str, List[float]]
@@ -183,6 +194,7 @@ class ModelInputs:
     sensitivity: SensitivityParameters
     monte_carlo: MonteCarloParameters
     goal_seek: Optional[GoalSeekParameters]
+    ai: AIParameters
 
     @property
     def products(self) -> List[str]:
@@ -327,6 +339,48 @@ def _parse_depreciation_schedule(
 
     fallback.sort(key=lambda row: (row.asset_type, row.year))
     return fallback
+
+
+def _parse_ai(data: object) -> AIParameters:
+    if not isinstance(data, Mapping):
+        data = {}
+
+    enabled = bool(data.get("enabled", False))
+    provider = str(data.get("provider", "OpenAI") or "OpenAI")
+    model = str(data.get("model", "gpt-4") or "gpt-4")
+
+    horizon_value = data.get("forecast_horizon", 3)
+    try:
+        forecast_horizon = int(float(horizon_value))
+    except (TypeError, ValueError):
+        forecast_horizon = 3
+    forecast_horizon = max(forecast_horizon, 0)
+
+    def _clean_list(values: object, default: list[str]) -> list[str]:
+        if isinstance(values, Iterable) and not isinstance(values, (str, bytes)):
+            cleaned = [str(value).strip() for value in values if str(value).strip()]
+        else:
+            cleaned = [str(values).strip()] if values else []
+        return cleaned or default
+
+    ml_methods = _clean_list(data.get("ml_methods", ["linear_regression"]), ["linear_regression"])
+    generative_features = _clean_list(data.get("generative_features", ["summary"]), ["summary"])
+
+    api_key_value = data.get("api_key")
+    if isinstance(api_key_value, (str, bytes)):
+        api_key = api_key_value.strip() or None
+    else:
+        api_key = None
+
+    return AIParameters(
+        enabled=enabled,
+        provider=provider,
+        model=model,
+        api_key=api_key,
+        forecast_horizon=forecast_horizon,
+        ml_methods=ml_methods,
+        generative_features=generative_features,
+    )
 
 
 def _parse_working_capital(
@@ -626,6 +680,8 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
             year = None
         goal_seek = GoalSeekParameters(metric=metric, target=target, source=source, year=year)
 
+    ai_params = _parse_ai(raw.get("ai", {}))
+
     return ModelInputs(
         years=years,
         production_estimate=raw["production_estimate"],
@@ -652,6 +708,7 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         sensitivity=sensitivity,
         monte_carlo=monte_carlo,
         goal_seek=goal_seek,
+        ai=ai_params,
     )
 
 
@@ -677,6 +734,7 @@ __all__ = [
     "MonteCarloParameters",
     "SensitivityParameters",
     "GoalSeekParameters",
+    "AIParameters",
     "parse_inputs",
     "load_inputs",
 ]

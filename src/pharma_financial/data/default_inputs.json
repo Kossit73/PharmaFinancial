@@ -672,6 +672,22 @@
       "revenue_growth"
     ]
   },
+  "ai": {
+    "enabled": true,
+    "provider": "OpenAI",
+    "model": "gpt-4o-mini",
+    "forecast_horizon": 3,
+    "ml_methods": [
+      "linear_regression",
+      "cagr"
+    ],
+    "generative_features": [
+      "summary",
+      "risk_review",
+      "cash_flow_highlight"
+    ],
+    "api_key": ""
+  },
   "goal_seek": {
     "metric": "Net Income",
     "source": "income_statement",

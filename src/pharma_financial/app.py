@@ -10,6 +10,7 @@ from typing import Any, List, Optional, Tuple
 
 import streamlit as st
 
+from .ai import AIInsights
 from .debt import amortise_entries
 from .inputs import DebtEntry, ModelInputs, parse_inputs
 from .model import FinancialModel, FinancialOutputs
@@ -55,6 +56,20 @@ SCENARIO_TOOL_ALIASES = {
     "driver_based_modeling": "driver_based",
     "real_options_analysis": "real_options",
 }
+
+AI_PROVIDER_OPTIONS = ["OpenAI", "Azure OpenAI", "Anthropic", "Vertex AI", "Custom"]
+ML_METHOD_LABELS = {
+    "linear_regression": "Linear Regression",
+    "cagr": "Compound Annual Growth",
+    "moving_average": "Moving Average",
+}
+ML_LABEL_TO_CODE = {label: code for code, label in ML_METHOD_LABELS.items()}
+GEN_AI_FEATURE_LABELS = {
+    "summary": "Executive Summary",
+    "risk_review": "Risk Review",
+    "cash_flow_highlight": "Cash Flow Highlights",
+}
+GEN_AI_LABEL_TO_CODE = {label: code for code, label in GEN_AI_FEATURE_LABELS.items()}
 
 
 def _rerun() -> None:
@@ -336,6 +351,15 @@ def _resolve_inputs() -> ModelInputs:
     )
     _risk_rows_to_payload(risk_rows, payload)
 
+    ai_settings = st.session_state.setdefault(
+        "ai_settings", _payload_to_ai_settings(payload)
+    )
+    if "ai_api_key" not in st.session_state:
+        st.session_state["ai_api_key"] = ai_settings.get("api_key", "")
+    else:
+        ai_settings["api_key"] = st.session_state.get("ai_api_key", "")
+    _ai_settings_to_payload(ai_settings, payload)
+
     return parse_inputs(payload)
 
 
@@ -574,6 +598,9 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     st.markdown("### Risk Schedule")
     _render_risk_schedule(payload)
 
+    st.markdown("### AI & Machine Learning Configuration")
+    _render_ai_settings(payload)
+
     _core_rows_to_payload(st.session_state.get("core_assumption_rows", []), payload)
     _utility_rows_to_payload(st.session_state.get("utility_rows", []), payload)
     _receivable_rows_to_payload(st.session_state.get("receivable_rows", []), payload)
@@ -584,6 +611,7 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     _debt_rows_to_payload(st.session_state.get("senior_debt_rows", []), payload, "senior_debt")
     _debt_rows_to_payload(st.session_state.get("revolver_rows", []), payload, "revolver")
     _debt_rows_to_payload(st.session_state.get("overdraft_rows", []), payload, "overdraft")
+    _ai_settings_to_payload(st.session_state.get("ai_settings", {}), payload)
     st.session_state["input_payload"] = payload
 
 
@@ -700,6 +728,9 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
 
         st.markdown("#### Discounted Payback Schedule")
         st.dataframe(_with_year(outputs.discounted_payback), use_container_width=True)
+
+        st.markdown("#### AI & Machine Learning Insights")
+        _render_ai_dashboard(outputs.ai_insights)
         return
 
     # Sensitivity Analysis charts
@@ -818,10 +849,40 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
     )
     st.plotly_chart(fig_discounted, use_container_width=True)
 
+    st.markdown("#### AI & Machine Learning Insights")
+    _render_ai_dashboard(outputs.ai_insights)
+
 
 def _render_statement_tab(title: str, df: pd.DataFrame) -> None:
     st.subheader(title)
     st.dataframe(_with_year(df), use_container_width=True)
+
+
+def _render_ai_dashboard(ai_insights: Optional[AIInsights]) -> None:
+    if ai_insights is None:
+        st.caption(
+            "AI configuration not available. Enable AI enhancements on the Input Landing Page "
+            "to unlock machine-generated commentary."
+        )
+        return
+
+    if ai_insights.ml_forecast is not None:
+        st.dataframe(_with_year(ai_insights.ml_forecast), use_container_width=True)
+    else:
+        st.caption(
+            "Machine-learning forecasts are unavailable. Adjust the forecast horizon or ensure "
+            "net revenue data is present."
+        )
+
+    summary = (ai_insights.generative_summary or "").strip()
+    if summary:
+        st.write(summary)
+    else:
+        st.caption("No generative summary returned for the current configuration.")
+
+    if ai_insights.metadata:
+        with st.expander("AI Metadata"):
+            st.json(ai_insights.metadata)
 
 
 def _render_sensitivity(outputs: FinancialOutputs) -> None:
@@ -3807,6 +3868,8 @@ def _initialise_session_payload(payload: dict) -> None:
     st.session_state["senior_debt_rows"] = _payload_to_debt_rows(payload, "senior_debt")
     st.session_state["revolver_rows"] = _payload_to_debt_rows(payload, "revolver")
     st.session_state["overdraft_rows"] = _payload_to_debt_rows(payload, "overdraft")
+    st.session_state["ai_settings"] = _payload_to_ai_settings(payload)
+    st.session_state["ai_api_key"] = st.session_state["ai_settings"].get("api_key", "")
 
 
 def _payload_to_core_rows(payload: Mapping) -> list[dict]:
@@ -4500,6 +4563,193 @@ def _debt_rows_to_payload(rows: Sequence[Mapping], payload: dict, key: str) -> N
         financing.pop("revolver_initial", None)
 
 
+def _payload_to_ai_settings(payload: Mapping) -> dict:
+    ai = payload.get("ai", {}) if isinstance(payload, Mapping) else {}
+    if not isinstance(ai, Mapping):
+        ai = {}
+
+    provider = str(ai.get("provider", "OpenAI") or "OpenAI")
+    model = str(ai.get("model", "gpt-4") or "gpt-4")
+
+    horizon_value = ai.get("forecast_horizon", 3)
+    try:
+        horizon = int(float(horizon_value))
+    except (TypeError, ValueError):
+        horizon = 3
+    horizon = max(horizon, 0)
+
+    ml_methods = [
+        str(method).strip().lower()
+        for method in ai.get("ml_methods", ["linear_regression"])
+        if str(method).strip()
+    ]
+    if not ml_methods:
+        ml_methods = ["linear_regression"]
+
+    features = [
+        str(feature).strip().lower()
+        for feature in ai.get("generative_features", ["summary"])
+        if str(feature).strip()
+    ]
+    if not features:
+        features = ["summary"]
+
+    api_key_value = ai.get("api_key", "")
+    if isinstance(api_key_value, (str, bytes)):
+        api_key = api_key_value.strip()
+    else:
+        api_key = ""
+
+    return {
+        "enabled": bool(ai.get("enabled", False)),
+        "provider": provider,
+        "model": model,
+        "forecast_horizon": horizon,
+        "ml_methods": ml_methods,
+        "generative_features": features,
+        "api_key": api_key,
+    }
+
+
+def _ai_settings_to_payload(settings: Mapping[str, object], payload: dict) -> None:
+    if settings is None:
+        return
+
+    ai = payload.setdefault("ai", {})
+    if not isinstance(ai, dict):
+        ai = {}
+        payload["ai"] = ai
+
+    ai["enabled"] = bool(settings.get("enabled", False))
+    ai["provider"] = str(settings.get("provider", "OpenAI") or "OpenAI")
+    ai["model"] = str(settings.get("model", "gpt-4") or "gpt-4")
+
+    horizon_value = settings.get("forecast_horizon", 3)
+    try:
+        horizon = int(float(horizon_value))
+    except (TypeError, ValueError):
+        horizon = 3
+    ai["forecast_horizon"] = max(horizon, 0)
+
+    ml_methods_raw = settings.get("ml_methods", ["linear_regression"])
+    if isinstance(ml_methods_raw, Iterable) and not isinstance(ml_methods_raw, (str, bytes)):
+        ml_methods = [
+            str(method).strip().lower()
+            for method in ml_methods_raw
+            if str(method).strip()
+        ]
+    else:
+        ml_methods = [str(ml_methods_raw).strip().lower()]
+    ai["ml_methods"] = ml_methods or ["linear_regression"]
+
+    features_raw = settings.get("generative_features", ["summary"])
+    if isinstance(features_raw, Iterable) and not isinstance(features_raw, (str, bytes)):
+        features = [
+            str(feature).strip().lower()
+            for feature in features_raw
+            if str(feature).strip()
+        ]
+    else:
+        features = [str(features_raw).strip().lower()]
+    ai["generative_features"] = features or ["summary"]
+
+    api_key = str(settings.get("api_key", "") or "")
+    ai["api_key"] = api_key
+
+
+def _render_ai_settings(payload: dict) -> None:
+    settings = st.session_state.setdefault("ai_settings", _payload_to_ai_settings(payload))
+    st.session_state.setdefault("ai_api_key", settings.get("api_key", ""))
+
+    provider_options = list(AI_PROVIDER_OPTIONS)
+    if settings.get("provider") not in provider_options:
+        provider_options.append(settings.get("provider"))
+
+    current_provider = settings.get("provider", "OpenAI")
+    try:
+        provider_index = provider_options.index(current_provider)
+    except ValueError:
+        provider_index = 0
+
+    ml_defaults = [
+        ML_METHOD_LABELS.get(code, code.replace("_", " ").title())
+        for code in settings.get("ml_methods", ["linear_regression"])
+    ]
+    feature_defaults = [
+        GEN_AI_FEATURE_LABELS.get(code, code.replace("_", " ").title())
+        for code in settings.get("generative_features", ["summary"])
+    ]
+
+    with st.form("ai_settings_form"):
+        enabled = st.checkbox(
+            "Enable AI Enhancements",
+            value=bool(settings.get("enabled", False)),
+            help="Toggle machine-learning forecasts and generative commentary.",
+        )
+        provider = st.selectbox(
+            "Provider",
+            provider_options,
+            index=provider_index,
+            help="Select the API provider powering generative insights.",
+        )
+        model = st.text_input(
+            "Model",
+            value=settings.get("model", "gpt-4"),
+            help="Name of the deployed model (for example `gpt-4o-mini`).",
+        )
+        horizon = st.number_input(
+            "Forecast Horizon (years)",
+            min_value=0,
+            max_value=20,
+            value=int(settings.get("forecast_horizon", 3)),
+            step=1,
+            help="Number of additional years used for machine-learning revenue forecasts.",
+        )
+
+        ml_selection = st.multiselect(
+            "Machine Learning Methods",
+            list(ML_METHOD_LABELS.values()),
+            default=ml_defaults,
+            help="Choose algorithms applied to projected net revenue.",
+        )
+        feature_selection = st.multiselect(
+            "Generative Features",
+            list(GEN_AI_FEATURE_LABELS.values()),
+            default=feature_defaults,
+            help="Pick the narrative focus areas generated by the AI summary.",
+        )
+        api_key = st.text_input(
+            "API Key",
+            value=st.session_state.get("ai_api_key", ""),
+            type="password",
+            help="Store your provider API key securely. Keys are retained only for the current session.",
+        )
+
+        submitted = st.form_submit_button("Save AI Configuration")
+
+    if submitted:
+        ml_codes = [ML_LABEL_TO_CODE.get(label, label.replace(" ", "_").lower()) for label in ml_selection]
+        feature_codes = [
+            GEN_AI_LABEL_TO_CODE.get(label, label.replace(" ", "_").lower())
+            for label in feature_selection
+        ]
+
+        settings.update(
+            {
+                "enabled": enabled,
+                "provider": provider,
+                "model": model.strip() or "gpt-4",
+                "forecast_horizon": int(horizon),
+                "ml_methods": ml_codes or ["linear_regression"],
+                "generative_features": feature_codes or ["summary"],
+                "api_key": api_key.strip(),
+            }
+        )
+        st.session_state["ai_settings"] = settings
+        st.session_state["ai_api_key"] = settings.get("api_key", "")
+        _ai_settings_to_payload(settings, payload)
+        st.success("AI configuration updated. Rerunning the model with the new settings.")
+        _rerun()
 def _payload_to_inflation_rows(payload: Mapping) -> list[dict]:
     years = list(payload.get("years", []))
     series = list(payload.get("inflation_series", []))

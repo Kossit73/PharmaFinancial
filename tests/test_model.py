@@ -153,6 +153,13 @@ class FinancialModelTest(unittest.TestCase):
         expected_columns = set(["NPV"] + [metric for metric in inputs.monte_carlo.metrics if metric != "NPV"])
         self.assertTrue(expected_columns.issubset(set(table.columns())))
 
+    def test_ai_insights_available(self):
+        insights = self.outputs.ai_insights
+        self.assertIsNotNone(insights)
+        if insights.enabled:
+            self.assertIsNotNone(insights.ml_forecast)
+            self.assertTrue(insights.generative_summary.strip())
+
     def test_inventory_schedule_reconciles_to_balance_sheet(self):
         schedule = self.model.inventory_schedule()
         calculated = schedule.column("Calculated Inventory")

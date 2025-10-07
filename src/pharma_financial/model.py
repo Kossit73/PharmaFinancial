@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
+from .ai import AIInsights, GenerativeAdvisor, MachineLearningAdvisor
 from .debt import amortise_entries
 from .inputs import BreakEvenRow, DebtEntry, ModelInputs, ProductParameters
 from .table import Table, build_table
@@ -26,6 +27,7 @@ class FinancialOutputs:
     sensitivity_results: Dict[str, Table]
     monte_carlo: Table
     scenario_tool_results: Mapping[str, "ScenarioToolResult"]
+    ai_insights: Optional[AIInsights] = None
 
 
 @dataclass
@@ -1188,6 +1190,41 @@ class FinancialModel:
             index_name="Metric",
         )
 
+    def ai_enhancements(
+        self,
+        *,
+        income: Table,
+        summary: Table,
+        cash_flow: Table,
+    ) -> Optional[AIInsights]:
+        config = getattr(self.inputs, "ai", None)
+        if config is None:
+            return None
+
+        revenues: Sequence[float] = []
+        if "Net Revenue" in income.data:
+            revenues = income.column("Net Revenue")
+
+        ml_table: Optional[Table] = None
+        if revenues and config.forecast_horizon > 0:
+            advisor = MachineLearningAdvisor(config)
+            ml_table = advisor.revenue_forecast(self.years, revenues)
+
+        generative = GenerativeAdvisor(config)
+        summary_text = generative.summarise(
+            summary=summary,
+            income=income,
+            cash_flow=cash_flow,
+            ml_table=ml_table,
+        )
+
+        return AIInsights(
+            ml_forecast=ml_table,
+            generative_summary=summary_text,
+            enabled=config.enabled,
+            metadata=dict(generative.metadata),
+        )
+
     def goal_seek_metrics(
         self,
         summary: Optional[Table] = None,
@@ -1355,6 +1392,11 @@ class FinancialModel:
         scenario_tools = self.scenario_toolkit(scenarios)
         sensitivity = self.sensitivity_analysis()
         monte_carlo = self.monte_carlo_simulation()
+        ai_insights = self.ai_enhancements(
+            income=income,
+            summary=summary,
+            cash_flow=cash_flow,
+        )
         return FinancialOutputs(
             income_statement=income,
             balance_sheet=balance,
@@ -1368,6 +1410,7 @@ class FinancialModel:
             sensitivity_results=sensitivity,
             monte_carlo=monte_carlo,
             scenario_tool_results=scenario_tools,
+            ai_insights=ai_insights,
         )
 
 
@@ -1389,5 +1432,5 @@ def npf_irr(cashflows: Iterable[Number]) -> float:
     return float("nan")
 
 
-__all__ = ["FinancialModel", "FinancialOutputs", "ScenarioToolResult", "npf_irr"]
+__all__ = ["FinancialModel", "FinancialOutputs", "ScenarioToolResult", "AIInsights", "npf_irr"]
 
