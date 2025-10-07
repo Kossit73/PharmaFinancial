@@ -2049,6 +2049,7 @@ def _render_cost_and_financing(payload: dict) -> None:
         years=years,
         include_duration=True,
         show_amortisation=True,
+        max_schedule_rows=1,
     )
 
     financing["dividend_payout"] = st.number_input(
@@ -2073,6 +2074,7 @@ def _render_debt_section(
     include_duration: bool = False,
     show_amortisation: bool = False,
     principal_label: str = "Principal Payment",
+    max_schedule_rows: Optional[int] = None,
 ) -> None:
     st.markdown(f"#### {title}")
 
@@ -2261,6 +2263,8 @@ def _render_debt_section(
             )
 
         if schedule_rows:
+            if max_schedule_rows is not None:
+                schedule_rows = schedule_rows[:max_schedule_rows]
             st.markdown(f"**{title} Amortisation Schedule**")
             st.dataframe(
                 _ensure_dataframe(schedule_rows),
