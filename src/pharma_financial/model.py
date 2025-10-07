@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Mapping, MutableMapping, Optional
 
+from .debt import amortise_entries
 from .inputs import DebtEntry, ModelInputs, ProductParameters
 from .table import Table, build_table
 
@@ -342,48 +343,14 @@ class FinancialModel:
         self, entries: List[DebtEntry], rate: float
     ) -> tuple[List[float], List[float]]:
         length = len(self.years)
-        interest_schedule = [0.0 for _ in range(length)]
-        outstanding_schedule = [0.0 for _ in range(length)]
-
-        if length == 0 or not entries:
-            return interest_schedule, outstanding_schedule
-
-        year_index = {year: position for position, year in enumerate(self.years)}
-
-        for entry in entries:
-            start_idx = year_index.get(entry.year)
-            if start_idx is None:
-                continue
-
-            duration = max(int(entry.duration or 0), 1)
-            principal = max(float(entry.amount), float(entry.outstanding))
-            opening_outstanding = min(float(entry.outstanding), principal)
-            cumulative_interest = principal - opening_outstanding
-
-            for offset in range(duration):
-                idx = start_idx + offset
-                if idx >= length:
-                    break
-
-                current_outstanding = max(principal - cumulative_interest, 0.0)
-                if current_outstanding <= 0.0:
-                    break
-
-                remaining_periods = duration - offset
-                principal_share = (
-                    current_outstanding / remaining_periods if remaining_periods > 0 else current_outstanding
-                )
-                payment = max(current_outstanding * rate, principal_share)
-                if payment > current_outstanding:
-                    payment = current_outstanding
-
-                cumulative_interest += payment
-                outstanding_after = max(principal - cumulative_interest, 0.0)
-
-                interest_schedule[idx] += payment
-                outstanding_schedule[idx] += outstanding_after
-
-        return interest_schedule, outstanding_schedule
+        interest_schedule, outstanding_schedule, _, _ = amortise_entries(
+            entries, rate, self.years
+        )
+        if len(interest_schedule) < length:
+            interest_schedule.extend([0.0] * (length - len(interest_schedule)))
+        if len(outstanding_schedule) < length:
+            outstanding_schedule.extend([0.0] * (length - len(outstanding_schedule)))
+        return interest_schedule[:length], outstanding_schedule[:length]
 
     def _senior_debt_schedules(self) -> tuple[List[float], List[float]]:
         if (

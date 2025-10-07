@@ -10,6 +10,7 @@ from typing import Any, List, Optional, Tuple
 
 import streamlit as st
 
+from .debt import amortise_entries, amortise_entry
 from .inputs import DebtEntry, ModelInputs, parse_inputs
 from .model import FinancialModel, FinancialOutputs
 from .table import Table
@@ -2020,6 +2021,7 @@ def _render_cost_and_financing(payload: dict) -> None:
         interest_rate=float(financing.get("senior_debt_interest", 0.0)),
         years=years,
         include_duration=True,
+        show_cumulative=True,
     )
 
     _render_debt_section(
@@ -2063,6 +2065,7 @@ def _render_debt_section(
     interest_rate: float,
     years: Sequence[int],
     include_duration: bool = False,
+    show_cumulative: bool = False,
 ) -> None:
     st.markdown(f"#### {title}")
 
@@ -2072,15 +2075,27 @@ def _render_debt_section(
         st.info("No entries configured. Use the form below to add debt details.")
 
     if include_duration:
-        column_widths = [1.1, 1.1, 1.4, 1.4, 1.4, 0.7]
-        header_titles = [
-            "Year",
-            "Duration",
-            amount_label,
-            outstanding_label,
-            interest_label,
-            "",
-        ]
+        if show_cumulative:
+            column_widths = [1.0, 1.0, 1.2, 1.3, 1.3, 1.3, 0.7]
+            header_titles = [
+                "Year",
+                "Duration",
+                amount_label,
+                "Cumulative Interest",
+                outstanding_label,
+                interest_label,
+                "",
+            ]
+        else:
+            column_widths = [1.1, 1.1, 1.4, 1.4, 1.4, 0.7]
+            header_titles = [
+                "Year",
+                "Duration",
+                amount_label,
+                outstanding_label,
+                interest_label,
+                "",
+            ]
     else:
         column_widths = [1.2, 1.6, 1.6, 1.6, 0.8]
         header_titles = ["Year", amount_label, outstanding_label, interest_label, ""]
@@ -2124,23 +2139,70 @@ def _render_debt_section(
             format="%.4f",
         )
         outstanding_column_index = amount_column_index + 1
-        outstanding_value = cols[outstanding_column_index].number_input(
+
+        if include_duration and show_cumulative:
+            entry = DebtEntry(
+                year=int(year_value),
+                amount=float(amount_value),
+                outstanding=float(row.get("Outstanding", amount_value)),
+                duration=int(max(1, int(duration_value))),
+            )
+            schedule = amortise_entry(entry, float(interest_rate), years)
+            initial_principal = max(float(entry.amount), float(entry.outstanding))
+            initial_cumulative = initial_principal - min(float(entry.outstanding), initial_principal)
+            first_period = schedule[0] if schedule else None
+            cumulative_value = (
+                first_period.cumulative if first_period else initial_cumulative
+            )
+            outstanding_display = (
+                first_period.outstanding
+                if first_period
+                else max(initial_principal - cumulative_value, 0.0)
+            )
+        else:
+            entry = None
+            schedule = []
+            cumulative_value = 0.0
+            outstanding_display = float(row.get("Outstanding", amount_value))
+
+        if include_duration and show_cumulative:
+            cumulative_column_index = amount_column_index + 1
+            _set_widget_value(
+                f"{session_key}_cumulative_{index}", float(cumulative_value)
+            )
+            cols[cumulative_column_index].number_input(
+                "Cumulative Interest",
+                value=float(cumulative_value),
+                key=f"{session_key}_cumulative_{index}",
+                format="%.4f",
+                disabled=True,
+            )
+            outstanding_column_index = cumulative_column_index + 1
+
+        _set_widget_value(
+            f"{session_key}_outstanding_{index}", float(outstanding_display)
+        )
+        cols[outstanding_column_index].number_input(
             outstanding_label,
-            value=float(row.get("Outstanding", amount_value)),
+            value=float(outstanding_display),
             key=f"{session_key}_outstanding_{index}",
             min_value=0.0,
             step=0.1,
             format="%.4f",
+            disabled=show_cumulative and include_duration,
         )
 
         if include_duration:
-            entry = DebtEntry(
-                year=int(year_value),
-                amount=float(amount_value),
-                outstanding=float(outstanding_value),
-                duration=max(1, int(duration_value)),
-            )
-            interest_value = entry.first_payment(float(interest_rate))
+            if show_cumulative:
+                interest_value = schedule[0].payment if schedule else 0.0
+            else:
+                entry = DebtEntry(
+                    year=int(year_value),
+                    amount=float(amount_value),
+                    outstanding=float(row.get("Outstanding", amount_value)),
+                    duration=max(1, int(duration_value)),
+                )
+                interest_value = entry.first_payment(float(interest_rate))
             interest_column_index = outstanding_column_index + 1
         else:
             interest_value = float(amount_value) * float(interest_rate)
@@ -2165,13 +2227,44 @@ def _render_debt_section(
             {
                 "Year": int(year_value),
                 "Amount": float(amount_value),
-                "Outstanding": float(outstanding_value),
+                "Outstanding": float(row.get("Outstanding", amount_value)),
                 "Duration": int(max(1, int(duration_value))),
             }
         )
 
     if updated_rows != rows:
         st.session_state[session_key] = updated_rows
+
+    if show_cumulative and include_duration and updated_rows:
+        entries = [
+            DebtEntry(
+                year=row["Year"],
+                amount=row["Amount"],
+                outstanding=row.get("Outstanding", row["Amount"]),
+                duration=row.get("Duration", 1),
+            )
+            for row in updated_rows
+        ]
+        _, _, _, schedules = amortise_entries(entries, float(interest_rate), years)
+        schedule_rows: List[dict] = []
+        for entry_index, (row, schedule) in enumerate(zip(updated_rows, schedules), start=1):
+            label = f"Entry {entry_index}" if len(updated_rows) > 1 else "Entry"
+            for period in schedule:
+                schedule_rows.append(
+                    {
+                        "Entry": label,
+                        "Year": period.year,
+                        interest_label: period.payment,
+                        "Cumulative Interest": period.cumulative,
+                        outstanding_label: period.outstanding,
+                    }
+                )
+        if schedule_rows:
+            st.markdown("**Senior Debt Amortisation Schedule**")
+            st.dataframe(
+                _ensure_dataframe(schedule_rows),
+                use_container_width=True,
+            )
 
     next_year = years[len(rows)] if years and len(rows) < len(years) else (years[-1] + 1 if years else 0)
 
@@ -2202,20 +2295,12 @@ def _render_debt_section(
             format="%.4f",
             key=f"{session_key}_new_amount",
         )
-        new_outstanding = st.number_input(
-            outstanding_label,
-            value=0.0,
-            min_value=0.0,
-            step=0.1,
-            format="%.4f",
-            key=f"{session_key}_new_outstanding",
-        )
         if st.form_submit_button("Add"):
             rows.append(
                 {
                     "Year": int(new_year),
                     "Amount": float(new_amount),
-                    "Outstanding": float(new_outstanding or new_amount),
+                    "Outstanding": float(new_amount),
                     "Duration": int(max(1, int(new_duration))),
                 }
             )
@@ -2224,7 +2309,6 @@ def _render_debt_section(
                 f"{session_key}_new_year",
                 f"{session_key}_new_duration",
                 f"{session_key}_new_amount",
-                f"{session_key}_new_outstanding",
             ):
                 st.session_state.pop(key, None)
             _rerun()
