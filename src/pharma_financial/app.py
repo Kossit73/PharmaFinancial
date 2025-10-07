@@ -40,6 +40,8 @@ DEPRECIATION_LABEL_TO_VALUE = {
 MAX_VISIBLE_INVENTORY_ROWS = 2
 MAX_VISIBLE_INFLATION_ROWS = 2
 MAX_VISIBLE_RISK_ROWS = 2
+MAX_VISIBLE_UTILITY_ROWS = 2
+MAX_VISIBLE_RECEIVABLE_ROWS = 2
 
 
 def _rerun() -> None:
@@ -1042,75 +1044,120 @@ def _render_labor_section(section: str, state_key: str, payload: dict) -> None:
 
 def _render_utility_schedule(payload: dict) -> None:
     rows: list[dict] = st.session_state.get("utility_rows", [])
-    updated_rows: list[dict] = []
+    updated_rows: list[dict] = list(rows)
 
     payload_years = payload.get("years", [])
-    base_year_labels = [str(year) for year in payload_years if year is not None]
-    existing_labels = [str(row.get("label", "")) for row in rows if row.get("label")]
-    year_catalog = list(dict.fromkeys([*base_year_labels, *existing_labels]))
-    if not year_catalog:
-        max_length = max(len(base_year_labels), len(rows), 1)
-        year_catalog = [f"Year {index + 1}" for index in range(max_length)]
 
-    for index, row in enumerate(rows):
+    if not rows:
+        st.info("No utility schedule configured. Use the form below to add entries.")
+
+    def _build_year_catalog() -> list[str]:
+        base_year_labels = [str(year) for year in payload_years if year is not None]
+        existing_labels = [
+            str(row.get("label", "")) for row in updated_rows if row.get("label")
+        ]
+        catalog = list(dict.fromkeys([*base_year_labels, *existing_labels]))
+        if not catalog:
+            max_length = max(len(base_year_labels), len(updated_rows), 1)
+            catalog = [f"Year {index + 1}" for index in range(max_length)]
+        return catalog
+
+    visible_count = min(len(updated_rows), MAX_VISIBLE_UTILITY_ROWS)
+
+    if visible_count and len(updated_rows) > MAX_VISIBLE_UTILITY_ROWS:
+        st.caption(
+            "Select which utility year to edit using the dropdowns below. Additional "
+            "years remain available in the model and can be chosen from the selectors."
+        )
+
+    for slot in range(visible_count):
+        year_catalog = _build_year_catalog()
+        option_indices = list(range(len(updated_rows)))
+        if not option_indices:
+            break
+
+        default_index = option_indices[min(slot, len(option_indices) - 1)]
         container = st.container()
         with container:
+            selected_index = container.selectbox(
+                "Utility year",
+                option_indices,
+                index=option_indices.index(default_index),
+                format_func=lambda idx: str(
+                    updated_rows[idx].get("label")
+                    or updated_rows[idx].get("Year")
+                    or f"Year {idx + 1}"
+                ),
+                key=f"utility_row_selector_{slot}",
+            )
+
+            row = updated_rows[selected_index]
+
             header_cols = st.columns([2, 1])
             current_label = str(
                 row.get(
                     "label",
-                    year_catalog[index] if index < len(year_catalog) else f"Year {index + 1}",
+                    year_catalog[selected_index]
+                    if selected_index < len(year_catalog)
+                    else f"Year {selected_index + 1}",
                 )
             )
             label_input = _select_or_create_option(
                 header_cols[0],
                 "Year",
                 year_catalog,
-                f"utility_label_{index}",
+                f"utility_label_{slot}_{selected_index}",
                 current_value=current_label,
             )
             if label_input and label_input not in year_catalog:
                 year_catalog.append(label_input)
-            label = label_input or f"Year {index + 1}"
+            label = label_input or f"Year {selected_index + 1}"
 
-            if header_cols[1].button("Remove", key=f"utility_remove_{index}"):
-                del rows[index]
-                st.session_state["utility_rows"] = rows
+            if header_cols[1].button("Remove", key=f"utility_remove_{slot}_{selected_index}"):
+                del updated_rows[selected_index]
+                st.session_state["utility_rows"] = updated_rows
                 _rerun()
 
             fallback_year = row.get("year")
             if not isinstance(fallback_year, (int, float)):
-                fallback_year = payload_years[index] if index < len(payload_years) else 0
-            parsed_year = _parse_year_value(label, int(fallback_year) if fallback_year else 0)
+                if selected_index < len(payload_years):
+                    fallback_year = payload_years[selected_index]
+                else:
+                    fallback_year = selected_index + 1
+            parsed_year = _parse_year_value(
+                label, int(fallback_year) if fallback_year else selected_index + 1
+            )
 
             electricity_cols = st.columns([2, 2, 2, 2])
             electricity_per_day = electricity_cols[0].number_input(
                 "Electricity per day",
                 value=float(row.get("electricity_per_day", 0.0)),
-                key=f"utility_e_day_{index}",
+                key=f"utility_e_day_{slot}_{selected_index}",
                 step=1.0,
                 format="%.4f",
             )
             electricity_rate = electricity_cols[1].number_input(
                 "Price per kWh",
                 value=float(row.get("electricity_rate", 0.0)),
-                key=f"utility_e_rate_{index}",
+                key=f"utility_e_rate_{slot}_{selected_index}",
                 step=0.001,
                 format="%.4f",
             )
             electricity_days = electricity_cols[2].number_input(
                 "Operating Days",
                 value=int(row.get("electricity_days", 0)),
-                key=f"utility_e_days_{index}",
+                key=f"utility_e_days_{slot}_{selected_index}",
                 min_value=0,
                 step=1,
             )
             total_electricity = electricity_per_day * electricity_rate * electricity_days
-            _set_widget_value(f"utility_e_total_{index}", float(total_electricity))
+            _set_widget_value(
+                f"utility_e_total_{slot}_{selected_index}", float(total_electricity)
+            )
             electricity_cols[3].number_input(
                 "Total Annual Electricity Cost",
                 value=float(total_electricity),
-                key=f"utility_e_total_{index}",
+                key=f"utility_e_total_{slot}_{selected_index}",
                 format="%.4f",
                 disabled=True,
             )
@@ -1119,30 +1166,32 @@ def _render_utility_schedule(payload: dict) -> None:
             water_per_day = water_cols[0].number_input(
                 "Water per day",
                 value=float(row.get("water_per_day", 0.0)),
-                key=f"utility_w_day_{index}",
+                key=f"utility_w_day_{slot}_{selected_index}",
                 step=1.0,
                 format="%.4f",
             )
             water_rate = water_cols[1].number_input(
                 "Price per cubic meter",
                 value=float(row.get("water_rate", 0.0)),
-                key=f"utility_w_rate_{index}",
+                key=f"utility_w_rate_{slot}_{selected_index}",
                 step=0.001,
                 format="%.4f",
             )
             water_days = water_cols[2].number_input(
                 "Operating Days",
                 value=int(row.get("water_days", 0)),
-                key=f"utility_w_days_{index}",
+                key=f"utility_w_days_{slot}_{selected_index}",
                 min_value=0,
                 step=1,
             )
             total_water = water_per_day * water_rate * water_days
-            _set_widget_value(f"utility_w_total_{index}", float(total_water))
+            _set_widget_value(
+                f"utility_w_total_{slot}_{selected_index}", float(total_water)
+            )
             water_cols[3].number_input(
                 "Total Annual Water Cost",
                 value=float(total_water),
-                key=f"utility_w_total_{index}",
+                key=f"utility_w_total_{slot}_{selected_index}",
                 format="%.4f",
                 disabled=True,
             )
@@ -1151,67 +1200,69 @@ def _render_utility_schedule(payload: dict) -> None:
             steam_per_hour = steam_cols[0].number_input(
                 "Steam per hour",
                 value=float(row.get("steam_per_hour", 0.0)),
-                key=f"utility_s_hour_{index}",
+                key=f"utility_s_hour_{slot}_{selected_index}",
                 step=0.1,
                 format="%.4f",
             )
             steam_rate = steam_cols[1].number_input(
                 "Price per steam hour",
                 value=float(row.get("steam_rate", 0.0)),
-                key=f"utility_s_rate_{index}",
+                key=f"utility_s_rate_{slot}_{selected_index}",
                 step=0.001,
                 format="%.4f",
             )
             steam_days = steam_cols[2].number_input(
                 "Operating Days",
                 value=int(row.get("steam_days", 0)),
-                key=f"utility_s_days_{index}",
+                key=f"utility_s_days_{slot}_{selected_index}",
                 min_value=0,
                 step=1,
             )
             steam_hours = steam_cols[3].number_input(
                 "Operating Hours",
                 value=int(row.get("steam_hours", 0)),
-                key=f"utility_s_hours_{index}",
+                key=f"utility_s_hours_{slot}_{selected_index}",
                 min_value=0,
                 step=1,
             )
             total_steam = steam_per_hour * steam_rate * steam_days * steam_hours
-            _set_widget_value(f"utility_s_total_{index}", float(total_steam))
+            _set_widget_value(
+                f"utility_s_total_{slot}_{selected_index}", float(total_steam)
+            )
             steam_cols[4].number_input(
                 "Total Annual Steam Cost",
                 value=float(total_steam),
-                key=f"utility_s_total_{index}",
+                key=f"utility_s_total_{slot}_{selected_index}",
                 format="%.4f",
                 disabled=True,
             )
 
-            updated_rows.append(
-                {
-                    "label": label,
-                    "year": parsed_year,
-                    "electricity_per_day": electricity_per_day,
-                    "electricity_rate": electricity_rate,
-                    "electricity_days": int(electricity_days),
-                    "water_per_day": water_per_day,
-                    "water_rate": water_rate,
-                    "water_days": int(water_days),
-                    "steam_per_hour": steam_per_hour,
-                    "steam_rate": steam_rate,
-                    "steam_days": int(steam_days),
-                    "steam_hours": int(steam_hours),
-                }
-            )
+            updated_rows[selected_index] = {
+                "label": label,
+                "year": parsed_year,
+                "electricity_per_day": electricity_per_day,
+                "electricity_rate": electricity_rate,
+                "electricity_days": int(electricity_days),
+                "water_per_day": water_per_day,
+                "water_rate": water_rate,
+                "water_days": int(water_days),
+                "steam_per_hour": steam_per_hour,
+                "steam_rate": steam_rate,
+                "steam_days": int(steam_days),
+                "steam_hours": int(steam_hours),
+            }
 
     if updated_rows != rows:
         st.session_state["utility_rows"] = updated_rows
         rows = updated_rows
 
+    year_catalog = _build_year_catalog()
+
     last_row = rows[-1] if rows else _default_utility_row(len(rows))
     with st.form("add_utility_year"):
         st.markdown("#### Add Utility Year")
-        if len(base_year_labels) > len(rows):
-            new_label_default = base_year_labels[len(rows)]
+        if len(year_catalog) > len(rows):
+            new_label_default = year_catalog[len(rows)]
         else:
             new_label_default = last_row.get("label", f"Year {len(rows) + 1}")
 
@@ -1341,51 +1392,91 @@ def _render_utility_schedule(payload: dict) -> None:
 def _render_receivable_inputs(payload: dict) -> None:
     rows: list[dict] = st.session_state.get("receivable_rows", [])
     payload_years = payload.get("years", [])
-    base_year_labels = [str(year) for year in payload_years if year is not None]
-    existing_labels = [str(row.get("label", "")) for row in rows if row.get("label")]
-    year_catalog = list(dict.fromkeys([*base_year_labels, *existing_labels]))
-    if not year_catalog:
-        max_length = max(len(rows), len(payload_years), 1)
-        year_catalog = [f"Year {index + 1}" for index in range(max_length)]
 
     if not rows:
         st.info(
             "No accounts receivable assumptions configured. Use the form below to add entries."
         )
 
-    updated_rows: list[dict] = []
+    updated_rows: list[dict] = list(rows)
 
-    for index, row in enumerate(rows):
+    def _build_year_catalog() -> list[str]:
+        base_year_labels = [str(year) for year in payload_years if year is not None]
+        existing_labels = [
+            str(row.get("label", "")) for row in updated_rows if row.get("label")
+        ]
+        catalog = list(dict.fromkeys([*base_year_labels, *existing_labels]))
+        if not catalog:
+            max_length = max(len(updated_rows), len(payload_years), 1)
+            catalog = [f"Year {index + 1}" for index in range(max_length)]
+        return catalog
+
+    visible_count = min(len(updated_rows), MAX_VISIBLE_RECEIVABLE_ROWS)
+
+    if visible_count and len(updated_rows) > MAX_VISIBLE_RECEIVABLE_ROWS:
+        st.caption(
+            "Select which receivable year to edit using the dropdowns below. Additional "
+            "years remain available in the model and can be chosen from the selectors."
+        )
+
+    for slot in range(visible_count):
+        year_catalog = _build_year_catalog()
+        option_indices = list(range(len(updated_rows)))
+        if not option_indices:
+            break
+
+        default_index = option_indices[min(slot, len(option_indices) - 1)]
         container = st.container()
         with container:
+            selected_index = container.selectbox(
+                "Receivable year",
+                option_indices,
+                index=option_indices.index(default_index),
+                format_func=lambda idx: str(
+                    updated_rows[idx].get("label")
+                    or updated_rows[idx].get("Year")
+                    or f"Year {idx + 1}"
+                ),
+                key=f"receivable_row_selector_{slot}",
+            )
+
+            row = updated_rows[selected_index]
+
             cols = st.columns([2.0, 1.2, 1.2, 1.2, 1.2, 0.7])
 
             current_label = str(
                 row.get(
                     "label",
-                    year_catalog[index] if index < len(year_catalog) else f"Year {index + 1}",
+                    year_catalog[selected_index]
+                    if selected_index < len(year_catalog)
+                    else f"Year {selected_index + 1}",
                 )
             )
             selected_label = _select_or_create_option(
                 cols[0],
                 "Year",
                 year_catalog,
-                f"receivable_label_{index}",
+                f"receivable_label_{slot}_{selected_index}",
                 current_value=current_label,
             )
             if selected_label and selected_label not in year_catalog:
                 year_catalog.append(selected_label)
-            label = selected_label or f"Year {index + 1}"
+            label = selected_label or f"Year {selected_index + 1}"
 
             fallback_year = row.get("year")
             if not isinstance(fallback_year, (int, float)):
-                fallback_year = payload_years[index] if index < len(payload_years) else index + 1
-            parsed_year = _parse_year_value(label, int(fallback_year) if fallback_year else index + 1)
+                if selected_index < len(payload_years):
+                    fallback_year = payload_years[selected_index]
+                else:
+                    fallback_year = selected_index + 1
+            parsed_year = _parse_year_value(
+                label, int(fallback_year) if fallback_year else selected_index + 1
+            )
 
             days_in_year = cols[1].number_input(
                 "Days in Year",
                 value=int(row.get("days_in_year", 365)),
-                key=f"receivable_days_in_year_{index}",
+                key=f"receivable_days_in_year_{slot}_{selected_index}",
                 min_value=0,
                 step=1,
             )
@@ -1393,50 +1484,50 @@ def _render_receivable_inputs(payload: dict) -> None:
             receivable_days = cols[2].number_input(
                 "Accounts Receivable Days",
                 value=int(row.get("accounts_receivable_days", 0)),
-                key=f"receivable_accounts_receivable_days_{index}",
+                key=f"receivable_accounts_receivable_days_{slot}_{selected_index}",
                 min_value=0,
                 step=1,
             )
 
             prepaid_days = cols[3].number_input(
-                "Prepaid Expenses Days",
+                "Prepaid Expense Days",
                 value=int(row.get("prepaid_expense_days", 0)),
-                key=f"receivable_prepaid_days_{index}",
+                key=f"receivable_prepaid_days_{slot}_{selected_index}",
                 min_value=0,
                 step=1,
             )
 
             other_asset_days = cols[4].number_input(
-                "Other Assets Days",
+                "Other Asset Days",
                 value=int(row.get("other_asset_days", 0)),
-                key=f"receivable_other_asset_days_{index}",
+                key=f"receivable_other_asset_days_{slot}_{selected_index}",
                 min_value=0,
                 step=1,
             )
 
-            if cols[5].button("Remove", key=f"receivable_remove_{index}"):
-                del rows[index]
-                st.session_state["receivable_rows"] = rows
+            if cols[5].button("Remove", key=f"receivable_remove_{slot}_{selected_index}"):
+                del updated_rows[selected_index]
+                st.session_state["receivable_rows"] = updated_rows
                 _rerun()
 
-            updated_rows.append(
-                {
-                    "label": label,
-                    "year": parsed_year,
-                    "days_in_year": int(days_in_year),
-                    "accounts_receivable_days": int(receivable_days),
-                    "prepaid_expense_days": int(prepaid_days),
-                    "other_asset_days": int(other_asset_days),
-                }
-            )
+            updated_rows[selected_index] = {
+                "label": label,
+                "year": parsed_year,
+                "days_in_year": int(days_in_year),
+                "accounts_receivable_days": int(receivable_days),
+                "prepaid_expense_days": int(prepaid_days),
+                "other_asset_days": int(other_asset_days),
+            }
 
     if updated_rows != rows:
         st.session_state["receivable_rows"] = updated_rows
         rows = updated_rows
 
+    year_catalog = _build_year_catalog()
+
     reference = rows[-1] if rows else {"label": year_catalog[0] if year_catalog else "Year 1"}
 
-    st.markdown("#### Add receivable assumption")
+    st.markdown("#### Add accounts receivable assumption")
     with st.form("receivable_add_row"):
         default_label = str(
             reference.get(
@@ -1469,14 +1560,14 @@ def _render_receivable_inputs(payload: dict) -> None:
             step=1,
         )
         new_prepaid_days = st.number_input(
-            "Prepaid Expenses Days (new)",
+            "Prepaid Expense Days (new)",
             value=int(reference.get("prepaid_expense_days", 0)),
             key="receivable_new_prepaid",
             min_value=0,
             step=1,
         )
         new_other_asset_days = st.number_input(
-            "Other Assets Days (new)",
+            "Other Asset Days (new)",
             value=int(reference.get("other_asset_days", 0)),
             key="receivable_new_other",
             min_value=0,
@@ -1512,8 +1603,6 @@ def _render_receivable_inputs(payload: dict) -> None:
             ):
                 st.session_state.pop(key, None)
             _rerun()
-
-
 def _render_inventory_inputs(payload: dict) -> None:
     rows: list[dict] = st.session_state.get("inventory_rows", [])
     payload_years = payload.get("years", [])
