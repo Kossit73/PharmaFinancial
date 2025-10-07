@@ -1,3 +1,4 @@
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -5,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from pharma_financial.inputs import load_inputs
+from pharma_financial.inputs import load_inputs, parse_inputs
 from pharma_financial.model import FinancialModel, npf_irr
 
 
@@ -202,6 +203,46 @@ class FinancialModelTest(unittest.TestCase):
             else:
                 expected_change = value - net_working[idx - 1]
             self.assertAlmostEqual(changes[idx], expected_change, places=6)
+
+    def test_break_even_table_contains_expected_columns(self):
+        break_even = self.outputs.break_even
+        expected_columns = {
+            "Fixed Cost",
+            "Variable Cost per Unit",
+            "Selling Price",
+            "Contribution Margin",
+            "Contribution Margin Ratio",
+            "Break-even Units",
+            "Break-even Revenue",
+            "Margin of Safety (Units)",
+        }
+        for column in expected_columns:
+            self.assertIn(column, break_even.data)
+
+    def test_break_even_overrides_respected(self):
+        default_path = Path("src/pharma_financial/data/default_inputs.json")
+        raw = json.loads(default_path.read_text(encoding="utf-8"))
+        override_row = {
+            "product": "Tablets",
+            "fixed_cost": 1_000_000.0,
+            "selling_price": 0.06,
+            "variable_cost": 0.03,
+            "target_profit": 100_000.0,
+            "expected_volume": 5_000_000.0,
+        }
+        raw["break_even"] = {"rows": [override_row]}
+
+        inputs = parse_inputs(raw)
+        model = FinancialModel(inputs)
+        table = model.break_even_analysis()
+
+        self.assertIn("Tablets", table.index)
+        idx = table.index.index("Tablets")
+        break_even_units = table.data["Break-even Units"][idx]
+        contribution = table.data["Contribution Margin"][idx]
+
+        expected_units = (override_row["fixed_cost"] + override_row["target_profit"]) / contribution
+        self.assertAlmostEqual(break_even_units, expected_units, places=6)
 
     def test_senior_debt_outstanding_clears_by_horizon(self):
         _, outstanding = self.model._senior_debt_schedules()

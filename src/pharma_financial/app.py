@@ -302,6 +302,11 @@ def _resolve_inputs() -> ModelInputs:
     )
     _inventory_rows_to_payload(inventory_rows, payload)
 
+    break_even_rows = st.session_state.setdefault(
+        "break_even_rows", _payload_to_break_even_rows(payload)
+    )
+    _break_even_rows_to_payload(break_even_rows, payload)
+
     depreciation_rows = st.session_state.setdefault(
         "depreciation_rows", _payload_to_depreciation_rows(payload)
     )
@@ -769,10 +774,11 @@ def _render_dashboard_tab(outputs: FinancialOutputs) -> None:
         break_even_frame = break_even_df.reset_index().rename(columns={"index": "Product"})
     else:
         break_even_frame = pd.DataFrame(break_even_df)
+    y_column = "Break-even Units" if "Break-even Units" in break_even_frame.columns else break_even_frame.columns[-1]
     fig_break_even = px.bar(
         break_even_frame,
         x="Product",
-        y="Units",
+        y=y_column,
         title="Break-even Units by Product",
     )
     st.plotly_chart(fig_break_even, use_container_width=True)
@@ -875,6 +881,15 @@ def _render_monte_carlo(outputs: FinancialOutputs) -> None:
 
 def _render_break_even(outputs: FinancialOutputs) -> None:
     st.subheader("Break-even Analysis")
+    payload = st.session_state.get("input_payload")
+    if payload is None:
+        payload = {}
+        st.session_state["input_payload"] = payload
+
+    st.markdown("### Break-even Analysis Inputs")
+    _render_break_even_inputs(payload)
+    st.session_state["input_payload"] = payload
+
     break_even_df = _ensure_dataframe(outputs.break_even)
     if pd is not None:
         break_even_df = break_even_df.reset_index().rename(columns={"index": "Product"})
@@ -886,6 +901,211 @@ def _render_break_even(outputs: FinancialOutputs) -> None:
     st.markdown("### Discounted Payback Schedule")
     st.dataframe(_with_year(outputs.discounted_payback), use_container_width=True)
 
+
+def _render_break_even_inputs(payload: dict) -> None:
+    rows: list[dict] = st.session_state.get("break_even_rows", [])
+
+    if not rows:
+        defaults = _payload_to_break_even_rows(payload)
+        if not defaults:
+            defaults = _default_break_even_rows(payload)
+        if defaults:
+            rows = defaults
+            st.session_state["break_even_rows"] = rows
+
+    if not rows:
+        st.info("No break-even assumptions configured. Use the form below to add entries.")
+
+    product_catalog = sorted(
+        value
+        for value in {
+            *(payload.get("unit_costs", {}) or {}).keys(),
+            *(row.get("Product", "") or "" for row in rows),
+        }
+        if value
+    )
+
+    updated_rows: list[dict] = []
+    for index, row in enumerate(rows):
+        container = st.container()
+        with container:
+            cols = st.columns([2.0, 1.4, 1.4, 1.4, 1.4, 1.4, 0.8])
+            product_value = _select_or_create_option(
+                cols[0],
+                "Product",
+                product_catalog,
+                f"break_even_product_{index}",
+                current_value=str(row.get("Product", "")),
+            )
+            fixed_cost = cols[1].number_input(
+                "Fixed Cost",
+                value=float(row.get("Fixed Cost", 0.0)),
+                key=f"break_even_fixed_{index}",
+                step=1000.0,
+                format="%.2f",
+                min_value=0.0,
+            )
+            selling_price = cols[2].number_input(
+                "Selling Price",
+                value=float(row.get("Selling Price", 0.0)),
+                key=f"break_even_price_{index}",
+                step=0.001,
+                format="%.4f",
+                min_value=0.0,
+            )
+            variable_cost = cols[3].number_input(
+                "Variable Cost",
+                value=float(row.get("Variable Cost", 0.0)),
+                key=f"break_even_variable_{index}",
+                step=0.001,
+                format="%.4f",
+                min_value=0.0,
+            )
+            target_profit = cols[4].number_input(
+                "Target Profit",
+                value=float(row.get("Target Profit", 0.0)),
+                key=f"break_even_target_{index}",
+                step=1000.0,
+                format="%.2f",
+                min_value=0.0,
+            )
+            expected_volume = cols[5].number_input(
+                "Expected Volume",
+                value=float(row.get("Expected Volume", 0.0)),
+                key=f"break_even_volume_{index}",
+                step=1.0,
+                format="%.4f",
+                min_value=0.0,
+            )
+            remove = cols[6].button("Remove", key=f"break_even_remove_{index}")
+
+            metrics = _calculate_break_even_metrics(
+                {
+                    "Fixed Cost": fixed_cost,
+                    "Selling Price": selling_price,
+                    "Variable Cost": variable_cost,
+                    "Target Profit": target_profit,
+                    "Expected Volume": expected_volume,
+                }
+            )
+
+            metric_cols = st.columns([1.6, 1.6, 1.6, 1.6, 1.6])
+
+            metric_cols[0].metric(
+                "Contribution Margin",
+                _format_display(metrics["Contribution Margin"], 4),
+            )
+            metric_cols[1].metric(
+                "Margin Ratio",
+                _format_percentage(metrics["Contribution Margin Ratio"]),
+            )
+            metric_cols[2].metric(
+                "Break-even Units",
+                _format_display(metrics["Break-even Units"], 2),
+            )
+            metric_cols[3].metric(
+                "Break-even Revenue",
+                _format_display(metrics["Break-even Revenue"], 2),
+            )
+            metric_cols[4].metric(
+                "Margin of Safety",
+                _format_display(metrics["Margin of Safety (Units)"], 2),
+            )
+
+            if metrics["Contribution Margin"] <= 0:
+                cols[3].error("Contribution margin non-positive")
+            if (
+                expected_volume > 0
+                and metrics["Break-even Units"] == metrics["Break-even Units"]
+                and metrics["Break-even Units"] > expected_volume
+            ):
+                cols[5].warning("Break-even exceeds expected volume")
+
+            if remove:
+                continue
+
+            updated_rows.append(
+                {
+                    "Product": product_value.strip(),
+                    "Fixed Cost": fixed_cost,
+                    "Selling Price": selling_price,
+                    "Variable Cost": variable_cost,
+                    "Target Profit": target_profit,
+                    "Expected Volume": expected_volume,
+                }
+            )
+
+    st.session_state["break_even_rows"] = updated_rows
+    _break_even_rows_to_payload(updated_rows, payload)
+
+    totals = _aggregate_break_even_metrics(updated_rows)
+    if totals:
+        summary_cols = st.columns(3)
+        summary_cols[0].metric("Total Fixed Cost", _format_display(totals["total_fixed"], 2))
+        summary_cols[1].metric(
+            "Weighted Margin Ratio",
+            _format_percentage(totals["weighted_margin_ratio"]),
+        )
+        summary_cols[2].metric(
+            "Aggregate Break-even Revenue",
+            _format_display(totals["aggregate_break_even_revenue"], 2),
+        )
+
+    st.markdown("#### Add Break-even Input")
+    with st.form("break_even_add_form", clear_on_submit=True):
+        new_product = _select_or_create_option(
+            st,
+            "Product",
+            product_catalog,
+            "break_even_new_product",
+        )
+        new_fixed = st.number_input(
+            "Fixed Cost", value=0.0, step=1000.0, format="%.2f", key="break_even_new_fixed", min_value=0.0
+        )
+        new_price = st.number_input(
+            "Selling Price", value=0.0, step=0.001, format="%.4f", key="break_even_new_price", min_value=0.0
+        )
+        new_variable = st.number_input(
+            "Variable Cost", value=0.0, step=0.001, format="%.4f", key="break_even_new_variable", min_value=0.0
+        )
+        new_target = st.number_input(
+            "Target Profit", value=0.0, step=1000.0, format="%.2f", key="break_even_new_target", min_value=0.0
+        )
+        new_volume = st.number_input(
+            "Expected Volume", value=0.0, step=1.0, format="%.4f", key="break_even_new_volume", min_value=0.0
+        )
+        submitted = st.form_submit_button("Add")
+
+    if submitted:
+        cleaned_product = (new_product or "").strip()
+        if not cleaned_product:
+            st.warning("Product name is required to add a break-even row.")
+        else:
+            additions = st.session_state.get("break_even_rows", [])
+            additions.append(
+                {
+                    "Product": cleaned_product,
+                    "Fixed Cost": float(new_fixed),
+                    "Selling Price": float(new_price),
+                    "Variable Cost": float(new_variable),
+                    "Target Profit": float(new_target),
+                    "Expected Volume": float(new_volume),
+                }
+            )
+            st.session_state["break_even_rows"] = additions
+            _break_even_rows_to_payload(additions, payload)
+            for key in (
+                "break_even_new_product",
+                "break_even_new_product_select",
+                "break_even_new_product_custom",
+                "break_even_new_fixed",
+                "break_even_new_price",
+                "break_even_new_variable",
+                "break_even_new_target",
+                "break_even_new_volume",
+            ):
+                st.session_state.pop(key, None)
+            _rerun()
 
 def _dict_to_dataframe(data: Mapping[str, float], index_label: str, value_label: str):
     if pd is None:
@@ -940,6 +1160,18 @@ def _format_number(value: float) -> str:
     if abs(value) >= 1_000:
         return f"{value/1_000:,.2f}K"
     return f"{value:,.2f}"
+
+
+def _format_display(value: float, decimals: int = 2) -> str:
+    if value is None or value != value:
+        return "N/A"
+    return f"{value:,.{decimals}f}"
+
+
+def _format_percentage(value: float, decimals: int = 2) -> str:
+    if value is None or value != value:
+        return "N/A"
+    return f"{value * 100:,.{decimals}f}%"
 
 
 def _mapping_to_rows(mapping: Mapping[str, float], key_label: str, value_label: str) -> list[dict]:
@@ -3468,6 +3700,7 @@ def _initialise_session_payload(payload: dict) -> None:
     )
     st.session_state["utility_rows"] = _payload_to_utility_rows(payload)
     st.session_state["receivable_rows"] = _payload_to_receivable_rows(payload)
+    st.session_state["break_even_rows"] = _payload_to_break_even_rows(payload)
     st.session_state["inventory_rows"] = _payload_to_inventory_rows(payload)
     st.session_state["depreciation_rows"] = _payload_to_depreciation_rows(payload)
     st.session_state["sensitivity_rows"] = _payload_to_sensitivity_rows(payload)
@@ -3754,6 +3987,213 @@ def _payload_to_inventory_rows(payload: Mapping) -> list[dict]:
         )
 
     return rows
+
+
+def _payload_to_break_even_rows(payload: Mapping) -> list[dict]:
+    section = payload.get("break_even") if isinstance(payload, Mapping) else None
+    if not isinstance(section, Mapping):
+        return []
+
+    rows: list[dict] = []
+    for entry in section.get("rows", []):
+        if not isinstance(entry, Mapping):
+            continue
+        product = str(entry.get("product") or entry.get("Product") or "").strip()
+        if not product:
+            continue
+        rows.append(
+            {
+                "Product": product,
+                "Fixed Cost": float(entry.get("fixed_cost", entry.get("Fixed Cost", 0.0)) or 0.0),
+                "Selling Price": float(entry.get("selling_price", entry.get("Selling Price", 0.0)) or 0.0),
+                "Variable Cost": float(entry.get("variable_cost", entry.get("Variable Cost", 0.0)) or 0.0),
+                "Target Profit": float(entry.get("target_profit", entry.get("Target Profit", 0.0)) or 0.0),
+                "Expected Volume": float(entry.get("expected_volume", entry.get("Expected Volume", 0.0)) or 0.0),
+            }
+        )
+
+    return rows
+
+
+def _break_even_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
+    if rows is None:
+        return
+
+    section = payload.setdefault("break_even", {})
+    if not isinstance(section, dict):
+        section = {}
+        payload["break_even"] = section
+
+    serialised: list[dict] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        product = str(row.get("Product", "")).strip()
+        if not product:
+            continue
+        serialised.append(
+            {
+                "product": product,
+                "fixed_cost": float(row.get("Fixed Cost", 0.0) or 0.0),
+                "selling_price": float(row.get("Selling Price", 0.0) or 0.0),
+                "variable_cost": float(row.get("Variable Cost", 0.0) or 0.0),
+                "target_profit": float(row.get("Target Profit", 0.0) or 0.0),
+                "expected_volume": float(row.get("Expected Volume", 0.0) or 0.0),
+            }
+        )
+
+    section["rows"] = serialised
+
+
+def _default_break_even_rows(payload: Mapping) -> list[dict]:
+    try:
+        inputs = parse_inputs(payload)
+        model = FinancialModel(inputs)
+        table = model.break_even_analysis()
+    except Exception:
+        table = None
+        inputs = None
+
+    rows: list[dict] = []
+    if table is not None:
+        data = table.data
+        selling = data.get("Selling Price", [])
+        variable = data.get("Variable Cost per Unit", [])
+        target = data.get("Target Profit", [])
+        expected = data.get("Expected Volume", [])
+        break_even_units = data.get("Break-even Units", data.get("Units", []))
+
+        for idx, product in enumerate(table.index):
+            price = float(selling[idx]) if idx < len(selling) else 0.0
+            variable_cost = float(variable[idx]) if idx < len(variable) else 0.0
+            target_profit = float(target[idx]) if idx < len(target) else 0.0
+            expected_volume = float(expected[idx]) if idx < len(expected) else 0.0
+            margin = price - variable_cost
+            units = float(break_even_units[idx]) if idx < len(break_even_units) else float("nan")
+            if units != units or margin <= 0:
+                fixed_cost = 0.0
+            else:
+                fixed_cost = max(units * margin - target_profit, 0.0)
+
+            rows.append(
+                {
+                    "Product": product,
+                    "Fixed Cost": fixed_cost,
+                    "Selling Price": price,
+                    "Variable Cost": variable_cost,
+                    "Target Profit": target_profit,
+                    "Expected Volume": expected_volume,
+                }
+            )
+
+    if inputs is None and not rows:
+        unit_costs = payload.get("unit_costs", {}) if isinstance(payload, Mapping) else {}
+        totals = payload.get("total_production_units", {}) if isinstance(payload, Mapping) else {}
+        if isinstance(unit_costs, Mapping):
+            for product, values in unit_costs.items():
+                if not isinstance(values, Mapping):
+                    continue
+                rows.append(
+                    {
+                        "Product": str(product),
+                        "Fixed Cost": 0.0,
+                        "Selling Price": float(values.get("price", 0.0) or 0.0),
+                        "Variable Cost": float(values.get("production", 0.0) or 0.0)
+                        + float(values.get("freight", 0.0) or 0.0),
+                        "Target Profit": 0.0,
+                        "Expected Volume": float(totals.get(product, 0.0) or 0.0),
+                    }
+                )
+
+    if inputs is not None and isinstance(payload, Mapping):
+        unit_costs = payload.get("unit_costs", {})
+        totals = payload.get("total_production_units", {})
+        known = {row["Product"] for row in rows}
+        if isinstance(unit_costs, Mapping):
+            for product, values in unit_costs.items():
+                if product in known or not isinstance(values, Mapping):
+                    continue
+                rows.append(
+                    {
+                        "Product": str(product),
+                        "Fixed Cost": 0.0,
+                        "Selling Price": float(values.get("price", 0.0) or 0.0),
+                        "Variable Cost": float(values.get("production", 0.0) or 0.0)
+                        + float(values.get("freight", 0.0) or 0.0),
+                        "Target Profit": 0.0,
+                        "Expected Volume": float(totals.get(product, 0.0) or 0.0),
+                    }
+                )
+
+    return rows
+
+
+def _calculate_break_even_metrics(row: Mapping[str, float]) -> dict[str, float]:
+    fixed_cost = float(row.get("Fixed Cost", 0.0) or 0.0)
+    selling_price = float(row.get("Selling Price", 0.0) or 0.0)
+    variable_cost = float(row.get("Variable Cost", 0.0) or 0.0)
+    target_profit = float(row.get("Target Profit", 0.0) or 0.0)
+    expected_volume = float(row.get("Expected Volume", 0.0) or 0.0)
+
+    contribution = selling_price - variable_cost
+    ratio = contribution / selling_price if selling_price else float("nan")
+
+    if contribution <= 0:
+        break_even_units = float("nan")
+        break_even_revenue = float("nan")
+    else:
+        break_even_units = (fixed_cost + target_profit) / contribution
+        break_even_revenue = break_even_units * selling_price
+
+    if expected_volume > 0 and break_even_units == break_even_units:
+        margin_of_safety_units = expected_volume - break_even_units
+        margin_of_safety_pct = margin_of_safety_units / expected_volume
+    else:
+        margin_of_safety_units = float("nan")
+        margin_of_safety_pct = float("nan")
+
+    return {
+        "Contribution Margin": contribution,
+        "Contribution Margin Ratio": ratio,
+        "Break-even Units": break_even_units,
+        "Break-even Revenue": break_even_revenue,
+        "Margin of Safety (Units)": margin_of_safety_units,
+        "Margin of Safety (%)": margin_of_safety_pct,
+    }
+
+
+def _aggregate_break_even_metrics(rows: Sequence[Mapping[str, float]]) -> dict[str, float]:
+    if not rows:
+        return {}
+
+    total_fixed = 0.0
+    total_expected_revenue = 0.0
+    total_expected_contribution = 0.0
+    aggregate_break_even_revenue = 0.0
+
+    for row in rows:
+        metrics = _calculate_break_even_metrics(row)
+        fixed_cost = float(row.get("Fixed Cost", 0.0) or 0.0)
+        selling_price = float(row.get("Selling Price", 0.0) or 0.0)
+        variable_cost = float(row.get("Variable Cost", 0.0) or 0.0)
+        expected_volume = float(row.get("Expected Volume", 0.0) or 0.0)
+
+        total_fixed += fixed_cost
+        total_expected_revenue += selling_price * expected_volume
+        total_expected_contribution += (selling_price - variable_cost) * expected_volume
+
+        if metrics["Break-even Revenue"] == metrics["Break-even Revenue"]:
+            aggregate_break_even_revenue += metrics["Break-even Revenue"]
+
+    weighted_margin_ratio = float("nan")
+    if total_expected_revenue > 0:
+        weighted_margin_ratio = total_expected_contribution / total_expected_revenue
+
+    return {
+        "total_fixed": total_fixed,
+        "weighted_margin_ratio": weighted_margin_ratio,
+        "aggregate_break_even_revenue": aggregate_break_even_revenue,
+    }
 
 
 def _inventory_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:

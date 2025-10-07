@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Mapping, MutableMapping, Optional
 
 from .debt import amortise_entries
-from .inputs import DebtEntry, ModelInputs, ProductParameters
+from .inputs import BreakEvenRow, DebtEntry, ModelInputs, ProductParameters
 from .table import Table, build_table
 
 
@@ -111,6 +111,15 @@ class FinancialModel:
 
     def _freight_costs(self) -> Dict[str, float]:
         return {name: params.freight_cost for name, params in self.inputs.unit_costs.items()}
+
+    def _variable_costs(self) -> Dict[str, float]:
+        return {
+            name: params.production_cost + params.freight_cost
+            for name, params in self.inputs.unit_costs.items()
+        }
+
+    def _total_units(self) -> Dict[str, float]:
+        return {name: float(value) for name, value in self.inputs.total_production_units.items()}
 
     # -------------------------------------------------------------- schedules
     def revenue_schedule(self) -> Table:
@@ -889,16 +898,95 @@ class FinancialModel:
 
     def break_even_analysis(self) -> Table:
         costs = self.cost_structure()
-        fixed_cost_total = sum(costs.column("Total Expenses")) / len(self.years)
-        break_even_units: Dict[str, List[float]] = {}
-        for product in self.products:
-            params: ProductParameters = self.inputs.unit_costs[product]
-            margin = params.selling_price - params.production_cost
-            if margin <= 0:
-                break_even_units[product] = [float("nan")]
+        total_expenses = costs.column("Total Expenses")
+        if total_expenses:
+            fixed_cost_default = sum(total_expenses) / len(total_expenses)
+        else:
+            fixed_cost_default = 0.0
+
+        configured: Dict[str, BreakEvenRow] = {
+            row.product: row for row in self.inputs.break_even_rows
+        }
+
+        price_lookup = self._unit_prices()
+        variable_lookup = self._variable_costs()
+        total_units_lookup = self._total_units()
+
+        product_order: List[str] = []
+        seen: Dict[str, None] = {}
+        for name in list(self.products) + list(configured.keys()):
+            if name not in seen:
+                seen[name] = None
+                product_order.append(name)
+
+        columns: Dict[str, List[float]] = {
+            "Fixed Cost": [],
+            "Variable Cost per Unit": [],
+            "Selling Price": [],
+            "Contribution Margin": [],
+            "Contribution Margin Ratio": [],
+            "Target Profit": [],
+            "Break-even Units": [],
+            "Break-even Revenue": [],
+            "Expected Volume": [],
+            "Margin of Safety (Units)": [],
+            "Margin of Safety (%)": [],
+        }
+
+        for product in product_order:
+            params: ProductParameters | None = self.inputs.unit_costs.get(product)
+            override = configured.get(product)
+
+            selling_price = (
+                override.selling_price
+                if override is not None
+                else price_lookup.get(product, params.selling_price if params else 0.0)
+            )
+            variable_cost = (
+                override.variable_cost
+                if override is not None
+                else variable_lookup.get(product, (params.production_cost + params.freight_cost) if params else 0.0)
+            )
+            fixed_cost = (
+                override.fixed_cost if override is not None else fixed_cost_default
+            )
+            target_profit = override.target_profit if override is not None else 0.0
+            expected_volume = (
+                override.expected_volume
+                if override is not None
+                else total_units_lookup.get(product, 0.0)
+            )
+
+            contribution = selling_price - variable_cost
+            ratio = _safe_ratio(contribution, selling_price)
+
+            if contribution <= 0:
+                break_even_units = float("nan")
+                break_even_revenue = float("nan")
             else:
-                break_even_units[product] = [fixed_cost_total / margin]
-        return build_table(list(break_even_units.keys()), {"Units": [values[0] for values in break_even_units.values()]}, index_name="Product")
+                break_even_units = (fixed_cost + target_profit) / contribution
+                break_even_revenue = break_even_units * selling_price
+
+            if expected_volume > 0 and break_even_units == break_even_units:
+                margin_of_safety_units = expected_volume - break_even_units
+                margin_of_safety_pct = _safe_ratio(margin_of_safety_units, expected_volume)
+            else:
+                margin_of_safety_units = float("nan")
+                margin_of_safety_pct = float("nan")
+
+            columns["Fixed Cost"].append(fixed_cost)
+            columns["Variable Cost per Unit"].append(variable_cost)
+            columns["Selling Price"].append(selling_price)
+            columns["Contribution Margin"].append(contribution)
+            columns["Contribution Margin Ratio"].append(ratio)
+            columns["Target Profit"].append(target_profit)
+            columns["Break-even Units"].append(break_even_units)
+            columns["Break-even Revenue"].append(break_even_revenue)
+            columns["Expected Volume"].append(expected_volume)
+            columns["Margin of Safety (Units)"].append(margin_of_safety_units)
+            columns["Margin of Safety (%)"].append(margin_of_safety_pct)
+
+        return build_table(product_order, columns, index_name="Product")
 
     def _payback_period(self, cash_flows: Iterable[Number]) -> float:
         cumulative = _cumulative(cash_flows)

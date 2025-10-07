@@ -17,6 +17,16 @@ class ProductParameters:
 
 
 @dataclass
+class BreakEvenRow:
+    product: str
+    fixed_cost: float
+    selling_price: float
+    variable_cost: float
+    target_profit: float = 0.0
+    expected_volume: float = 0.0
+
+
+@dataclass
 class UtilitySchedule:
     electricity_per_day: List[float]
     electricity_rate: List[float]
@@ -153,6 +163,7 @@ class ModelInputs:
     markup: Mapping[str, float]
     total_production_units: Mapping[str, float]
     production_capacity: Mapping[str, float]
+    break_even_rows: List[BreakEvenRow]
     inflation_series: List[float]
     raw_material_cost_per_unit: float
     utility_schedule: UtilitySchedule
@@ -415,6 +426,54 @@ def _parse_sensitivity(data: Mapping[str, Iterable[float]]) -> SensitivityParame
     return SensitivityParameters(variables=data)
 
 
+def _parse_break_even_rows(
+    raw: object,
+    unit_costs: Mapping[str, ProductParameters],
+    total_units: Mapping[str, float],
+) -> List[BreakEvenRow]:
+    rows: List[BreakEvenRow] = []
+
+    if isinstance(raw, Mapping):
+        candidate_rows = raw.get("rows", raw.get("data", []))
+    else:
+        candidate_rows = raw or []
+
+    if not isinstance(candidate_rows, Iterable):
+        return rows
+
+    for entry in candidate_rows:
+        if not isinstance(entry, Mapping):
+            continue
+
+        product = str(entry.get("product") or entry.get("Product") or "").strip()
+        if not product:
+            continue
+
+        params = unit_costs.get(product)
+        default_price = params.selling_price if params else 0.0
+        default_variable = (params.production_cost + params.freight_cost) if params else 0.0
+        default_volume = float(total_units.get(product, 0.0))
+
+        fixed_cost = float(entry.get("fixed_cost", entry.get("Fixed Cost", 0.0)))
+        selling_price = float(entry.get("selling_price", entry.get("Selling Price", default_price)))
+        variable_cost = float(entry.get("variable_cost", entry.get("Variable Cost", default_variable)))
+        target_profit = float(entry.get("target_profit", entry.get("Target Profit", 0.0)))
+        expected_volume = float(entry.get("expected_volume", entry.get("Expected Volume", default_volume)))
+
+        rows.append(
+            BreakEvenRow(
+                product=product,
+                fixed_cost=fixed_cost,
+                selling_price=selling_price,
+                variable_cost=variable_cost,
+                target_profit=target_profit,
+                expected_volume=expected_volume,
+            )
+        )
+
+    return rows
+
+
 def _coerce_schedule(values: Iterable[float], length: int) -> List[float]:
     """Normalise a schedule to match the projection horizon length."""
     sequence = [float(value) for value in values]
@@ -519,6 +578,8 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         total_units[name] = float(total_units_raw.get(name, estimate_total)) or 0.0
         capacity[name] = float(capacity_raw.get(name, 0.0))
 
+    break_even_rows = _parse_break_even_rows(raw.get("break_even"), unit_costs, total_units)
+
     risk_data = raw.get("risk", {})
     risk_schedule = {
         name: _coerce_schedule(values, len(years))
@@ -548,6 +609,7 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         markup=raw["markup"],
         total_production_units=total_units,
         production_capacity=capacity,
+        break_even_rows=break_even_rows,
         inflation_series=raw["inflation_series"],
         raw_material_cost_per_unit=float(raw["raw_material_cost"]["per_unit"]),
         utility_schedule=utility,
@@ -581,6 +643,7 @@ def load_inputs(path: Optional[Path] = None) -> ModelInputs:
 __all__ = [
     "ModelInputs",
     "ProductParameters",
+    "BreakEvenRow",
     "UtilitySchedule",
     "DepreciationRow",
     "FinancingParameters",
