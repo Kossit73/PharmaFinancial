@@ -2236,6 +2236,22 @@ def _render_debt_section(
         st.session_state[session_key] = updated_rows
 
     if show_cumulative and include_duration and updated_rows:
+        entries: List[DebtEntry] = []
+        for index, row in enumerate(updated_rows):
+            if years:
+                fallback_year = years[index] if index < len(years) else years[-1]
+            else:
+                fallback_year = 0
+
+            entries.append(
+                DebtEntry(
+                    year=int(row.get("Year", fallback_year)),
+                    amount=float(row.get("Amount", 0.0)),
+                    outstanding=float(row.get("Outstanding", row.get("Amount", 0.0))),
+                    duration=int(max(1, int(row.get("Duration", 1)))),
+                )
+            )
+
         (
             interest_series,
             outstanding_series,
