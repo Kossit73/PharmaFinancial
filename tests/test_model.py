@@ -136,6 +136,31 @@ class FinancialModelTest(unittest.TestCase):
         balance = self.outputs.balance_sheet
         self.assertEqual(schedule.index, self.inputs.years)
 
+        days = self.inputs.working_capital_days
+        day_expectations = {
+            "Days in Year": days.calendar_days,
+            "Accounts Receivable Days": days.accounts_receivable,
+            "Inventory Days": days.inventory,
+            "Prepaid Expenses Days": days.prepaid_expenses,
+            "Other Assets Days": days.other_assets,
+            "Accounts Payable Days": days.accounts_payable,
+            "Other Liabilities Days": days.other_liabilities,
+        }
+
+        for column, configured in day_expectations.items():
+            schedule_values = schedule.column(column)
+            configured_values = list(configured)
+            for idx, actual in enumerate(schedule_values):
+                if configured_values:
+                    expected = (
+                        configured_values[idx]
+                        if idx < len(configured_values)
+                        else configured_values[-1]
+                    )
+                else:
+                    expected = 0.0
+                self.assertAlmostEqual(actual, expected, places=6)
+
         for column in [
             "Accounts Receivable",
             "Inventory",

@@ -563,17 +563,40 @@ class FinancialModel:
         cost_of_sales = self.cost_structure().column("Cost of Sales")
         days = self.inputs.working_capital_days
 
-        days_in_year = self._calendar_days()
+        days_in_year = [float(value) for value in self._calendar_days()]
 
-        def _calc(series: Iterable[int], base: List[float]) -> List[float]:
-            return [value / denominator * day for value, denominator, day in zip(base, days_in_year, series)]
+        def _expand(series: Iterable[int]) -> List[float]:
+            values = [float(value) for value in series]
+            expanded: List[float] = []
+            carry = 0.0
+            for index in range(len(self.years)):
+                if index < len(values):
+                    carry = values[index]
+                expanded.append(carry)
+            return expanded
 
-        ar = _calc(days.accounts_receivable, revenue)
-        inventory = _calc(days.inventory, cost_of_sales)
-        prepaid = _calc(days.prepaid_expenses, cost_of_sales)
-        other_assets = _calc(days.other_assets, cost_of_sales)
-        ap = _calc(days.accounts_payable, cost_of_sales)
-        other_liabilities = _calc(days.other_liabilities, cost_of_sales)
+        def _calc(series: List[float], base: List[float]) -> List[float]:
+            calculated: List[float] = []
+            for value, denominator, day in zip(base, days_in_year, series):
+                if abs(denominator) < 1e-12:
+                    calculated.append(0.0)
+                else:
+                    calculated.append(value / denominator * day)
+            return calculated
+
+        ar_days = _expand(days.accounts_receivable)
+        inventory_days = _expand(days.inventory)
+        prepaid_days = _expand(days.prepaid_expenses)
+        other_asset_days = _expand(days.other_assets)
+        ap_days = _expand(days.accounts_payable)
+        other_liability_days = _expand(days.other_liabilities)
+
+        ar = _calc(ar_days, revenue)
+        inventory = _calc(inventory_days, cost_of_sales)
+        prepaid = _calc(prepaid_days, cost_of_sales)
+        other_assets = _calc(other_asset_days, cost_of_sales)
+        ap = _calc(ap_days, cost_of_sales)
+        other_liabilities = _calc(other_liability_days, cost_of_sales)
 
         net_working_capital = [
             a + inv + pre + other - pay - other_liab
@@ -583,11 +606,18 @@ class FinancialModel:
         return build_table(
             self.years,
             {
+                "Days in Year": days_in_year,
+                "Accounts Receivable Days": ar_days,
                 "Accounts Receivable": ar,
+                "Inventory Days": inventory_days,
                 "Inventory": inventory,
+                "Prepaid Expenses Days": prepaid_days,
                 "Prepaid Expenses": prepaid,
+                "Other Assets Days": other_asset_days,
                 "Other Assets": other_assets,
+                "Accounts Payable Days": ap_days,
                 "Accounts Payable": ap,
+                "Other Liabilities Days": other_liability_days,
                 "Other Liabilities": other_liabilities,
                 "Net Working Capital": net_working_capital,
             },
