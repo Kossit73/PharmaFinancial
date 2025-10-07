@@ -586,6 +586,61 @@ class FinancialModel:
         balances = self._working_capital_balances().column("Net Working Capital")
         return _difference(balances)
 
+    def inventory_schedule(self) -> Table:
+        """Reconcile inventory inputs to the balance-sheet values."""
+
+        cost_structure = self.cost_structure()
+        working_capital = self._working_capital_balances()
+
+        cost_of_sales = cost_structure.column("Cost of Sales")
+        balance_inventory = working_capital.column("Inventory")
+        inventory_days_source = list(self.inputs.working_capital_days.inventory)
+        days_in_year = [366 if year % 4 == 0 else 365 for year in self.years]
+
+        inventory_days: List[float] = []
+        calculated_inventory: List[float] = []
+        variance: List[float] = []
+        turnover: List[float] = []
+
+        for idx, cost in enumerate(cost_of_sales):
+            if inventory_days_source:
+                if idx < len(inventory_days_source):
+                    inventory_day_value = float(inventory_days_source[idx])
+                else:
+                    inventory_day_value = float(inventory_days_source[-1])
+            else:
+                inventory_day_value = 0.0
+
+            day_length = float(days_in_year[idx]) if days_in_year[idx] else 0.0
+            inventory_days.append(inventory_day_value)
+
+            calculated = cost / day_length * inventory_day_value if day_length else 0.0
+            calculated_inventory.append(calculated)
+
+            actual_inventory = balance_inventory[idx] if idx < len(balance_inventory) else calculated
+            difference = calculated - actual_inventory
+            if abs(difference) < 1e-6:
+                difference = 0.0
+            variance.append(difference)
+
+            if actual_inventory:
+                turnover.append(cost / actual_inventory)
+            else:
+                turnover.append(float("nan"))
+
+        return build_table(
+            self.years,
+            {
+                "Cost of Sales": cost_of_sales,
+                "Days in Year": days_in_year,
+                "Inventory Days": inventory_days,
+                "Calculated Inventory": calculated_inventory,
+                "Balance Sheet Inventory": balance_inventory,
+                "Variance": variance,
+                "Inventory Turnover": turnover,
+            },
+        )
+
     def _net_ppe_schedule(self) -> List[float]:
         if self.inputs.depreciation_schedule:
             _, _, per_year_net = self._depreciation_rollforward()

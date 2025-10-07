@@ -104,6 +104,23 @@ class FinancialModelTest(unittest.TestCase):
         for actual, expected in zip(liabilities, manual):
             self.assertAlmostEqual(actual, expected, places=6)
 
+    def test_inventory_schedule_reconciles_to_balance_sheet(self):
+        schedule = self.model.inventory_schedule()
+        calculated = schedule.column("Calculated Inventory")
+        balance = schedule.column("Balance Sheet Inventory")
+        variance = schedule.column("Variance")
+        inventory_days = schedule.column("Inventory Days")
+        configured_days = list(self.inputs.working_capital_days.inventory)
+
+        for idx, (calc, actual, diff) in enumerate(zip(calculated, balance, variance)):
+            self.assertAlmostEqual(calc, actual, places=6)
+            self.assertAlmostEqual(diff, 0.0, places=6)
+
+            expected_day = 0.0
+            if configured_days:
+                expected_day = configured_days[idx] if idx < len(configured_days) else configured_days[-1]
+            self.assertAlmostEqual(inventory_days[idx], expected_day, places=6)
+
     def test_senior_debt_outstanding_clears_by_horizon(self):
         _, outstanding = self.model._senior_debt_schedules()
         self.assertTrue(outstanding)

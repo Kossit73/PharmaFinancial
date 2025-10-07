@@ -542,6 +542,20 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     _debt_rows_to_payload(st.session_state.get("overdraft_rows", []), payload, "overdraft")
     st.session_state["input_payload"] = payload
 
+    st.markdown("### Inventory Schedule")
+    try:
+        schedule_inputs = parse_inputs(payload)
+        schedule_model = FinancialModel(schedule_inputs)
+        inventory_table = schedule_model.inventory_schedule()
+        st.dataframe(_with_year(inventory_table), use_container_width=True)
+        st.caption(
+            "Inventory is derived as cost of sales divided by calendar days "
+            "and multiplied by the configured inventory days, matching the "
+            "balance sheet totals."
+        )
+    except Exception as exc:  # pragma: no cover - defensive user feedback
+        st.warning(f"Unable to compute inventory schedule: {exc}")
+
 
 def _render_dashboard_tab(outputs: FinancialOutputs) -> None:
     income = _with_year(outputs.income_statement)
