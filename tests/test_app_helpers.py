@@ -114,6 +114,32 @@ class RerunHelperTest(unittest.TestCase):
         self.assertAlmostEqual(inventory[0], rows[0]["inventory_days"], places=6)
         self.assertAlmostEqual(payables[0], rows[0]["accounts_payable_days"], places=6)
 
+    def test_receivable_rows_roundtrip(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+        )
+        rows = self.app._payload_to_receivable_rows(payload)
+        self.assertTrue(rows)
+
+        rows[0]["accounts_receivable_days"] = float(rows[0]["accounts_receivable_days"]) + 4
+        rows[0]["prepaid_expense_days"] = float(rows[0]["prepaid_expense_days"]) + 2
+        rows[0]["other_asset_days"] = float(rows[0]["other_asset_days"]) + 1
+        rows[0]["days_in_year"] = float(rows[0]["days_in_year"]) + 2
+
+        self.app._receivable_rows_to_payload(rows, payload)
+
+        working = payload.get("working_capital", {})
+        calendar = working.get("calendar_days", [])
+        day_mapping = working.get("days", {})
+        receivable = day_mapping.get("accounts_receivable", [])
+        prepaid = day_mapping.get("prepaid_expenses", [])
+        other_assets = day_mapping.get("other_assets", [])
+
+        self.assertAlmostEqual(calendar[0], rows[0]["days_in_year"], places=6)
+        self.assertAlmostEqual(receivable[0], rows[0]["accounts_receivable_days"], places=6)
+        self.assertAlmostEqual(prepaid[0], rows[0]["prepaid_expense_days"], places=6)
+        self.assertAlmostEqual(other_assets[0], rows[0]["other_asset_days"], places=6)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

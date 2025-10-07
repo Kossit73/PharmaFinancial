@@ -285,6 +285,11 @@ def _resolve_inputs() -> ModelInputs:
     )
     _utility_rows_to_payload(utility_rows, payload)
 
+    receivable_rows = st.session_state.setdefault(
+        "receivable_rows", _payload_to_receivable_rows(payload)
+    )
+    _receivable_rows_to_payload(receivable_rows, payload)
+
     inventory_rows = st.session_state.setdefault(
         "inventory_rows", _payload_to_inventory_rows(payload)
     )
@@ -522,6 +527,9 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     st.markdown("### Utility Schedule")
     _render_utility_schedule(payload)
 
+    st.markdown("### Accounts Receivable Input Table")
+    _render_receivable_inputs(payload)
+
     st.markdown("### Inventory & Accounts Payable Input Table")
     _render_inventory_inputs(payload)
 
@@ -542,6 +550,7 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
 
     _core_rows_to_payload(st.session_state.get("core_assumption_rows", []), payload)
     _utility_rows_to_payload(st.session_state.get("utility_rows", []), payload)
+    _receivable_rows_to_payload(st.session_state.get("receivable_rows", []), payload)
     _inventory_rows_to_payload(st.session_state.get("inventory_rows", []), payload)
     _depreciation_rows_to_payload(st.session_state.get("depreciation_rows", []), payload)
     _risk_rows_to_payload(st.session_state.get("risk_rows", []), payload)
@@ -1319,6 +1328,182 @@ def _render_utility_schedule(payload: dict) -> None:
                 "utility_new_s_rate",
                 "utility_new_s_days",
                 "utility_new_s_hours",
+            ):
+                st.session_state.pop(key, None)
+            _rerun()
+
+
+def _render_receivable_inputs(payload: dict) -> None:
+    rows: list[dict] = st.session_state.get("receivable_rows", [])
+    payload_years = payload.get("years", [])
+    base_year_labels = [str(year) for year in payload_years if year is not None]
+    existing_labels = [str(row.get("label", "")) for row in rows if row.get("label")]
+    year_catalog = list(dict.fromkeys([*base_year_labels, *existing_labels]))
+    if not year_catalog:
+        max_length = max(len(rows), len(payload_years), 1)
+        year_catalog = [f"Year {index + 1}" for index in range(max_length)]
+
+    if not rows:
+        st.info(
+            "No accounts receivable assumptions configured. Use the form below to add entries."
+        )
+
+    updated_rows: list[dict] = []
+
+    for index, row in enumerate(rows):
+        container = st.container()
+        with container:
+            cols = st.columns([2.0, 1.2, 1.2, 1.2, 1.2, 0.7])
+
+            current_label = str(
+                row.get(
+                    "label",
+                    year_catalog[index] if index < len(year_catalog) else f"Year {index + 1}",
+                )
+            )
+            selected_label = _select_or_create_option(
+                cols[0],
+                "Year",
+                year_catalog,
+                f"receivable_label_{index}",
+                current_value=current_label,
+            )
+            if selected_label and selected_label not in year_catalog:
+                year_catalog.append(selected_label)
+            label = selected_label or f"Year {index + 1}"
+
+            fallback_year = row.get("year")
+            if not isinstance(fallback_year, (int, float)):
+                fallback_year = payload_years[index] if index < len(payload_years) else index + 1
+            parsed_year = _parse_year_value(label, int(fallback_year) if fallback_year else index + 1)
+
+            days_in_year = cols[1].number_input(
+                "Days in Year",
+                value=int(row.get("days_in_year", 365)),
+                key=f"receivable_days_in_year_{index}",
+                min_value=0,
+                step=1,
+            )
+
+            receivable_days = cols[2].number_input(
+                "Accounts Receivable Days",
+                value=int(row.get("accounts_receivable_days", 0)),
+                key=f"receivable_accounts_receivable_days_{index}",
+                min_value=0,
+                step=1,
+            )
+
+            prepaid_days = cols[3].number_input(
+                "Prepaid Expenses Days",
+                value=int(row.get("prepaid_expense_days", 0)),
+                key=f"receivable_prepaid_days_{index}",
+                min_value=0,
+                step=1,
+            )
+
+            other_asset_days = cols[4].number_input(
+                "Other Assets Days",
+                value=int(row.get("other_asset_days", 0)),
+                key=f"receivable_other_asset_days_{index}",
+                min_value=0,
+                step=1,
+            )
+
+            if cols[5].button("Remove", key=f"receivable_remove_{index}"):
+                del rows[index]
+                st.session_state["receivable_rows"] = rows
+                _rerun()
+
+            updated_rows.append(
+                {
+                    "label": label,
+                    "year": parsed_year,
+                    "days_in_year": int(days_in_year),
+                    "accounts_receivable_days": int(receivable_days),
+                    "prepaid_expense_days": int(prepaid_days),
+                    "other_asset_days": int(other_asset_days),
+                }
+            )
+
+    if updated_rows != rows:
+        st.session_state["receivable_rows"] = updated_rows
+        rows = updated_rows
+
+    reference = rows[-1] if rows else {"label": year_catalog[0] if year_catalog else "Year 1"}
+
+    st.markdown("#### Add receivable assumption")
+    with st.form("receivable_add_row"):
+        default_label = str(
+            reference.get(
+                "label",
+                year_catalog[len(rows)] if len(rows) < len(year_catalog) else f"Year {len(rows) + 1}",
+            )
+        )
+        new_label = _select_or_create_option(
+            st,
+            "Year",
+            year_catalog,
+            "receivable_new_label",
+            current_value=default_label,
+        )
+        if new_label and new_label not in year_catalog:
+            year_catalog.append(new_label)
+
+        new_days = st.number_input(
+            "Days in Year (new)",
+            value=int(reference.get("days_in_year", 365)),
+            key="receivable_new_days",
+            min_value=0,
+            step=1,
+        )
+        new_receivable_days = st.number_input(
+            "Accounts Receivable Days (new)",
+            value=int(reference.get("accounts_receivable_days", 0)),
+            key="receivable_new_receivable",
+            min_value=0,
+            step=1,
+        )
+        new_prepaid_days = st.number_input(
+            "Prepaid Expenses Days (new)",
+            value=int(reference.get("prepaid_expense_days", 0)),
+            key="receivable_new_prepaid",
+            min_value=0,
+            step=1,
+        )
+        new_other_asset_days = st.number_input(
+            "Other Assets Days (new)",
+            value=int(reference.get("other_asset_days", 0)),
+            key="receivable_new_other",
+            min_value=0,
+            step=1,
+        )
+        submitted = st.form_submit_button("Add Year")
+
+    if submitted:
+        cleaned_label = (new_label or "").strip()
+        if not cleaned_label:
+            st.warning("Year label is required to add an accounts receivable assumption.")
+        else:
+            parsed_year = _parse_year_value(cleaned_label, len(rows) + 1)
+            rows.append(
+                {
+                    "label": cleaned_label,
+                    "year": parsed_year,
+                    "days_in_year": int(new_days),
+                    "accounts_receivable_days": int(new_receivable_days),
+                    "prepaid_expense_days": int(new_prepaid_days),
+                    "other_asset_days": int(new_other_asset_days),
+                }
+            )
+            st.session_state["receivable_rows"] = rows
+            for key in (
+                "receivable_new_label",
+                "receivable_new_label_select",
+                "receivable_new_label_custom",
+                "receivable_new_days",
+                "receivable_new_receivable",
+                "receivable_new_prepaid",
+                "receivable_new_other",
             ):
                 st.session_state.pop(key, None)
             _rerun()
@@ -2888,6 +3073,7 @@ def _initialise_session_payload(payload: dict) -> None:
         "Annual Cost",
     )
     st.session_state["utility_rows"] = _payload_to_utility_rows(payload)
+    st.session_state["receivable_rows"] = _payload_to_receivable_rows(payload)
     st.session_state["inventory_rows"] = _payload_to_inventory_rows(payload)
     st.session_state["depreciation_rows"] = _payload_to_depreciation_rows(payload)
     st.session_state["sensitivity_rows"] = _payload_to_sensitivity_rows(payload)
@@ -2933,6 +3119,177 @@ def _payload_to_core_rows(payload: Mapping) -> list[dict]:
             }
         )
     return rows
+
+
+def _payload_to_receivable_rows(payload: Mapping) -> list[dict]:
+    years = list(payload.get("years", []))
+    working = payload.get("working_capital", {})
+    if not isinstance(working, Mapping):
+        working = {}
+
+    raw_days = working.get("days") if isinstance(working.get("days"), Mapping) else {}
+    if not isinstance(raw_days, Mapping):
+        raw_days = {}
+
+    receivable_source = raw_days.get("accounts_receivable", [])
+    receivable_days = (
+        [int(float(value)) for value in receivable_source]
+        if isinstance(receivable_source, Iterable)
+        and not isinstance(receivable_source, (str, bytes))
+        else []
+    )
+
+    prepaid_source = raw_days.get("prepaid_expenses", [])
+    prepaid_days = (
+        [int(float(value)) for value in prepaid_source]
+        if isinstance(prepaid_source, Iterable)
+        and not isinstance(prepaid_source, (str, bytes))
+        else []
+    )
+
+    other_asset_source = raw_days.get("other_assets", [])
+    other_asset_days = (
+        [int(float(value)) for value in other_asset_source]
+        if isinstance(other_asset_source, Iterable)
+        and not isinstance(other_asset_source, (str, bytes))
+        else []
+    )
+
+    calendar_source = working.get("calendar_days", [])
+    calendar_days = (
+        [int(float(value)) for value in calendar_source]
+        if isinstance(calendar_source, Iterable)
+        and not isinstance(calendar_source, (str, bytes))
+        else []
+    )
+
+    max_length = max(
+        len(years),
+        len(receivable_days),
+        len(prepaid_days),
+        len(other_asset_days),
+        len(calendar_days),
+        1,
+    )
+
+    rows: list[dict] = []
+
+    for index in range(max_length):
+        if index < len(years):
+            year_value = int(years[index])
+            label = str(year_value)
+        else:
+            year_value = index + 1
+            label = f"Year {index + 1}"
+
+        if index < len(calendar_days):
+            days_in_year = int(calendar_days[index])
+        else:
+            days_in_year = 366 if _is_leap_year(year_value) else 365
+
+        receivable_day = int(receivable_days[index]) if index < len(receivable_days) else 0
+        prepaid_day = int(prepaid_days[index]) if index < len(prepaid_days) else 0
+        other_day = int(other_asset_days[index]) if index < len(other_asset_days) else 0
+
+        rows.append(
+            {
+                "label": label,
+                "year": year_value,
+                "days_in_year": days_in_year,
+                "accounts_receivable_days": receivable_day,
+                "prepaid_expense_days": prepaid_day,
+                "other_asset_days": other_day,
+            }
+        )
+
+    return rows
+
+
+def _receivable_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
+    if rows is None:
+        return
+
+    working = payload.setdefault("working_capital", {})
+    if not isinstance(working, dict):
+        working = {}
+        payload["working_capital"] = working
+
+    days_mapping = working.get("days") if isinstance(working.get("days"), Mapping) else {}
+    if not isinstance(days_mapping, dict):
+        days_mapping = {}
+    working["days"] = days_mapping
+
+    if not rows:
+        days_mapping["accounts_receivable"] = []
+        days_mapping["prepaid_expenses"] = []
+        days_mapping["other_assets"] = []
+        working["calendar_days"] = []
+        return
+
+    labels: list[str] = []
+    calendar_days: list[int] = []
+    receivable_days: list[int] = []
+    prepaid_days: list[int] = []
+    other_asset_days: list[int] = []
+
+    for index, row in enumerate(rows):
+        label = str(row.get("label", row.get("Year", "")) or "").strip()
+        if not label:
+            label = f"Year {index + 1}"
+        labels.append(label)
+
+        try:
+            calendar_value = int(float(row.get("days_in_year", row.get("Days in Year", 0)) or 0))
+        except (TypeError, ValueError):
+            calendar_value = 0
+        calendar_days.append(calendar_value)
+
+        try:
+            receivable_value = int(
+                float(
+                    row.get(
+                        "accounts_receivable_days",
+                        row.get("Accounts Receivable Days", 0),
+                    )
+                    or 0
+                )
+            )
+        except (TypeError, ValueError):
+            receivable_value = 0
+        receivable_days.append(receivable_value)
+
+        try:
+            prepaid_value = int(
+                float(
+                    row.get("prepaid_expense_days", row.get("Prepaid Expenses Days", 0))
+                    or 0
+                )
+            )
+        except (TypeError, ValueError):
+            prepaid_value = 0
+        prepaid_days.append(prepaid_value)
+
+        try:
+            other_value = int(
+                float(row.get("other_asset_days", row.get("Other Assets Days", 0)) or 0)
+            )
+        except (TypeError, ValueError):
+            other_value = 0
+        other_asset_days.append(other_value)
+
+    days_mapping["accounts_receivable"] = receivable_days
+    days_mapping["prepaid_expenses"] = prepaid_days
+    days_mapping["other_assets"] = other_asset_days
+    working["calendar_days"] = calendar_days
+
+    _align_payload_horizon(payload, labels, len(rows))
+
+    try:
+        st.session_state["receivable_rows"] = _payload_to_receivable_rows(payload)
+        if "inventory_rows" in st.session_state:
+            st.session_state["inventory_rows"] = _payload_to_inventory_rows(payload)
+    except Exception:  # pragma: no cover - depends on Streamlit runtime
+        pass
 
 
 def _payload_to_inventory_rows(payload: Mapping) -> list[dict]:
