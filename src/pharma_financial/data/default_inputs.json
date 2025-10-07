@@ -390,60 +390,6 @@
         "amount": 2.5,
         "outstanding": 2.5,
         "duration": 1
-      },
-      {
-        "year": 2025,
-        "amount": 2.7,
-        "outstanding": 2.7,
-        "duration": 1
-      },
-      {
-        "year": 2026,
-        "amount": 3.0,
-        "outstanding": 3.0,
-        "duration": 1
-      },
-      {
-        "year": 2027,
-        "amount": 3.2,
-        "outstanding": 3.2,
-        "duration": 1
-      },
-      {
-        "year": 2028,
-        "amount": 3.5,
-        "outstanding": 3.5,
-        "duration": 1
-      },
-      {
-        "year": 2029,
-        "amount": 3.8,
-        "outstanding": 3.8,
-        "duration": 1
-      },
-      {
-        "year": 2030,
-        "amount": 4.2,
-        "outstanding": 4.2,
-        "duration": 1
-      },
-      {
-        "year": 2031,
-        "amount": 4.6,
-        "outstanding": 4.6,
-        "duration": 1
-      },
-      {
-        "year": 2032,
-        "amount": 5.0,
-        "outstanding": 5.0,
-        "duration": 1
-      },
-      {
-        "year": 2033,
-        "amount": 5.5,
-        "outstanding": 5.5,
-        "duration": 1
       }
     ]
   },
