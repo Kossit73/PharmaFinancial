@@ -2049,7 +2049,6 @@ def _render_cost_and_financing(payload: dict) -> None:
         years=years,
         include_duration=True,
         show_amortisation=True,
-        max_schedule_rows=1,
     )
 
     financing["dividend_payout"] = st.number_input(
