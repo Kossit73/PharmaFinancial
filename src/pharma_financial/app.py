@@ -1357,6 +1357,29 @@ def _render_utility_schedule(payload: dict) -> None:
 
     payload_years = payload.get("years", [])
 
+    if payload_years:
+        updated = False
+        for index, row in enumerate(updated_rows):
+            if not isinstance(row, dict):
+                continue
+            raw_label = str(row.get("label", "") or "").strip()
+            if not raw_label:
+                continue
+            year_index = _parse_year_value(raw_label, index + 1)
+            if raw_label.lower().startswith("year") and 1 <= year_index <= len(payload_years):
+                try:
+                    actual_year = int(payload_years[year_index - 1])
+                except Exception:  # pragma: no cover - defensive conversion
+                    continue
+                new_label = str(actual_year)
+                if row.get("label") != new_label or row.get("year") != actual_year:
+                    row["label"] = new_label
+                    row["year"] = actual_year
+                    updated = True
+        if updated:
+            st.session_state["utility_rows"] = updated_rows
+            rows = updated_rows
+
     if not rows:
         st.info("No utility schedule configured. Use the form below to add entries.")
 
@@ -3623,16 +3646,33 @@ def _payload_to_utility_rows(payload: Mapping) -> list[dict]:
     utility = payload.get("utility_costs", {})
     rows: list[dict] = []
 
+    payload_years = payload.get("years") or []
+
     if isinstance(utility, Mapping):
         stored_rows = utility.get("years")
         if isinstance(stored_rows, Sequence):
             for index, raw_row in enumerate(stored_rows):
-                rows.append(_normalise_utility_row(raw_row, index))
+                year_value: int | None = None
+                label_override: str | None = None
+                if index < len(payload_years):
+                    try:
+                        year_value = int(payload_years[index])
+                    except Exception:  # pragma: no cover - defensive parsing
+                        year_value = _parse_year_value(payload_years[index], index + 1)
+                    label_override = str(year_value)
+                rows.append(
+                    _normalise_utility_row(
+                        raw_row,
+                        index,
+                        label=label_override,
+                        year=year_value,
+                    )
+                )
 
     if rows:
         return rows
 
-    years = payload.get("years", [])
+    years = payload_years
     length = max(len(years), 1)
     if isinstance(utility, Mapping):
         days = list(utility.get("days", []))
