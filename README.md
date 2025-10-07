@@ -52,9 +52,9 @@ This project provides a Python implementation of the Longevity Pharmaceuticals f
    5. Break-even and payback visualisations.
 
    Use the sidebar to upload an alternative JSON assumptions file or generate a consolidated report.
-   The **Report Download** dropdown exports the Key Metrics dashboard through the Monte Carlo simulation tab as a single PDF,
-   Word, Excel, CSV, or JSON document. PDF and Word exports require the optional `fpdf` and `python-docx` packages respectively;
-   install them alongside the default requirements to enable those formats.
+  The **Report Download** dropdown exports the Key Metrics dashboard through the Monte Carlo simulation tab as a single PDF,
+  Word, Excel, CSV, or JSON document. These formats rely on the `fpdf`, `python-docx`, and `openpyxl` packages, which are now
+  included in `requirements.txt` so installing the project dependencies enables every export option out of the box.
 
 ## Customising Assumptions
 

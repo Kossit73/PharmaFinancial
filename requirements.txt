@@ -3,3 +3,6 @@ pandas
 plotly
 numpy-financial
 streamlit
+openpyxl
+python-docx
+fpdf

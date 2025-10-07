@@ -33,6 +33,24 @@ class ReportGenerationTest(unittest.TestCase):
         self.assertIn("# Section: Key Metrics Dashboard", text)
         self.assertIn("Metric", text)
 
+    def test_generate_excel_report(self):
+        data, mime, filename = generate_report(self.sections, "Excel")
+        self.assertEqual(mime, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        self.assertTrue(filename.endswith(".xlsx"))
+        self.assertGreater(len(data), 0)
+
+    def test_generate_word_report(self):
+        data, mime, filename = generate_report(self.sections, "Word")
+        self.assertEqual(mime, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        self.assertTrue(filename.endswith(".docx"))
+        self.assertGreater(len(data), 0)
+
+    def test_generate_pdf_report(self):
+        data, mime, filename = generate_report(self.sections, "PDF")
+        self.assertEqual(mime, "application/pdf")
+        self.assertTrue(filename.endswith(".pdf"))
+        self.assertGreater(len(data), 0)
+
     def test_invalid_format_raises(self):
         with self.assertRaises(ReportGenerationError):
             generate_report(self.sections, "invalid")
