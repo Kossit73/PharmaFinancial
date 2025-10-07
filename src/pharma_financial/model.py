@@ -501,6 +501,12 @@ class FinancialModel:
         cash_flow = self.cash_flow_statement()
         working_capital = self._working_capital_balances()
         net_ppe = self._net_ppe_schedule()
+        accounts_payable = working_capital.column("Accounts Payable")
+        other_liabilities = working_capital.column("Other Liabilities")
+
+        _, senior_outstanding = self._senior_debt_schedules()
+        _, revolver_outstanding = self._revolver_schedules()
+        _, overdraft_outstanding = self._overdraft_schedules()
 
         total_current_assets = [
             cash + ar + inv + pre + other
@@ -514,11 +520,24 @@ class FinancialModel:
         ]
         total_assets = [tca + ppe for tca, ppe in zip(total_current_assets, net_ppe)]
 
-        liabilities = self._liability_balance()
-        equity = self._equity_schedule(cash_flow, income=self.income_statement())
-
-        total_liabilities = liabilities
-        shareholders_equity = equity
+        total_liabilities = [
+            ap
+            + other
+            + senior
+            + revolver
+            + overdraft
+            for ap, other, senior, revolver, overdraft in zip(
+                accounts_payable,
+                other_liabilities,
+                senior_outstanding,
+                revolver_outstanding,
+                overdraft_outstanding,
+            )
+        ]
+        shareholders_equity = [
+            total_asset - total_liability
+            for total_asset, total_liability in zip(total_assets, total_liabilities)
+        ]
         total_liabilities_equity = [l + e for l, e in zip(total_liabilities, shareholders_equity)]
 
         return build_table(
@@ -531,6 +550,9 @@ class FinancialModel:
                 "Other Assets": working_capital.column("Other Assets"),
                 "Net PP&E": net_ppe,
                 "Total Assets": total_assets,
+                "Accounts Payable": accounts_payable,
+                "Other Liabilities": other_liabilities,
+                "Overdraft": overdraft_outstanding,
                 "Total Liabilities": total_liabilities,
                 "Shareholders' Equity": shareholders_equity,
                 "Total Liabilities & Equity": total_liabilities_equity,

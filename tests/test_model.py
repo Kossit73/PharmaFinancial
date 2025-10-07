@@ -88,20 +88,35 @@ class FinancialModelTest(unittest.TestCase):
         for actual, expected in zip(interest_column, manual):
             self.assertAlmostEqual(actual, expected, places=6)
 
-    def test_liabilities_include_outstanding_balances(self):
-        liabilities = self.outputs.balance_sheet.column("Total Liabilities")
+    def test_liabilities_include_working_capital_and_debt(self):
+        balance_sheet = self.outputs.balance_sheet
+        liabilities = balance_sheet.column("Total Liabilities")
+        working_capital = self.model._working_capital_balances()
+        payables = working_capital.column("Accounts Payable")
+        other_current = working_capital.column("Other Liabilities")
         _, senior_outstanding = self.model._senior_debt_schedules()
         _, revolver_outstanding = self.model._revolver_schedules()
         _, overdraft_outstanding = self.model._overdraft_schedules()
+
         manual: list[float] = []
-        for idx, year in enumerate(self.inputs.years):
+        for idx in range(len(self.inputs.years)):
             total = senior_outstanding[idx]
             total += revolver_outstanding[idx]
             total += overdraft_outstanding[idx]
+            total += payables[idx]
+            total += other_current[idx]
             manual.append(total)
 
         self.assertEqual(len(liabilities), len(manual))
         for actual, expected in zip(liabilities, manual):
+            self.assertAlmostEqual(actual, expected, places=6)
+
+        overdraft_column = balance_sheet.column("Overdraft")
+        for actual, expected in zip(overdraft_column, overdraft_outstanding):
+            self.assertAlmostEqual(actual, expected, places=6)
+
+        payable_column = balance_sheet.column("Accounts Payable")
+        for actual, expected in zip(payable_column, payables):
             self.assertAlmostEqual(actual, expected, places=6)
 
     def test_inventory_schedule_reconciles_to_balance_sheet(self):
@@ -197,6 +212,13 @@ class FinancialModelTest(unittest.TestCase):
         _, outstanding = self.model._revolver_schedules()
         if outstanding:
             self.assertAlmostEqual(outstanding[-1], 0.0, places=6)
+
+    def test_balance_sheet_balances(self):
+        balance = self.outputs.balance_sheet
+        assets = balance.column("Total Assets")
+        liabilities_equity = balance.column("Total Liabilities & Equity")
+        for actual_assets, actual_total in zip(assets, liabilities_equity):
+            self.assertAlmostEqual(actual_assets, actual_total, places=6)
 
     def test_overdraft_outstanding_clears_by_duration(self):
         _, outstanding = self.model._overdraft_schedules()
