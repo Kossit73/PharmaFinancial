@@ -600,7 +600,7 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     _render_risk_schedule(payload)
 
     st.markdown("### AI & Machine Learning Configuration")
-    _render_ai_settings(payload)
+    _render_ai_summary(payload)
 
     _core_rows_to_payload(st.session_state.get("core_assumption_rows", []), payload)
     _utility_rows_to_payload(st.session_state.get("utility_rows", []), payload)
@@ -4822,6 +4822,36 @@ def _render_ai_settings(payload: dict, container: Optional[DeltaGenerator] = Non
         _ai_settings_to_payload(settings, payload)
         st.success("AI configuration updated. Rerunning the model with the new settings.")
         _rerun()
+
+
+def _render_ai_summary(payload: Mapping) -> None:
+    settings = _payload_to_ai_settings(payload)
+    st.caption("Adjust these settings from the sidebar's AI configuration form.")
+
+    rows = [
+        {"Setting": "Enabled", "Value": "Yes" if settings.get("enabled") else "No"},
+        {"Setting": "Provider", "Value": settings.get("provider", "OpenAI")},
+        {"Setting": "Model", "Value": settings.get("model", "gpt-4")},
+        {
+            "Setting": "Forecast Horizon (years)",
+            "Value": settings.get("forecast_horizon", 3),
+        },
+        {
+            "Setting": "ML Methods",
+            "Value": ", ".join(settings.get("ml_methods", [])) or "linear_regression",
+        },
+        {
+            "Setting": "Generative Features",
+            "Value": ", ".join(settings.get("generative_features", [])) or "summary",
+        },
+    ]
+
+    if pd is not None:
+        st.table(pd.DataFrame(rows))
+    else:
+        for row in rows:
+            st.write(f"**{row['Setting']}**: {row['Value']}")
+
 def _payload_to_inflation_rows(payload: Mapping) -> list[dict]:
     years = list(payload.get("years", []))
     series = list(payload.get("inflation_series", []))
