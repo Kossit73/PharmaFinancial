@@ -51,7 +51,10 @@ This project provides a Python implementation of the Longevity Pharmaceuticals f
    4. Sensitivity, scenario ("IFs"), and Monte Carlo analyses.
    5. Break-even and payback visualisations.
 
-   Use the sidebar to upload an alternative JSON assumptions file or download the bundled defaults.
+   Use the sidebar to upload an alternative JSON assumptions file or generate a consolidated report.
+   The **Report Download** dropdown exports the Key Metrics dashboard through the Monte Carlo simulation tab as a single PDF,
+   Word, Excel, CSV, or JSON document. PDF and Word exports require the optional `fpdf` and `python-docx` packages respectively;
+   install them alongside the default requirements to enable those formats.
 
 ## Customising Assumptions
 

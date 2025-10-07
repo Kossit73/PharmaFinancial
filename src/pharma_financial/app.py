@@ -19,6 +19,12 @@ from .ai import AIInsights
 from .debt import amortise_entries
 from .inputs import DebtEntry, ModelInputs, parse_inputs
 from .model import FinancialModel, FinancialOutputs
+from .report import (
+    REPORT_FORMATS,
+    ReportGenerationError,
+    collect_report_sections,
+    generate_report,
+)
 from .table import Table
 
 try:  # pragma: no cover - executed in environments with pandas available
@@ -243,6 +249,8 @@ def main() -> None:
     model = FinancialModel(inputs)
     outputs = model.run()
 
+    _render_report_download(model, outputs)
+
     tabs = st.tabs(
         [
             "Input Landing Page",
@@ -307,12 +315,6 @@ def _resolve_inputs() -> ModelInputs:
         )
     else:
         st.sidebar.caption("Using default assumptions bundled with the project.")
-    st.sidebar.download_button(
-        label="Download default JSON",
-        data=DEFAULT_INPUT_JSON,
-        file_name="default_inputs.json",
-        mime="application/json",
-    )
 
     if "input_payload" not in st.session_state:
         _initialise_session_payload(json.loads(DEFAULT_INPUT_JSON))
@@ -368,6 +370,43 @@ def _resolve_inputs() -> ModelInputs:
     _risk_rows_to_payload(risk_rows, payload)
 
     return parse_inputs(payload)
+
+
+def _render_report_download(model: FinancialModel, outputs: FinancialOutputs) -> None:
+    st.sidebar.markdown("### Report Download")
+
+    stored_format = st.session_state.get("report_download_format", REPORT_FORMATS[0])
+    if stored_format not in REPORT_FORMATS:
+        stored_format = REPORT_FORMATS[0]
+
+    selection = st.sidebar.selectbox(
+        "Select report format",
+        REPORT_FORMATS,
+        index=REPORT_FORMATS.index(stored_format),
+        key="report_download_format",
+    )
+
+    try:
+        sections = collect_report_sections(model, outputs)
+    except Exception as exc:  # pragma: no cover - defensive user feedback
+        st.sidebar.error(f"Unable to assemble report content: {exc}")
+        return
+
+    try:
+        data, mime, filename = generate_report(sections, selection)
+    except ReportGenerationError as exc:
+        st.sidebar.info(str(exc))
+        return
+    except Exception as exc:  # pragma: no cover - unexpected failure surfaced to user
+        st.sidebar.error(f"Report generation failed: {exc}")
+        return
+
+    st.sidebar.download_button(
+        label=f"Download {selection} report",
+        data=data,
+        file_name=filename,
+        mime=mime,
+    )
 
 
 def _render_inputs_tab(inputs: ModelInputs) -> None:
