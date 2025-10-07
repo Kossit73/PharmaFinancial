@@ -91,6 +91,25 @@ class RerunHelperTest(unittest.TestCase):
             if capacity > 0:
                 self.assertLessEqual(units, capacity + 1e-9)
 
+    def test_inventory_rows_roundtrip(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+        )
+        rows = self.app._payload_to_inventory_rows(payload)
+        self.assertTrue(rows)
+
+        rows[0]["inventory_days"] = float(rows[0]["inventory_days"]) + 5
+        rows[0]["days_in_year"] = float(rows[0]["days_in_year"]) - 1
+
+        self.app._inventory_rows_to_payload(rows, payload)
+
+        working = payload.get("working_capital", {})
+        calendar = working.get("calendar_days", [])
+        inventory = working.get("days", {}).get("inventory", [])
+
+        self.assertAlmostEqual(calendar[0], rows[0]["days_in_year"], places=6)
+        self.assertAlmostEqual(inventory[0], rows[0]["inventory_days"], places=6)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

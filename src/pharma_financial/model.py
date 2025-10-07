@@ -547,12 +547,23 @@ class FinancialModel:
                 capex[self.years.index(year)] += float(value)
         return capex
 
+    def _calendar_days(self) -> List[float]:
+        days = list(getattr(self.inputs.working_capital_days, "calendar_days", []) or [])
+        if not days:
+            days = [366 if year % 4 == 0 else 365 for year in self.years]
+
+        if len(days) < len(self.years):
+            fill = days[-1] if days else 365
+            days = days + [fill for _ in range(len(self.years) - len(days))]
+
+        return [float(value) for value in days[: len(self.years)]]
+
     def _working_capital_balances(self) -> Table:
         revenue = self.revenue_schedule().column("Net Revenue")
         cost_of_sales = self.cost_structure().column("Cost of Sales")
         days = self.inputs.working_capital_days
 
-        days_in_year = [366 if year % 4 == 0 else 365 for year in self.years]
+        days_in_year = self._calendar_days()
 
         def _calc(series: Iterable[int], base: List[float]) -> List[float]:
             return [value / denominator * day for value, denominator, day in zip(base, days_in_year, series)]
@@ -602,7 +613,7 @@ class FinancialModel:
         cost_of_sales = cost_structure.column("Cost of Sales")
         balance_inventory = working_capital.column("Inventory")
         inventory_days_source = list(self.inputs.working_capital_days.inventory)
-        days_in_year = [366 if year % 4 == 0 else 365 for year in self.years]
+        days_in_year = self._calendar_days()
 
         inventory_days: List[float] = []
         calculated_inventory: List[float] = []

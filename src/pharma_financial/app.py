@@ -285,6 +285,11 @@ def _resolve_inputs() -> ModelInputs:
     )
     _utility_rows_to_payload(utility_rows, payload)
 
+    inventory_rows = st.session_state.setdefault(
+        "inventory_rows", _payload_to_inventory_rows(payload)
+    )
+    _inventory_rows_to_payload(inventory_rows, payload)
+
     depreciation_rows = st.session_state.setdefault(
         "depreciation_rows", _payload_to_depreciation_rows(payload)
     )
@@ -517,6 +522,9 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     st.markdown("### Utility Schedule")
     _render_utility_schedule(payload)
 
+    st.markdown("### Inventory Input Table")
+    _render_inventory_inputs(payload)
+
     st.markdown("### Fixed Assets Schedule")
     _render_depreciation_schedule(payload)
 
@@ -534,6 +542,7 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
 
     _core_rows_to_payload(st.session_state.get("core_assumption_rows", []), payload)
     _utility_rows_to_payload(st.session_state.get("utility_rows", []), payload)
+    _inventory_rows_to_payload(st.session_state.get("inventory_rows", []), payload)
     _depreciation_rows_to_payload(st.session_state.get("depreciation_rows", []), payload)
     _risk_rows_to_payload(st.session_state.get("risk_rows", []), payload)
     _inflation_rows_to_payload(st.session_state.get("inflation_rows", []), payload)
@@ -1310,6 +1319,144 @@ def _render_utility_schedule(payload: dict) -> None:
                 "utility_new_s_rate",
                 "utility_new_s_days",
                 "utility_new_s_hours",
+            ):
+                st.session_state.pop(key, None)
+            _rerun()
+
+
+def _render_inventory_inputs(payload: dict) -> None:
+    rows: list[dict] = st.session_state.get("inventory_rows", [])
+    payload_years = payload.get("years", [])
+    base_year_labels = [str(year) for year in payload_years if year is not None]
+    existing_labels = [str(row.get("label", "")) for row in rows if row.get("label")]
+    year_catalog = list(dict.fromkeys([*base_year_labels, *existing_labels]))
+    if not year_catalog:
+        max_length = max(len(rows), len(payload_years), 1)
+        year_catalog = [f"Year {index + 1}" for index in range(max_length)]
+
+    if not rows:
+        st.info("No inventory assumptions configured. Use the form below to add entries.")
+
+    updated_rows: list[dict] = []
+
+    for index, row in enumerate(rows):
+        container = st.container()
+        with container:
+            cols = st.columns([2.0, 1.2, 1.2, 0.7])
+
+            current_label = str(
+                row.get(
+                    "label",
+                    year_catalog[index] if index < len(year_catalog) else f"Year {index + 1}",
+                )
+            )
+            selected_label = _select_or_create_option(
+                cols[0],
+                "Year",
+                year_catalog,
+                f"inventory_label_{index}",
+                current_value=current_label,
+            )
+            if selected_label and selected_label not in year_catalog:
+                year_catalog.append(selected_label)
+            label = selected_label or f"Year {index + 1}"
+
+            fallback_year = row.get("year")
+            if not isinstance(fallback_year, (int, float)):
+                fallback_year = payload_years[index] if index < len(payload_years) else index + 1
+            parsed_year = _parse_year_value(label, int(fallback_year) if fallback_year else index + 1)
+
+            days_in_year = cols[1].number_input(
+                "Days in Year",
+                value=int(row.get("days_in_year", 365)),
+                key=f"inventory_days_in_year_{index}",
+                min_value=0,
+                step=1,
+            )
+
+            inventory_days = cols[2].number_input(
+                "Inventory Days",
+                value=int(row.get("inventory_days", 0)),
+                key=f"inventory_inventory_days_{index}",
+                min_value=0,
+                step=1,
+            )
+
+            if cols[3].button("Remove", key=f"inventory_remove_{index}"):
+                del rows[index]
+                st.session_state["inventory_rows"] = rows
+                _rerun()
+
+            updated_rows.append(
+                {
+                    "label": label,
+                    "year": parsed_year,
+                    "days_in_year": int(days_in_year),
+                    "inventory_days": int(inventory_days),
+                }
+            )
+
+    if updated_rows != rows:
+        st.session_state["inventory_rows"] = updated_rows
+        rows = updated_rows
+
+    reference = rows[-1] if rows else {"label": year_catalog[0] if year_catalog else "Year 1"}
+
+    st.markdown("#### Add inventory assumption")
+    with st.form("inventory_add_row"):
+        default_label = str(
+            reference.get(
+                "label",
+                year_catalog[len(rows)] if len(rows) < len(year_catalog) else f"Year {len(rows) + 1}",
+            )
+        )
+        new_label = _select_or_create_option(
+            st,
+            "Year",
+            year_catalog,
+            "inventory_new_label",
+            current_value=default_label,
+        )
+        if new_label and new_label not in year_catalog:
+            year_catalog.append(new_label)
+
+        new_days = st.number_input(
+            "Days in Year (new)",
+            value=int(reference.get("days_in_year", 365)),
+            key="inventory_new_days",
+            min_value=0,
+            step=1,
+        )
+        new_inventory_days = st.number_input(
+            "Inventory Days (new)",
+            value=int(reference.get("inventory_days", 0)),
+            key="inventory_new_inventory",
+            min_value=0,
+            step=1,
+        )
+        submitted = st.form_submit_button("Add Year")
+
+    if submitted:
+        cleaned_label = (new_label or "").strip()
+        if not cleaned_label:
+            st.warning("Year label is required to add an inventory assumption.")
+        else:
+            parsed_year = _parse_year_value(cleaned_label, len(rows) + 1)
+            rows.append(
+                {
+                    "label": cleaned_label,
+                    "year": parsed_year,
+                    "days_in_year": int(new_days),
+                    "inventory_days": int(new_inventory_days),
+                }
+            )
+            st.session_state["inventory_rows"] = rows
+            for key in (
+                "inventory_new_label",
+                "inventory_new_label_select",
+                "inventory_new_label_custom",
+                "inventory_new_days",
+                "inventory_new_inventory",
             ):
                 st.session_state.pop(key, None)
             _rerun()
@@ -2723,6 +2870,7 @@ def _initialise_session_payload(payload: dict) -> None:
         "Annual Cost",
     )
     st.session_state["utility_rows"] = _payload_to_utility_rows(payload)
+    st.session_state["inventory_rows"] = _payload_to_inventory_rows(payload)
     st.session_state["depreciation_rows"] = _payload_to_depreciation_rows(payload)
     st.session_state["sensitivity_rows"] = _payload_to_sensitivity_rows(payload)
     st.session_state["inflation_rows"] = _payload_to_inflation_rows(payload)
@@ -2767,6 +2915,116 @@ def _payload_to_core_rows(payload: Mapping) -> list[dict]:
             }
         )
     return rows
+
+
+def _payload_to_inventory_rows(payload: Mapping) -> list[dict]:
+    years = list(payload.get("years", []))
+    working = payload.get("working_capital", {})
+    if not isinstance(working, Mapping):
+        working = {}
+
+    raw_days = working.get("days") if isinstance(working.get("days"), Mapping) else {}
+    if not isinstance(raw_days, Mapping):
+        raw_days = {}
+
+    inventory_source = raw_days.get("inventory", [])
+    if isinstance(inventory_source, Iterable) and not isinstance(inventory_source, (str, bytes)):
+        inventory_days = [int(float(value)) for value in inventory_source]
+    else:
+        inventory_days = []
+
+    calendar_source = working.get("calendar_days", [])
+    if isinstance(calendar_source, Iterable) and not isinstance(calendar_source, (str, bytes)):
+        calendar_days = [int(float(value)) for value in calendar_source]
+    else:
+        calendar_days = []
+
+    max_length = max(len(years), len(inventory_days), len(calendar_days), 1)
+    rows: list[dict] = []
+
+    for index in range(max_length):
+        if index < len(years):
+            year_value = int(years[index])
+            label = str(year_value)
+        else:
+            year_value = index + 1
+            label = f"Year {index + 1}"
+
+        if index < len(calendar_days):
+            days_in_year = int(calendar_days[index])
+        else:
+            if year_value % 400 == 0 or (year_value % 4 == 0 and year_value % 100 != 0):
+                days_in_year = 366
+            else:
+                days_in_year = 365
+
+        if index < len(inventory_days):
+            inventory_day = int(inventory_days[index])
+        else:
+            inventory_day = 0
+
+        rows.append(
+            {
+                "label": label,
+                "year": year_value,
+                "days_in_year": days_in_year,
+                "inventory_days": inventory_day,
+            }
+        )
+
+    return rows
+
+
+def _inventory_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
+    if rows is None:
+        return
+
+    working = payload.setdefault("working_capital", {})
+    if not isinstance(working, dict):
+        working = {}
+        payload["working_capital"] = working
+
+    days_mapping = working.get("days") if isinstance(working.get("days"), Mapping) else {}
+    if not isinstance(days_mapping, dict):
+        days_mapping = {}
+    working["days"] = days_mapping
+
+    if not rows:
+        days_mapping["inventory"] = []
+        working["calendar_days"] = []
+        return
+
+    labels: list[str] = []
+    calendar_days: list[int] = []
+    inventory_days: list[int] = []
+
+    for index, row in enumerate(rows):
+        label = str(row.get("label", row.get("Year", "")) or "").strip()
+        if not label:
+            label = f"Year {index + 1}"
+        labels.append(label)
+
+        try:
+            day_value = int(float(row.get("days_in_year", row.get("Days in Year", 0)) or 0))
+        except (TypeError, ValueError):
+            day_value = 0
+        calendar_days.append(day_value)
+
+        try:
+            inventory_value = int(float(row.get("inventory_days", row.get("Inventory Days", 0)) or 0))
+        except (TypeError, ValueError):
+            inventory_value = 0
+        inventory_days.append(inventory_value)
+
+    days_mapping["inventory"] = inventory_days
+    working["calendar_days"] = calendar_days
+
+    _align_payload_horizon(payload, labels, len(rows))
+
+    try:
+        st.session_state["inventory_rows"] = _payload_to_inventory_rows(payload)
+    except Exception:  # pragma: no cover - depends on Streamlit runtime
+        pass
 
 
 def _core_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
@@ -3100,9 +3358,29 @@ def _align_payload_horizon(payload: dict, labels: Sequence[str], target_length: 
     for category, values in list(risk.items()):
         risk[category] = _resize_sequence(values, target_length)
 
-    working = payload.get("working_capital", {}).get("days", {})
-    for key, values in list(working.items()):
-        working[key] = _resize_sequence(values, target_length)
+    working_capital = payload.setdefault("working_capital", {})
+    days_mapping = working_capital.get("days") if isinstance(working_capital.get("days"), Mapping) else {}
+    if not isinstance(days_mapping, Mapping):
+        days_mapping = {}
+    working_capital["days"] = days_mapping
+    for key, values in list(days_mapping.items()):
+        days_mapping[key] = _resize_sequence(values, target_length)
+
+    calendar_values = working_capital.get("calendar_days")
+    if isinstance(calendar_values, Iterable) and not isinstance(calendar_values, (str, bytes)):
+        fill = calendar_values[-1] if calendar_values else None
+        if fill is None:
+            derived = payload.get("years", [])
+            fill = 366 if derived and _is_leap_year(int(derived[-1])) else 365
+        working_capital["calendar_days"] = _resize_sequence(calendar_values, target_length, fill=fill)
+    else:
+        years_for_calendar = payload.get("years", [])[:target_length]
+        if years_for_calendar:
+            working_capital["calendar_days"] = [
+                366 if _is_leap_year(int(year)) else 365 for year in years_for_calendar
+            ]
+        else:
+            working_capital["calendar_days"] = [365 for _ in range(target_length)]
 
     scenarios = payload.get("scenarios", {})
     for scenario in scenarios.values():
@@ -3112,6 +3390,10 @@ def _align_payload_horizon(payload: dict, labels: Sequence[str], target_length: 
             scenario["inflation"] = _resize_sequence(scenario.get("inflation", []), target_length)
         if "interest" in scenario:
             scenario["interest"] = _resize_sequence(scenario.get("interest", []), target_length)
+
+
+def _is_leap_year(year: int) -> bool:
+    return year % 400 == 0 or (year % 4 == 0 and year % 100 != 0)
 
 
 def _resize_sequence(values: Iterable, target_length: int, fill=None) -> list:

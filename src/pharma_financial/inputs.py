@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Optional
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence
 import json
 
 
@@ -122,6 +122,7 @@ class WorkingCapitalDays:
     other_assets: List[int]
     accounts_payable: List[int]
     other_liabilities: List[int]
+    calendar_days: List[int]
 
 
 @dataclass
@@ -315,14 +316,48 @@ def _parse_depreciation_schedule(
     return fallback
 
 
-def _parse_working_capital(days: Mapping[str, List[int]]) -> WorkingCapitalDays:
+def _parse_working_capital(
+    data: Mapping[str, object], years: Sequence[int]
+) -> WorkingCapitalDays:
+    length = len(list(years))
+
+    if isinstance(data, Mapping) and isinstance(data.get("days"), Mapping):
+        days_mapping = data.get("days", {})  # type: ignore[assignment]
+    else:
+        days_mapping = data
+
+    if not isinstance(days_mapping, Mapping):
+        raise TypeError("working capital days must be provided as a mapping")
+
+    def _extract(name: str) -> List[int]:
+        values = days_mapping.get(name, [])  # type: ignore[assignment]
+        if isinstance(values, Mapping):
+            values = list(values.values())
+        return _coerce_int_schedule(values, length)
+
+    calendar_source: Iterable[float] | None = None
+    if isinstance(data, Mapping):
+        calendar_candidate = (
+            data.get("calendar_days")
+            or data.get("calendar")
+            or data.get("days_in_year")
+        )
+        if isinstance(calendar_candidate, Iterable) and not isinstance(calendar_candidate, (str, bytes)):
+            calendar_source = [float(value) for value in calendar_candidate]
+
+    if calendar_source is not None:
+        calendar_days = _coerce_int_schedule(calendar_source, length)
+    else:
+        calendar_days = [366 if year % 4 == 0 else 365 for year in years]
+
     return WorkingCapitalDays(
-        accounts_receivable=days["accounts_receivable"],
-        inventory=days["inventory"],
-        prepaid_expenses=days["prepaid_expenses"],
-        other_assets=days["other_assets"],
-        accounts_payable=days["accounts_payable"],
-        other_liabilities=days["other_liabilities"],
+        accounts_receivable=_extract("accounts_receivable"),
+        inventory=_extract("inventory"),
+        prepaid_expenses=_extract("prepaid_expenses"),
+        other_assets=_extract("other_assets"),
+        accounts_payable=_extract("accounts_payable"),
+        other_liabilities=_extract("other_liabilities"),
+        calendar_days=calendar_days,
     )
 
 
@@ -400,7 +435,7 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
     years = [int(year) for year in raw["years"]]
     unit_costs = _parse_product_parameters(raw["unit_costs"], raw["markup"])
     depreciation_schedule = _parse_depreciation_schedule(raw.get("depreciation", {}), years)
-    working_capital = _parse_working_capital(raw["working_capital"]["days"])
+    working_capital = _parse_working_capital(raw["working_capital"], years)
     financing = _parse_financing(raw["financing"])
     sensitivity = _parse_sensitivity(raw["sensitivity"]["variables"])
 

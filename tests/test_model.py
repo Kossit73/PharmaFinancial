@@ -110,7 +110,9 @@ class FinancialModelTest(unittest.TestCase):
         balance = schedule.column("Balance Sheet Inventory")
         variance = schedule.column("Variance")
         inventory_days = schedule.column("Inventory Days")
+        days_in_year = schedule.column("Days in Year")
         configured_days = list(self.inputs.working_capital_days.inventory)
+        calendar_days = list(self.inputs.working_capital_days.calendar_days)
 
         for idx, (calc, actual, diff) in enumerate(zip(calculated, balance, variance)):
             self.assertAlmostEqual(calc, actual, places=6)
@@ -120,6 +122,14 @@ class FinancialModelTest(unittest.TestCase):
             if configured_days:
                 expected_day = configured_days[idx] if idx < len(configured_days) else configured_days[-1]
             self.assertAlmostEqual(inventory_days[idx], expected_day, places=6)
+
+            if calendar_days:
+                expected_calendar = (
+                    calendar_days[idx]
+                    if idx < len(calendar_days)
+                    else calendar_days[-1]
+                )
+                self.assertAlmostEqual(days_in_year[idx], expected_calendar, places=6)
 
     def test_working_capital_schedule_matches_balance_sheet(self):
         schedule = self.model.working_capital_schedule()
