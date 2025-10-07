@@ -261,7 +261,7 @@ def main() -> None:
     with tabs[1]:
         _render_dashboard_tab(model, outputs)
     with tabs[2]:
-        _render_statement_tab("Statement of Financial Performance", outputs.income_statement)
+        _render_income_statement(model, outputs)
     with tabs[3]:
         _render_statement_tab("Statement of Financial Position", outputs.balance_sheet)
     with tabs[4]:
@@ -856,6 +856,24 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
 def _render_statement_tab(title: str, df: pd.DataFrame) -> None:
     st.subheader(title)
     st.dataframe(_with_year(df), use_container_width=True)
+
+
+def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -> None:
+    st.subheader("Statement of Financial Performance")
+    st.dataframe(_with_year(outputs.income_statement), use_container_width=True)
+
+    st.markdown("#### Total Expenses Schedule")
+    try:
+        expense_schedule = model.cost_structure()
+    except Exception as exc:  # pragma: no cover - defensive guard for runtime issues
+        st.warning(f"Unable to calculate total expenses schedule: {exc}")
+        return
+
+    st.dataframe(_with_year(expense_schedule), use_container_width=True)
+    st.caption(
+        "Total Expenses comprise raw materials, utilities, direct labour, cost of sales, "
+        "and general & administrative costs."
+    )
 
 
 def _render_ai_dashboard(ai_insights: Optional[AIInsights]) -> None:
