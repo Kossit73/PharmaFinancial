@@ -55,6 +55,10 @@ try:  # pragma: no cover - optional dependency for PDF ingestion
 except Exception:  # pragma: no cover - import guard when package missing
     PdfReader = None  # type: ignore
 
+# ---------------------------------------------------------------------------
+# Module level caches
+# ---------------------------------------------------------------------------
+
 DEFAULT_INPUT_PATH = Path(__file__).resolve().parent / "data" / "default_inputs.json"
 DEFAULT_INPUT_JSON = DEFAULT_INPUT_PATH.read_text(encoding="utf-8")
 DEFAULT_RISK_CATEGORIES = ["inherent", "climate", "political"]
@@ -103,6 +107,9 @@ GEN_AI_FEATURE_LABELS = {
 }
 GEN_AI_LABEL_TO_CODE = {label: code for code, label in GEN_AI_FEATURE_LABELS.items()}
 
+_INPUT_CACHE: dict[str, ModelInputs] = {}
+_MODEL_CACHE: dict[str, tuple["FinancialModel", "FinancialOutputs"]] = {}
+
 
 def _rerun() -> None:
     """Trigger a Streamlit rerun using the available API.
@@ -149,6 +156,54 @@ def _set_widget_value(key: str, value: float) -> None:
         st.session_state[key] = value
     except Exception:  # pragma: no cover - depends on Streamlit runtime
         pass
+
+
+def _json_default(value: object) -> object:
+    """Best-effort JSON serialiser for hashing Streamlit payloads."""
+
+    if isinstance(value, (set, tuple)):
+        return list(value)
+    if isinstance(value, Path):
+        return str(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serialisable")
+
+
+def _payload_digest(payload: Mapping[str, object]) -> str:
+    """Return a stable digest representing the current payload contents."""
+
+    serialised = json.dumps(payload, sort_keys=True, default=_json_default)
+    return hashlib.sha256(serialised.encode("utf-8")).hexdigest()
+
+
+def _normalise_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
+    """Normalise payloads prior to parsing to guarantee stable caching."""
+
+    return json.loads(json.dumps(payload, sort_keys=True, default=_json_default))
+
+
+def _cached_parse_inputs(payload: Mapping[str, object]) -> tuple[ModelInputs, str]:
+    """Parse inputs with caching so repeated reruns avoid recomputation."""
+
+    digest = _payload_digest(payload)
+    cached = _INPUT_CACHE.get(digest)
+    if cached is None:
+        normalised = _normalise_payload(payload)
+        cached = parse_inputs(normalised)
+        _INPUT_CACHE[digest] = cached
+    return cached, digest
+
+
+def _cached_model_run(inputs: ModelInputs, digest: str) -> tuple[FinancialModel, FinancialOutputs]:
+    """Return cached model/output pairs for the provided payload digest."""
+
+    cached = _MODEL_CACHE.get(digest)
+    if cached is not None:
+        return cached
+
+    model = FinancialModel(inputs)
+    outputs = model.run()
+    _MODEL_CACHE[digest] = (model, outputs)
+    return model, outputs
 
 
 def _render_projection_horizon(payload: dict) -> None:
@@ -321,9 +376,8 @@ def main() -> None:
         "scenario analysis, and Monte Carlo simulation."
     )
 
-    inputs = _resolve_inputs()
-    model = FinancialModel(inputs)
-    outputs = model.run()
+    inputs, digest = _resolve_inputs()
+    model, outputs = _cached_model_run(inputs, digest)
 
     _render_report_download(model, outputs)
 
@@ -361,7 +415,7 @@ def main() -> None:
         _render_break_even(outputs)
 
 
-def _resolve_inputs() -> ModelInputs:
+def _resolve_inputs() -> tuple[ModelInputs, str]:
     st.sidebar.header("Model Configuration")
     st.sidebar.write(
         "Upload a customised assumptions file (JSON, CSV, Excel, Word, or PDF) or use the bundled defaults."
@@ -448,7 +502,9 @@ def _resolve_inputs() -> ModelInputs:
     )
     _risk_rows_to_payload(risk_rows, payload)
 
-    return parse_inputs(payload)
+    inputs, digest = _cached_parse_inputs(payload)
+    st.session_state["input_fingerprint"] = digest
+    return inputs, digest
 
 
 def _load_payload_from_bytes(data: bytes, suffix: str) -> Mapping[str, object]:

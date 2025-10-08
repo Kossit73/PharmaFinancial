@@ -66,6 +66,8 @@ class RerunHelperTest(unittest.TestCase):
         importlib.invalidate_caches()
         self.stub = stub
         self.app = importlib.import_module("pharma_financial.app")
+        self.app._INPUT_CACHE.clear()
+        self.app._MODEL_CACHE.clear()
 
     def tearDown(self):
         if self.original_streamlit is None:
@@ -127,6 +129,22 @@ class RerunHelperTest(unittest.TestCase):
         self.assertAlmostEqual(first["rate"] * 100.0, rows[0]["Commission (%)"], places=6)
         self.assertAlmostEqual(first["revenue_share"] * 100.0, rows[0]["Revenue Share (%)"], places=6)
         self.assertEqual(first["payment_days"], rows[0]["Payment Days"])
+
+    def test_cached_parse_and_model_run_reuse_digest(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+        )
+        inputs_a, digest_a = self.app._cached_parse_inputs(payload)
+        inputs_b, digest_b = self.app._cached_parse_inputs(payload)
+
+        self.assertIs(inputs_a, inputs_b)
+        self.assertEqual(digest_a, digest_b)
+
+        model1, outputs1 = self.app._cached_model_run(inputs_a, digest_a)
+        model2, outputs2 = self.app._cached_model_run(inputs_b, digest_b)
+
+        self.assertIs(model1, model2)
+        self.assertIs(outputs1, outputs2)
 
     def test_inventory_rows_roundtrip(self):
         payload = json.loads(
