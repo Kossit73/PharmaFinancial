@@ -175,6 +175,7 @@ class FinancialModel:
         production = self._production()
         prices = self._unit_prices()
         commission_params = self._commission_parameters()
+        risk_factors = self._risk_factors()
 
         gross_totals: List[float] = []
         commission: List[float] = []
@@ -185,10 +186,13 @@ class FinancialModel:
         for idx, year in enumerate(self.years):
             gross_year = 0.0
             commission_year = 0.0
+            risk = risk_factors[idx] if idx < len(risk_factors) else (
+                risk_factors[-1] if risk_factors else 1.0
+            )
             year_rates = commission_params.get(int(year), {})
             for product in self.products:
                 units = production[product][idx]
-                gross_value = units * prices[product] * self._inflation[idx]
+                gross_value = units * prices[product] * self._inflation[idx] * risk
                 columns[product].append(gross_value)
                 gross_year += gross_value
                 rate, share, _ = year_rates.get(product, (0.0, 1.0, 0))
@@ -207,7 +211,19 @@ class FinancialModel:
         production = self._production()
         total_units = [sum(production[product][idx] for product in self.products) for idx in range(len(self.years))]
 
-        raw_material_cost = [units * self.inputs.raw_material_cost_per_unit for units in total_units]
+        risk_factors = self._risk_factors()
+
+        def _risk_for_index(index: int) -> float:
+            if risk_factors:
+                if index < len(risk_factors):
+                    return risk_factors[index]
+                return risk_factors[-1]
+            return 1.0
+
+        raw_material_cost = [
+            units * self.inputs.raw_material_cost_per_unit * _risk_for_index(idx)
+            for idx, units in enumerate(total_units)
+        ]
 
         utility = self.inputs.utility_schedule
         utilities: List[float] = []
@@ -232,10 +248,19 @@ class FinancialModel:
 
         base_direct = sum(self.inputs.direct_labor_costs.values())
         baseline_units = total_units[0] or 1.0
-        direct_labor = [base_direct * (units / baseline_units) * self._inflation[idx] for idx, units in enumerate(total_units)]
+        direct_labor = [
+            base_direct
+            * (units / baseline_units)
+            * self._inflation[idx]
+            * _risk_for_index(idx)
+            for idx, units in enumerate(total_units)
+        ]
 
         base_indirect = sum(self.inputs.indirect_labor_costs.values())
-        indirect_labor = [base_indirect * self._inflation[idx] for idx in range(len(self.years))]
+        indirect_labor = [
+            base_indirect * self._inflation[idx] * _risk_for_index(idx)
+            for idx in range(len(self.years))
+        ]
 
         cost_of_sales = [raw + util + direct for raw, util, direct in zip(raw_material_cost, utilities, direct_labor)]
         total_expenses = [cos + indirect for cos, indirect in zip(cost_of_sales, indirect_labor)]
@@ -369,7 +394,6 @@ class FinancialModel:
         ebit = [ea - dep for ea, dep in zip(ebitda, depreciation)]
         interest = self._interest_schedule()
         ebt = [e - i for e, i in zip(ebit, interest)]
-        risk_factors = self._risk_factors()
         taxes: List[float] = []
         net_income: List[float] = []
         for idx, (value, rate) in enumerate(zip(ebt, self._tax_schedule())):
@@ -381,7 +405,7 @@ class FinancialModel:
                 base_net = value - tax
 
             taxes.append(tax)
-            net_income.append(base_net * risk_factors[idx])
+            net_income.append(base_net)
 
         ebitda_margin = [_safe_ratio(e, r) for e, r in zip(ebitda, net_revenue)]
         ebit_margin = [_safe_ratio(e, r) for e, r in zip(ebit, net_revenue)]
@@ -1106,7 +1130,6 @@ class FinancialModel:
         depreciation = self.depreciation_schedule()
         interest = self._interest_schedule()
         tax_schedule = self._tax_schedule()
-        risk_factors = self._risk_factors()
 
         import random
 
@@ -1162,15 +1185,29 @@ class FinancialModel:
             if "other" in variable_codes:
                 risk_adjustment = max(0.0, 1.0 - random.uniform(low, high))
 
+            if "other" in variable_codes:
+                risk_series = [risk_adjustment for _ in self.years]
+            else:
+                risk_series = [1.0 for _ in self.years]
+
             simulated_revenue = [
-                rev * (1 + growth)
-                for rev, growth in zip(base_revenue, growth_rates)
+                rev * (1 + growth) * risk_series[idx]
+                for idx, (rev, growth) in enumerate(zip(base_revenue, growth_rates))
             ]
 
-            raw_series = [value * raw_factor for value in raw_materials]
+            raw_series = [
+                value * raw_factor * risk_series[idx]
+                for idx, value in enumerate(raw_materials)
+            ]
             utility_series = [value * utility_factor for value in utilities]
-            direct_series = [value * labor_factor for value in direct_labor]
-            indirect_series = [value * labor_factor for value in indirect_labor]
+            direct_series = [
+                value * labor_factor * risk_series[idx]
+                for idx, value in enumerate(direct_labor)
+            ]
+            indirect_series = [
+                value * labor_factor * risk_series[idx]
+                for idx, value in enumerate(indirect_labor)
+            ]
             total_costs = [
                 raw_series[idx]
                 + utility_series[idx]
@@ -1194,17 +1231,16 @@ class FinancialModel:
                 for rate in tax_schedule
             ] if "tax_rate" in variable_codes else list(tax_schedule)
 
-            taxes = [ebt[idx] * effective_tax[idx] for idx in range(len(self.years))]
+            taxes = [
+                ebt[idx] * effective_tax[idx] if ebt[idx] > 0 else 0.0
+                for idx in range(len(self.years))
+            ]
 
-            effective_risk = [factor * risk_adjustment for factor in risk_factors]
             net_income = [
-                (ebt[idx] - taxes[idx]) * effective_risk[idx]
+                ebt[idx] - taxes[idx]
                 for idx in range(len(self.years))
             ]
-            cash_flows = [
-                ebitda[idx] * effective_risk[idx]
-                for idx in range(len(self.years))
-            ]
+            cash_flows = list(ebitda)
 
             discounted = [
                 cf / (1 + discount_rate) ** (idx + 1)

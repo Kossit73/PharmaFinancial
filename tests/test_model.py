@@ -107,6 +107,7 @@ class FinancialModelTest(unittest.TestCase):
         commission_column = schedule.column("Distributors Commission")
         parameters = self.model._commission_parameters()
         inflation = self.model._inflation
+        risk = self.model._risk_factors()
 
         expected: list[float] = []
         for idx, year in enumerate(self.inputs.years):
@@ -115,7 +116,8 @@ class FinancialModelTest(unittest.TestCase):
             for product in self.inputs.products:
                 units = float(self.inputs.production_estimate[product][idx])
                 price = self.inputs.unit_costs[product].selling_price
-                gross_value = units * price * inflation[idx]
+                factor = risk[idx] if idx < len(risk) else (risk[-1] if risk else 1.0)
+                gross_value = units * price * inflation[idx] * factor
                 rate, share, _ = year_params.get(product, (0.0, 1.0, 0))
                 total += gross_value * rate * share
             expected.append(total)
