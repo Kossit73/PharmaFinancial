@@ -1370,6 +1370,28 @@ def _render_break_even_inputs(payload: dict) -> None:
         if value
     )
 
+    cost_source = st.session_state.get("fixed_variable_rows", []) or _payload_to_fixed_variable_rows(
+        payload
+    )
+    cost_lookup: dict[str, dict[str, float]] = {}
+    for entry in cost_source:
+        if not isinstance(entry, Mapping):
+            continue
+        name = str(entry.get("Product", "") or "").strip()
+        if not name:
+            continue
+        cost_lookup[name] = {
+            "fixed": float(entry.get("Fixed Cost", 0.0) or 0.0),
+            "variable": float(entry.get("Variable Cost", 0.0) or 0.0),
+        }
+
+    unit_costs = payload.get("unit_costs", {}) if isinstance(payload, Mapping) else {}
+    price_lookup: dict[str, float] = {}
+    if isinstance(unit_costs, Mapping):
+        for name, values in unit_costs.items():
+            if isinstance(values, Mapping):
+                price_lookup[str(name)] = float(values.get("price", 0.0) or 0.0)
+
     updated_rows: list[dict] = []
     overrides_updated = set(overrides)
     for index, row in enumerate(rows):
@@ -1383,13 +1405,27 @@ def _render_break_even_inputs(payload: dict) -> None:
                 f"break_even_product_{index}",
                 current_value=str(row.get("Product", "")),
             )
-            fixed_cost = cols[1].number_input(
+            clean_product = (product_value or "").strip()
+            cost_info = cost_lookup.get(clean_product)
+            fixed_default = (
+                cost_info["fixed"]
+                if cost_info is not None
+                else float(row.get("Fixed Cost", 0.0))
+            )
+            variable_default = (
+                cost_info["variable"]
+                if cost_info is not None
+                else float(row.get("Variable Cost", 0.0))
+            )
+            cols[1].number_input(
                 "Fixed Cost",
-                value=float(row.get("Fixed Cost", 0.0)),
+                value=fixed_default,
                 key=f"break_even_fixed_{index}",
                 step=1000.0,
                 format="%.2f",
                 min_value=0.0,
+                disabled=True,
+                help="Managed via the Fixed & Variable Costs table.",
             )
             selling_price = cols[2].number_input(
                 "Selling Price",
@@ -1399,13 +1435,15 @@ def _render_break_even_inputs(payload: dict) -> None:
                 format="%.4f",
                 min_value=0.0,
             )
-            variable_cost = cols[3].number_input(
+            cols[3].number_input(
                 "Variable Cost",
-                value=float(row.get("Variable Cost", 0.0)),
+                value=variable_default,
                 key=f"break_even_variable_{index}",
                 step=0.001,
                 format="%.4f",
                 min_value=0.0,
+                disabled=True,
+                help="Managed via the Fixed & Variable Costs table.",
             )
             target_profit = cols[4].number_input(
                 "Target Profit",
@@ -1425,6 +1463,13 @@ def _render_break_even_inputs(payload: dict) -> None:
             )
             remove = cols[6].button("Remove", key=f"break_even_remove_{index}")
 
+            if cost_info is None:
+                cols[1].warning(
+                    "Configure this product in the Fixed & Variable Costs table to set its costs."
+                )
+
+            fixed_cost = fixed_default
+            variable_cost = variable_default
             metrics = _calculate_break_even_metrics(
                 {
                     "Fixed Cost": fixed_cost,
@@ -1467,7 +1512,6 @@ def _render_break_even_inputs(payload: dict) -> None:
             ):
                 cols[5].warning("Break-even exceeds expected volume")
 
-            clean_product = product_value.strip()
             if remove:
                 overrides_updated.discard(clean_product)
                 continue
@@ -1515,28 +1559,12 @@ def _render_break_even_inputs(payload: dict) -> None:
             product_catalog,
             "break_even_new_product",
         )
-        new_fixed = st.number_input(
-            "Fixed Cost",
-            value=0.0,
-            step=1000.0,
-            format="%.2f",
-            key="break_even_new_fixed",
-            min_value=0.0,
-        )
         new_price = st.number_input(
             "Selling Price",
-            value=0.0,
+            value=price_lookup.get(str(new_product or "").strip(), 0.0),
             step=0.001,
             format="%.4f",
             key="break_even_new_price",
-            min_value=0.0,
-        )
-        new_variable = st.number_input(
-            "Variable Cost",
-            value=0.0,
-            step=0.001,
-            format="%.4f",
-            key="break_even_new_variable",
             min_value=0.0,
         )
         new_target = st.number_input(
@@ -1561,14 +1589,18 @@ def _render_break_even_inputs(payload: dict) -> None:
         cleaned_product = (new_product or "").strip()
         if not cleaned_product:
             st.warning("Product name is required to add a break-even row.")
+        elif cleaned_product not in cost_lookup:
+            st.warning(
+                "Add fixed and variable cost details for this product in the Fixed & Variable Costs table first."
+            )
         else:
             additions = list(st.session_state.get("break_even_rows", []) or [])
             additions.append(
                 {
                     "Product": cleaned_product,
-                    "Fixed Cost": float(new_fixed),
+                    "Fixed Cost": float(cost_lookup[cleaned_product]["fixed"]),
                     "Selling Price": float(new_price),
-                    "Variable Cost": float(new_variable),
+                    "Variable Cost": float(cost_lookup[cleaned_product]["variable"]),
                     "Target Profit": float(new_target),
                     "Expected Volume": float(new_volume),
                 }
@@ -1582,9 +1614,7 @@ def _render_break_even_inputs(payload: dict) -> None:
                 "break_even_new_product",
                 "break_even_new_product_select",
                 "break_even_new_product_custom",
-                "break_even_new_fixed",
                 "break_even_new_price",
-                "break_even_new_variable",
                 "break_even_new_target",
                 "break_even_new_volume",
             ):
