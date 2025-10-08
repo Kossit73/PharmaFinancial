@@ -156,12 +156,7 @@ class FinancialModel:
 
     def _variable_costs(self) -> Dict[str, float]:
         overrides = getattr(self.inputs, "variable_cost_overrides", {})
-        results: Dict[str, float] = {}
-        for name, params in self.inputs.unit_costs.items():
-            default_value = params.production_cost + params.freight_cost
-            value = overrides.get(name, default_value)
-            results[name] = float(value)
-        return results
+        return {product: float(overrides.get(product, 0.0)) for product in self.products}
 
     def _total_units(self) -> Dict[str, float]:
         return {name: float(value) for name, value in self.inputs.total_production_units.items()}
@@ -217,23 +212,16 @@ class FinancialModel:
             return 1.0
 
         variable_lookup = self._variable_costs()
-        default_variable_costs: Dict[str, float] = {}
-        for name, params in self.inputs.unit_costs.items():
-            default_variable_costs[name] = params.production_cost + params.freight_cost
 
         raw_material_cost: List[float] = []
-        for idx, units in enumerate(total_units):
-            base = units * self.inputs.raw_material_cost_per_unit * _risk_for_index(idx)
-            adjustment = 0.0
+        for idx in range(len(self.years)):
+            risk = _risk_for_index(idx)
+            total = 0.0
             for product in self.products:
                 product_units = production[product][idx]
-                default_value = default_variable_costs.get(product, 0.0)
-                override_value = variable_lookup.get(product, default_value)
-                delta = override_value - default_value
-                if abs(delta) < 1e-12:
-                    continue
-                adjustment += product_units * delta * _risk_for_index(idx)
-            raw_material_cost.append(base + adjustment)
+                variable_cost = variable_lookup.get(product, 0.0)
+                total += product_units * variable_cost * risk
+            raw_material_cost.append(total)
 
         utility = self.inputs.utility_schedule
         utilities: List[float] = []
@@ -1123,15 +1111,18 @@ class FinancialModel:
             multipliers = []
             npvs = []
             irrs = []
+            original_variables = dict(getattr(self.inputs, "variable_cost_overrides", {}))
             for multiplier in adjustments:
                 original_tablet_price = self.inputs.unit_costs["Tablets"].selling_price
-                original_raw = self.inputs.raw_material_cost_per_unit
                 original_discount = self.inputs.financing.discount_rate
 
                 if variable == "tablet_price":
                     self.inputs.unit_costs["Tablets"].selling_price = original_tablet_price * multiplier
                 elif variable == "raw_material_cost":
-                    self.inputs.raw_material_cost_per_unit = original_raw * multiplier
+                    scaled = {
+                        product: value * multiplier for product, value in original_variables.items()
+                    }
+                    self.inputs.variable_cost_overrides = scaled
                 elif variable == "discount_rate":
                     self.inputs.financing.discount_rate = multiplier
 
@@ -1141,7 +1132,7 @@ class FinancialModel:
                 irrs.append(metrics.column("Value")[1])
 
                 self.inputs.unit_costs["Tablets"].selling_price = original_tablet_price
-                self.inputs.raw_material_cost_per_unit = original_raw
+                self.inputs.variable_cost_overrides = dict(original_variables)
                 self.inputs.financing.discount_rate = original_discount
             index = list(range(1, len(multipliers) + 1))
             results[variable] = build_table(index, {"Multiplier": multipliers, "NPV": npvs, "IRR": irrs}, index_name="Case")
@@ -1385,13 +1376,6 @@ class FinancialModel:
         )
 
     def break_even_analysis(self) -> Table:
-        costs = self.cost_structure()
-        total_expenses = costs.column("Total Expenses")
-        if total_expenses:
-            fixed_cost_default = sum(total_expenses) / len(total_expenses)
-        else:
-            fixed_cost_default = 0.0
-
         configured: Dict[str, BreakEvenRow] = {
             row.product: row for row in self.inputs.break_even_rows
         }
@@ -1434,12 +1418,12 @@ class FinancialModel:
             variable_cost = (
                 override.variable_cost
                 if override is not None
-                else variable_lookup.get(product, (params.production_cost + params.freight_cost) if params else 0.0)
+                else variable_lookup.get(product, 0.0)
             )
             if override is not None:
                 fixed_cost = override.fixed_cost
             else:
-                fixed_cost = float(fixed_overrides.get(product, fixed_cost_default))
+                fixed_cost = float(fixed_overrides.get(product, 0.0) or 0.0)
             target_profit = override.target_profit if override is not None else 0.0
             expected_volume = (
                 override.expected_volume

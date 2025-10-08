@@ -465,18 +465,13 @@ class FinancialModelTest(unittest.TestCase):
         self.assertNotEqual(base_costs[0], override_costs[0])
         self.assertGreater(override_costs[0], base_costs[0])
 
-    def test_break_even_fixed_cost_defaults_split_even_without_overrides(self):
+    def test_break_even_fixed_cost_defaults_zero_without_overrides(self):
         inputs = load_inputs(Path("src/pharma_financial/data/default_inputs.json"))
         model = FinancialModel(inputs)
-        costs = model.cost_structure()
-        total_expenses = costs.column("Total Expenses")
-        self.assertTrue(total_expenses)
-        average_expense = sum(total_expenses) / len(total_expenses)
         break_even = model.break_even_analysis()
         self.assertTrue(break_even.index)
-        expected_default = average_expense
         for value in break_even.data["Fixed Cost"]:
-            self.assertAlmostEqual(value, expected_default, places=6)
+            self.assertAlmostEqual(value, 0.0, places=6)
 
     def test_senior_debt_outstanding_clears_by_horizon(self):
         _, outstanding = self.model._senior_debt_schedules()

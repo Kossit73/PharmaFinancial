@@ -590,7 +590,6 @@ def _parse_break_even_rows(
 
         params = unit_costs.get(product)
         default_price = params.selling_price if params else 0.0
-        default_variable = (params.production_cost + params.freight_cost) if params else 0.0
         default_volume = float(total_units.get(product, 0.0))
 
         if "fixed_cost" in entry or "Fixed Cost" in entry:
@@ -604,11 +603,10 @@ def _parse_break_even_rows(
 
         if "variable_cost" in entry or "Variable Cost" in entry:
             variable_cost = float(
-                entry.get("variable_cost", entry.get("Variable Cost", default_variable))
-                or 0.0
+                entry.get("variable_cost", entry.get("Variable Cost", 0.0)) or 0.0
             )
         else:
-            variable_cost = float(variable_overrides.get(product, default_variable) or 0.0)
+            variable_cost = float(variable_overrides.get(product, 0.0) or 0.0)
 
         target_profit = float(entry.get("target_profit", entry.get("Target Profit", 0.0)))
         expected_volume = float(entry.get("expected_volume", entry.get("Expected Volume", default_volume)))
@@ -627,10 +625,7 @@ def _parse_break_even_rows(
     return rows
 
 
-def _parse_fixed_variable_costs(
-    raw: object,
-    unit_costs: Mapping[str, ProductParameters],
-) -> tuple[Dict[str, float], Dict[str, float]]:
+def _parse_fixed_variable_costs(raw: object) -> tuple[Dict[str, float], Dict[str, float]]:
     fixed: Dict[str, float] = {}
     variable: Dict[str, float] = {}
 
@@ -648,9 +643,6 @@ def _parse_fixed_variable_costs(
         product = str(entry.get("product") or entry.get("Product") or "").strip()
         if not product:
             continue
-
-        params = unit_costs.get(product)
-        default_variable = (params.production_cost + params.freight_cost) if params else 0.0
 
         has_fixed_key = "fixed_cost" in entry or "Fixed Cost" in entry
         fixed_value = entry.get("fixed_cost") if "fixed_cost" in entry else entry.get("Fixed Cost")
@@ -670,10 +662,10 @@ def _parse_fixed_variable_costs(
             try:
                 variable[product] = float(variable_value or 0.0)
             except (TypeError, ValueError):
-                variable[product] = default_variable
+                variable[product] = 0.0
 
-        if product not in variable and params is not None:
-            variable[product] = default_variable
+        if product not in variable:
+            variable[product] = 0.0
 
     return fixed, variable
 
@@ -803,8 +795,10 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         capacity[name] = float(capacity_raw.get(name, 0.0))
 
     fixed_overrides, variable_overrides = _parse_fixed_variable_costs(
-        raw.get("fixed_variable_costs"), unit_costs
+        raw.get("fixed_variable_costs")
     )
+    for product in raw["production_estimate"].keys():
+        variable_overrides.setdefault(product, 0.0)
 
     break_even_rows = _parse_break_even_rows(
         raw.get("break_even"),
