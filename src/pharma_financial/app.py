@@ -1730,9 +1730,11 @@ def _render_fixed_variable_costs(payload: dict) -> None:
                 f"fixed_variable_product_{index}",
                 current_value=str(row.get("Product", "")),
             )
+            previous_fixed = float(row.get("Fixed Cost", 0.0))
+            previous_flag = bool(row.get("__has_fixed__", False))
             fixed_cost = cols[1].number_input(
                 "Fixed Cost",
-                value=float(row.get("Fixed Cost", 0.0)),
+                value=previous_fixed,
                 key=f"fixed_variable_fixed_{index}",
                 step=1000.0,
                 format="%.2f",
@@ -1751,11 +1753,14 @@ def _render_fixed_variable_costs(payload: dict) -> None:
             if remove:
                 continue
 
+            has_fixed = previous_flag or abs(float(fixed_cost) - previous_fixed) > 1e-9
+
             updated_rows.append(
                 {
                     "Product": product_value.strip(),
                     "Fixed Cost": float(fixed_cost),
                     "Variable Cost": float(variable_cost),
+                    "__has_fixed__": has_fixed,
                 }
             )
 
@@ -1802,6 +1807,7 @@ def _render_fixed_variable_costs(payload: dict) -> None:
                     "Product": cleaned_product,
                     "Fixed Cost": float(new_fixed),
                     "Variable Cost": float(new_variable),
+                    "__has_fixed__": True,
                 }
             )
             st.session_state["fixed_variable_rows"] = additions
@@ -5608,6 +5614,7 @@ def _payload_to_fixed_variable_rows(payload: Mapping) -> list[dict]:
             product = str(entry.get("product") or entry.get("Product") or "").strip()
             if not product:
                 continue
+            has_fixed = "fixed_cost" in entry or "Fixed Cost" in entry
             fixed_cost = float(entry.get("fixed_cost", entry.get("Fixed Cost", 0.0)) or 0.0)
             variable_cost = float(
                 entry.get("variable_cost", entry.get("Variable Cost", 0.0)) or 0.0
@@ -5617,6 +5624,7 @@ def _payload_to_fixed_variable_rows(payload: Mapping) -> list[dict]:
                     "Product": product,
                     "Fixed Cost": fixed_cost,
                     "Variable Cost": variable_cost,
+                    "__has_fixed__": has_fixed,
                 }
             )
 
@@ -5631,6 +5639,7 @@ def _payload_to_fixed_variable_rows(payload: Mapping) -> list[dict]:
             product = str(entry.get("product") or entry.get("Product") or "").strip()
             if not product:
                 continue
+            has_fixed = "fixed_cost" in entry or "Fixed Cost" in entry
             rows.append(
                 {
                     "Product": product,
@@ -5638,6 +5647,7 @@ def _payload_to_fixed_variable_rows(payload: Mapping) -> list[dict]:
                     "Variable Cost": float(
                         entry.get("variable_cost", entry.get("Variable Cost", 0.0)) or 0.0
                     ),
+                    "__has_fixed__": has_fixed,
                 }
             )
 
@@ -5649,7 +5659,14 @@ def _payload_to_fixed_variable_rows(payload: Mapping) -> list[dict]:
         for product in unit_costs.keys():
             if not product:
                 continue
-            rows.append({"Product": str(product), "Fixed Cost": 0.0, "Variable Cost": 0.0})
+            rows.append(
+                {
+                    "Product": str(product),
+                    "Fixed Cost": 0.0,
+                    "Variable Cost": 0.0,
+                    "__has_fixed__": False,
+                }
+            )
 
     return rows
 
@@ -5664,7 +5681,7 @@ def _fixed_variable_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> N
         payload["fixed_variable_costs"] = section
 
     serialised: list[dict] = []
-    mapping: dict[str, tuple[float, float]] = {}
+    mapping: dict[str, tuple[Optional[float], float]] = {}
     for row in rows:
         if not isinstance(row, Mapping):
             continue
@@ -5673,14 +5690,12 @@ def _fixed_variable_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> N
             continue
         fixed_cost = float(row.get("Fixed Cost", 0.0) or 0.0)
         variable_cost = float(row.get("Variable Cost", 0.0) or 0.0)
-        serialised.append(
-            {
-                "product": product,
-                "fixed_cost": fixed_cost,
-                "variable_cost": variable_cost,
-            }
-        )
-        mapping[product] = (fixed_cost, variable_cost)
+        has_fixed = bool(row.get("__has_fixed__", False))
+        entry: dict[str, float] = {"product": product, "variable_cost": variable_cost}
+        if has_fixed:
+            entry["fixed_cost"] = fixed_cost
+        serialised.append(entry)
+        mapping[product] = (fixed_cost if has_fixed else None, variable_cost)
 
     section["rows"] = serialised
 
@@ -5694,7 +5709,10 @@ def _fixed_variable_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> N
                 product = str(entry.get("product") or entry.get("Product") or "").strip()
                 if product in mapping:
                     fixed_cost, variable_cost = mapping[product]
-                    entry["fixed_cost"] = fixed_cost
+                    if fixed_cost is not None:
+                        entry["fixed_cost"] = fixed_cost
+                    elif "fixed_cost" in entry:
+                        entry.pop("fixed_cost", None)
                     entry["variable_cost"] = variable_cost
 
     if "break_even_rows" in st.session_state and isinstance(
@@ -5706,8 +5724,12 @@ def _fixed_variable_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> N
             if product in mapping:
                 fixed_cost, variable_cost = mapping[product]
                 new_entry = dict(entry)
-                new_entry["Fixed Cost"] = fixed_cost
+                if fixed_cost is not None:
+                    new_entry["Fixed Cost"] = fixed_cost
+                elif "Fixed Cost" in new_entry:
+                    new_entry["Fixed Cost"] = entry.get("Fixed Cost", 0.0)
                 new_entry["Variable Cost"] = variable_cost
+                new_entry["__has_fixed__"] = fixed_cost is not None
                 updated.append(new_entry)
             else:
                 updated.append(entry)
