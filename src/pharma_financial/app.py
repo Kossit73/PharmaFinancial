@@ -5249,19 +5249,12 @@ def _payload_to_commission_rows(payload: Mapping) -> list[dict]:
 
     years = payload.get("years", []) if isinstance(payload, Mapping) else []
     unit_costs = payload.get("unit_costs", {}) if isinstance(payload, Mapping) else {}
-    factors = _inflation_factors_from_payload(payload)
     fallback: list[dict] = []
     if isinstance(unit_costs, Mapping):
-        for idx, year in enumerate(years):
-            factor = factors[idx] if idx < len(factors) else 1.0
-            if not factor:
-                factor = 1.0
-            for product, values in unit_costs.items():
-                if not isinstance(values, Mapping):
-                    continue
-                price = float(values.get("price", 0.0) or 0.0)
-                freight = float(values.get("freight", 0.0) or 0.0)
-                rate = (freight / price) / factor if price else 0.0
+        for year in years:
+            for product in unit_costs.keys():
+                # Default distributor commission rate: 5%
+                rate = 0.05
                 fallback.append(
                     {
                         "Year": int(year),

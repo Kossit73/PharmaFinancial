@@ -124,23 +124,16 @@ class FinancialModel:
             return self._commission_cache
 
         fallback_rates: dict[str, float] = {}
-        for name, params in self.inputs.unit_costs.items():
-            price = params.selling_price
-            if price:
-                fallback_rates[name] = max(params.freight_cost / price, 0.0)
-            else:
-                fallback_rates[name] = 0.0
+        for name in self.inputs.unit_costs.keys():
+            # Default distributor commission rate is 5%
+            fallback_rates[name] = 0.05
 
         schedule: dict[int, dict[str, tuple[float, float, int]]] = {}
         for idx, year in enumerate(self.years):
-            factor = self._inflation[idx] if idx < len(self._inflation) else 1.0
-            if not factor:
-                factor = 1.0
             per_product: dict[str, tuple[float, float, int]] = {}
             for product in self.products:
-                base_rate = fallback_rates.get(product, 0.0)
-                adjusted_rate = base_rate / factor if factor else base_rate
-                per_product[product] = (adjusted_rate, 1.0, 0)
+                base_rate = fallback_rates.get(product, 0.05)
+                per_product[product] = (base_rate, 1.0, 0)
             schedule[int(year)] = per_product
 
         for row in self.inputs.distributor_commission:
