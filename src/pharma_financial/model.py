@@ -407,8 +407,8 @@ class FinancialModel:
         general_admin = costs.column("General & Admin")
 
         gross_profit = [rev - cost for rev, cost in zip(net_revenue, cost_of_sales)]
-        ebitda = list(gross_profit)
-        ebit = [gp - ga - dep for gp, ga, dep in zip(gross_profit, general_admin, depreciation)]
+        ebitda = [gp - ga for gp, ga in zip(gross_profit, general_admin)]
+        ebit = [eb - dep for eb, dep in zip(ebitda, depreciation)]
         interest = self._interest_schedule()
         ebt = [e - i for e, i in zip(ebit, interest)]
         taxes: List[float] = []

@@ -142,9 +142,11 @@ class FinancialModelTest(unittest.TestCase):
             self.assertAlmostEqual(
                 gross_profit[idx], net_revenue[idx] - cost_of_sales[idx], places=6
             )
-            self.assertAlmostEqual(ebitda[idx], gross_profit[idx], places=6)
             self.assertAlmostEqual(
-                ebit[idx], gross_profit[idx] - general_admin[idx] - depreciation[idx], places=6
+                ebitda[idx], gross_profit[idx] - general_admin[idx], places=6
+            )
+            self.assertAlmostEqual(
+                ebit[idx], ebitda[idx] - depreciation[idx], places=6
             )
             self.assertAlmostEqual(
                 gross_margin[idx],
