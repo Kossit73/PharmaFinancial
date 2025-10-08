@@ -1394,12 +1394,6 @@ class FinancialModel:
                 seen[name] = None
                 product_order.append(name)
 
-        product_count = len(product_order)
-        if product_count > 0:
-            split_fixed_cost_default = fixed_cost_default / product_count
-        else:
-            split_fixed_cost_default = fixed_cost_default
-
         columns: Dict[str, List[float]] = {
             "Fixed Cost": [],
             "Variable Cost per Unit": [],
@@ -1431,7 +1425,7 @@ class FinancialModel:
             if override is not None:
                 fixed_cost = override.fixed_cost
             else:
-                fixed_cost = float(fixed_overrides.get(product, split_fixed_cost_default))
+                fixed_cost = float(fixed_overrides.get(product, fixed_cost_default))
             target_profit = override.target_profit if override is not None else 0.0
             expected_volume = (
                 override.expected_volume

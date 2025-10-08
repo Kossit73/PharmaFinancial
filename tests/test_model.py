@@ -454,7 +454,7 @@ class FinancialModelTest(unittest.TestCase):
         average_expense = sum(total_expenses) / len(total_expenses)
         break_even = model.break_even_analysis()
         self.assertTrue(break_even.index)
-        expected_default = average_expense / len(break_even.index)
+        expected_default = average_expense
         for value in break_even.data["Fixed Cost"]:
             self.assertAlmostEqual(value, expected_default, places=6)
 
