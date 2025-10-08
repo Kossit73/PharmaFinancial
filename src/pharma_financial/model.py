@@ -262,8 +262,20 @@ class FinancialModel:
             for idx in range(len(self.years))
         ]
 
-        cost_of_sales = [raw + util + direct for raw, util, direct in zip(raw_material_cost, utilities, direct_labor)]
-        total_expenses = [cos + indirect for cos, indirect in zip(cost_of_sales, indirect_labor)]
+        utility_cost_of_sales = [value * 0.8 for value in utilities]
+        utility_general_admin = [value - cos_share for value, cos_share in zip(utilities, utility_cost_of_sales)]
+
+        cost_of_sales = [
+            raw + util_share + direct
+            for raw, util_share, direct in zip(
+                raw_material_cost, utility_cost_of_sales, direct_labor
+            )
+        ]
+        general_admin = [
+            base + util_share
+            for base, util_share in zip(indirect_labor, utility_general_admin)
+        ]
+        total_expenses = [cos + ga for cos, ga in zip(cost_of_sales, general_admin)]
 
         return build_table(
             self.years,
@@ -272,7 +284,7 @@ class FinancialModel:
                 "Utilities": utilities,
                 "Direct Labor": direct_labor,
                 "Cost of Sales": cost_of_sales,
-                "General & Admin": indirect_labor,
+                "General & Admin": general_admin,
                 "Total Expenses": total_expenses,
             },
         )
@@ -387,11 +399,16 @@ class FinancialModel:
         costs = self.cost_structure()
         depreciation = self.depreciation_schedule()
 
+        gross_revenue = revenue.column("Gross Revenue")
+        distributors_commission = revenue.column("Distributors Commission")
         net_revenue = revenue.column("Net Revenue")
-        total_expenses = costs.column("Total Expenses")
 
-        ebitda = [rev - cost for rev, cost in zip(net_revenue, total_expenses)]
-        ebit = [ea - dep for ea, dep in zip(ebitda, depreciation)]
+        cost_of_sales = costs.column("Cost of Sales")
+        general_admin = costs.column("General & Admin")
+
+        gross_profit = [rev - cost for rev, cost in zip(net_revenue, cost_of_sales)]
+        ebitda = list(gross_profit)
+        ebit = [gp - ga - dep for gp, ga, dep in zip(gross_profit, general_admin, depreciation)]
         interest = self._interest_schedule()
         ebt = [e - i for e, i in zip(ebit, interest)]
         taxes: List[float] = []
@@ -407,6 +424,7 @@ class FinancialModel:
             taxes.append(tax)
             net_income.append(base_net)
 
+        gross_profit_margin = [_safe_ratio(gp, gr) for gp, gr in zip(gross_profit, gross_revenue)]
         ebitda_margin = [_safe_ratio(e, r) for e, r in zip(ebitda, net_revenue)]
         ebit_margin = [_safe_ratio(e, r) for e, r in zip(ebit, net_revenue)]
         roe = [_safe_ratio(n, self.inputs.financing.share_capital) for n in net_income]
@@ -414,17 +432,20 @@ class FinancialModel:
         return build_table(
             self.years,
             {
-                "Gross Revenue": revenue.column("Gross Revenue"),
+                "Gross Revenue": gross_revenue,
+                "Distributors Commission": distributors_commission,
                 "Net Revenue": net_revenue,
-                "Total Expenses": total_expenses,
+                "Cost of Sales": cost_of_sales,
+                "Gross Profit": gross_profit,
+                "General & Admin": general_admin,
                 "EBITDA": ebitda,
-                "Depreciation": depreciation,
                 "Total Depreciation Expense": depreciation,
                 "EBIT": ebit,
                 "Interest": interest,
                 "EBT": ebt,
                 "Taxes": taxes,
                 "Net Income": net_income,
+                "Gross Profit Margin": gross_profit_margin,
                 "EBITDA Margin": ebitda_margin,
                 "EBIT Margin": ebit_margin,
                 "Return on Equity": roe,

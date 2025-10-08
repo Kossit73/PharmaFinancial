@@ -3447,14 +3447,21 @@ def _render_goal_seek(payload: dict) -> None:
     metric_options = {
         "income_statement": [
             "Gross Revenue",
+            "Distributors Commission",
             "Net Revenue",
-            "Total Expenses",
+            "Cost of Sales",
+            "Gross Profit",
+            "General & Admin",
             "EBITDA",
+            "Total Depreciation Expense",
             "EBIT",
             "Interest",
             "EBT",
             "Taxes",
             "Net Income",
+            "Gross Profit Margin",
+            "EBITDA Margin",
+            "EBIT Margin",
             "Return on Equity",
         ],
         "cash_flow": [

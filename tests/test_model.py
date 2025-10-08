@@ -20,9 +20,22 @@ class FinancialModelTest(unittest.TestCase):
     def test_income_statement_columns(self):
         income = self.outputs.income_statement
         self.assertEqual(income.index, self.inputs.years)
-        self.assertIn("Net Revenue", income.data)
-        self.assertIn("EBITDA", income.data)
-        self.assertIn("Total Depreciation Expense", income.data)
+        for column in [
+            "Gross Revenue",
+            "Distributors Commission",
+            "Net Revenue",
+            "Cost of Sales",
+            "Gross Profit",
+            "General & Admin",
+            "EBITDA",
+            "Total Depreciation Expense",
+            "EBIT",
+            "Gross Profit Margin",
+            "EBITDA Margin",
+            "EBIT Margin",
+            "Return on Equity",
+        ]:
+            self.assertIn(column, income.data)
 
     def test_cash_flow_consistency(self):
         cash_flow = self.outputs.cash_flow
@@ -80,9 +93,75 @@ class FinancialModelTest(unittest.TestCase):
         raw = costs.column("Raw Materials")
         direct = costs.column("Direct Labor")
         general = costs.column("General & Admin")
+        cost_of_sales = costs.column("Cost of Sales")
+
+        base_indirect = sum(self.inputs.indirect_labor_costs.values())
+        risk_factors = self.model._risk_factors()
+
+        def _risk(idx: int) -> float:
+            if not risk_factors:
+                return 1.0
+            if idx < len(risk_factors):
+                return risk_factors[idx]
+            return risk_factors[-1]
+
         for idx in range(len(total_expenses)):
-            expected_total = raw[idx] + utilities[idx] + direct[idx] + general[idx]
+            expected_cost_of_sales = raw[idx] + direct[idx] + utilities[idx] * 0.8
+            self.assertAlmostEqual(
+                cost_of_sales[idx], expected_cost_of_sales, places=6
+            )
+
+            expected_general = (
+                base_indirect * self.model._inflation[idx] * _risk(idx)
+                + utilities[idx] * 0.2
+            )
+            self.assertAlmostEqual(general[idx], expected_general, places=6)
+
+            expected_total = cost_of_sales[idx] + general[idx]
             self.assertAlmostEqual(total_expenses[idx], expected_total, places=6)
+
+    def test_income_statement_relationships(self):
+        income = self.outputs.income_statement
+        gross_revenue = income.column("Gross Revenue")
+        commission = income.column("Distributors Commission")
+        net_revenue = income.column("Net Revenue")
+        cost_of_sales = income.column("Cost of Sales")
+        gross_profit = income.column("Gross Profit")
+        general_admin = income.column("General & Admin")
+        ebitda = income.column("EBITDA")
+        depreciation = income.column("Total Depreciation Expense")
+        ebit = income.column("EBIT")
+        gross_margin = income.column("Gross Profit Margin")
+        ebitda_margin = income.column("EBITDA Margin")
+        ebit_margin = income.column("EBIT Margin")
+
+        for idx in range(len(self.inputs.years)):
+            self.assertAlmostEqual(
+                net_revenue[idx], gross_revenue[idx] - commission[idx], places=6
+            )
+            self.assertAlmostEqual(
+                gross_profit[idx], net_revenue[idx] - cost_of_sales[idx], places=6
+            )
+            self.assertAlmostEqual(ebitda[idx], gross_profit[idx], places=6)
+            self.assertAlmostEqual(
+                ebit[idx], gross_profit[idx] - general_admin[idx] - depreciation[idx], places=6
+            )
+            self.assertAlmostEqual(
+                gross_margin[idx],
+                gross_profit[idx] / gross_revenue[idx]
+                if gross_revenue[idx] else 0.0,
+                places=6,
+            )
+            self.assertAlmostEqual(
+                ebitda_margin[idx],
+                ebitda[idx] / net_revenue[idx] if net_revenue[idx] else 0.0,
+                places=6,
+            )
+            self.assertAlmostEqual(
+                ebit_margin[idx],
+                ebit[idx] / net_revenue[idx] if net_revenue[idx] else 0.0,
+                places=6,
+            )
 
     def test_revenue_schedule_breakdown_matches_net_revenue(self):
         schedule = self.model.revenue_schedule()
@@ -350,10 +429,9 @@ class FinancialModelTest(unittest.TestCase):
 
     def test_depreciation_schedule_feeds_statements(self):
         depreciation = self.model.depreciation_schedule()
-        income_dep = self.outputs.income_statement.column("Depreciation")
-        dep_expense = self.outputs.income_statement.column("Total Depreciation Expense")
+        income_dep = self.outputs.income_statement.column("Total Depreciation Expense")
         self.assertEqual(depreciation, income_dep)
-        for actual, expense in zip(depreciation, dep_expense):
+        for actual, expense in zip(depreciation, income_dep):
             self.assertAlmostEqual(actual, expense, places=6)
 
         details, per_year_depr, per_year_nb = self.model._depreciation_rollforward()
