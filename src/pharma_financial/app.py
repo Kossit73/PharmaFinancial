@@ -4825,6 +4825,7 @@ def _default_break_even_rows(payload: Mapping) -> list[dict]:
     rows: list[dict] = []
     if table is not None:
         data = table.data
+        fixed_values = data.get("Fixed Cost", [])
         selling = data.get("Selling Price", [])
         variable = data.get("Variable Cost per Unit", [])
         target = data.get("Target Profit", [])
@@ -4838,10 +4839,15 @@ def _default_break_even_rows(payload: Mapping) -> list[dict]:
             expected_volume = float(expected[idx]) if idx < len(expected) else 0.0
             margin = price - variable_cost
             units = float(break_even_units[idx]) if idx < len(break_even_units) else float("nan")
-            if units != units or margin <= 0:
-                fixed_cost = 0.0
-            else:
+            if idx < len(fixed_values):
+                try:
+                    fixed_cost = float(fixed_values[idx])
+                except (TypeError, ValueError):
+                    fixed_cost = 0.0
+            elif units == units and margin > 0:
                 fixed_cost = max(units * margin - target_profit, 0.0)
+            else:
+                fixed_cost = 0.0
 
             rows.append(
                 {
