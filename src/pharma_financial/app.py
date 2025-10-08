@@ -5631,6 +5631,38 @@ def _payload_to_fixed_variable_rows(payload: Mapping) -> list[dict]:
     if rows:
         return rows
 
+    model: Optional[FinancialModel] = None
+    try:
+        inputs = parse_inputs(payload) if isinstance(payload, Mapping) else None
+        if inputs is not None:
+            model = FinancialModel(inputs)
+    except Exception:
+        model = None
+
+    if model is not None:
+        try:
+            table = model.break_even_analysis()
+        except Exception:
+            table = None
+        if table is not None and table.index:
+            fixed_column = table.data.get("Fixed Cost", [])
+            variable_column = table.data.get("Variable Cost per Unit", [])
+            for idx, product in enumerate(table.index):
+                fixed_value = float(fixed_column[idx]) if idx < len(fixed_column) else 0.0
+                variable_value = (
+                    float(variable_column[idx]) if idx < len(variable_column) else 0.0
+                )
+                rows.append(
+                    {
+                        "Product": product,
+                        "Fixed Cost": fixed_value,
+                        "Variable Cost": variable_value,
+                        "__has_fixed__": False,
+                    }
+                )
+    if rows:
+        return rows
+
     break_even = payload.get("break_even") if isinstance(payload, Mapping) else None
     if isinstance(break_even, Mapping):
         for entry in break_even.get("rows", []):
