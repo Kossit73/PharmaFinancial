@@ -87,6 +87,37 @@ class RerunHelperTest(unittest.TestCase):
         self.app._rerun()
         self.assertEqual(self.stub.calls, ["rerun", "experimental_rerun"])
 
+    def test_projection_horizon_dropdown_updates_years(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        new_years = list(range(2026, 2031))
+        labels = [str(year) for year in new_years]
+        self.app._align_payload_horizon(payload, labels, len(new_years), update_years=True)
+
+        self.assertEqual(payload["years"], new_years)
+        self.assertEqual(len(payload.get("inflation_series", [])), len(new_years))
+
+        working = payload.get("working_capital", {})
+        calendar = working.get("calendar_days", []) if isinstance(working, dict) else []
+        self.assertEqual(len(calendar), len(new_years))
+
+    def test_align_payload_preserves_calendar_years_when_not_updating(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        original_years = list(payload["years"])
+        labels = [f"Year {index + 1}" for index in range(len(original_years))]
+        self.app._align_payload_horizon(payload, labels, len(labels))
+
+        self.assertEqual(payload["years"], original_years)
+
     def test_core_rows_calculations_match_inputs(self):
         payload = json.loads(
             Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")

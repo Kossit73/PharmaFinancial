@@ -257,7 +257,7 @@ def _render_projection_horizon(payload: dict) -> None:
     new_years = list(range(int(start_year), int(end_year) + 1))
     payload["years"] = new_years
     labels = [str(year) for year in new_years]
-    _align_payload_horizon(payload, labels, len(new_years))
+    _align_payload_horizon(payload, labels, len(new_years), update_years=True)
     _initialise_session_payload(payload)
     _rerun()
 
@@ -5651,13 +5651,30 @@ def _risk_categories(payload: Mapping | None = None, rows: Sequence[Mapping] | N
     return categories
 
 
-def _align_payload_horizon(payload: dict, labels: Sequence[str], target_length: int) -> None:
+def _align_payload_horizon(
+    payload: dict,
+    labels: Sequence[str],
+    target_length: int,
+    *,
+    update_years: bool = False,
+) -> None:
     if target_length <= 0:
         return
 
     years = list(payload.get("years", []))
     derived_years = _derive_years_from_labels(labels)
-    payload["years"] = _resize_years(years, target_length, derived_years)
+
+    base_years = years
+    if derived_years:
+        # Avoid replacing calendar years with relative labels (e.g. "Year 1")
+        # unless the model lacks any existing horizon or the user explicitly
+        # updated the start/end years via the horizon controls.
+        if update_years:
+            base_years = derived_years
+        elif not years and all(year >= 1900 for year in derived_years):
+            base_years = derived_years
+
+    payload["years"] = _resize_years(years, target_length, base_years)
 
     payload["inflation_series"] = _resize_sequence(
         payload.get("inflation_series", []), target_length
