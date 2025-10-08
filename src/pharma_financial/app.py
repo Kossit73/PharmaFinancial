@@ -1,8 +1,10 @@
 """Streamlit web application for the Longevity Pharmaceuticals financial model."""
 from __future__ import annotations
 
-import json
+import csv
 import hashlib
+import io
+import json
 import re
 from datetime import datetime
 from pathlib import Path
@@ -37,6 +39,21 @@ try:  # pragma: no cover - optional dependency for charting
     import plotly.express as px
 except Exception:  # pragma: no cover - gracefully degrade when Plotly missing
     px = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency for Excel ingestion
+    from openpyxl import load_workbook
+except Exception:  # pragma: no cover - import guard when package missing
+    load_workbook = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency for Word ingestion
+    from docx import Document
+except Exception:  # pragma: no cover - import guard when package missing
+    Document = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency for PDF ingestion
+    from PyPDF2 import PdfReader
+except Exception:  # pragma: no cover - import guard when package missing
+    PdfReader = None  # type: ignore
 
 DEFAULT_INPUT_PATH = Path(__file__).resolve().parent / "data" / "default_inputs.json"
 DEFAULT_INPUT_JSON = DEFAULT_INPUT_PATH.read_text(encoding="utf-8")
@@ -347,26 +364,29 @@ def main() -> None:
 def _resolve_inputs() -> ModelInputs:
     st.sidebar.header("Model Configuration")
     st.sidebar.write(
-        "Upload a customised JSON assumptions file or use the bundled defaults."
+        "Upload a customised assumptions file (JSON, CSV, Excel, Word, or PDF) or use the bundled defaults."
     )
 
     uploaded = st.sidebar.file_uploader(
-        "Custom assumptions (JSON)", type="json", accept_multiple_files=False
+        "Custom assumptions",
+        type=["json", "csv", "xlsx", "xls", "pdf", "docx"],
+        accept_multiple_files=False,
+        help="Provide assumptions as JSON or a document containing JSON text.",
     )
     if uploaded is not None:
         file_bytes = uploaded.getvalue()
-        signature = f"{getattr(uploaded, 'name', 'upload')}:{hashlib.md5(file_bytes).hexdigest()}"
+        name = getattr(uploaded, "name", "upload")
+        suffix = Path(name).suffix.lower()
+        signature = f"{name}:{hashlib.md5(file_bytes).hexdigest()}"
         if st.session_state.get("uploaded_signature") != signature:
             try:
-                raw = json.loads(file_bytes.decode("utf-8"))
+                raw = _load_payload_from_bytes(file_bytes, suffix)
                 _initialise_session_payload(raw)
                 parse_inputs(raw)
                 st.session_state["uploaded_signature"] = signature
                 st.sidebar.success("Loaded custom assumptions.")
-            except json.JSONDecodeError as exc:
-                st.sidebar.error(f"Invalid JSON file: {exc}")
             except Exception as exc:  # pragma: no cover - user supplied input
-                st.sidebar.error(f"Unable to parse inputs: {exc}")
+                st.sidebar.error(f"Unable to parse uploaded file: {exc}")
 
     if st.session_state.get("uploaded_signature"):
         st.sidebar.caption(
@@ -429,6 +449,108 @@ def _resolve_inputs() -> ModelInputs:
     _risk_rows_to_payload(risk_rows, payload)
 
     return parse_inputs(payload)
+
+
+def _load_payload_from_bytes(data: bytes, suffix: str) -> Mapping[str, object]:
+    """Load a payload mapping from uploaded file bytes."""
+
+    suffix = suffix or ".json"
+    if suffix in {".json", ""}:
+        return _load_payload_from_text(data.decode("utf-8"))
+    if suffix == ".csv":
+        return _load_payload_from_csv(data)
+    if suffix in {".xlsx", ".xls"}:
+        return _load_payload_from_excel(data)
+    if suffix == ".docx":
+        return _load_payload_from_docx(data)
+    if suffix == ".pdf":
+        return _load_payload_from_pdf(data)
+    raise ValueError(f"Unsupported file type: {suffix}")
+
+
+def _load_payload_from_text(text: str) -> Mapping[str, object]:
+    stripped = text.strip()
+    if not stripped:
+        raise ValueError("Uploaded file was empty.")
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError as exc:  # pragma: no cover - invalid user input
+        raise ValueError("Uploaded document does not contain valid JSON assumptions.") from exc
+
+
+def _extract_json_fragment(text: str) -> str:
+    if "{" in text and "}" in text:
+        start = text.find("{")
+        end = text.rfind("}")
+        if end > start:
+            return text[start : end + 1]
+    return text
+
+
+def _load_payload_from_csv(data: bytes) -> Mapping[str, object]:
+    text = data.decode("utf-8-sig")
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        fragment = _extract_json_fragment(text)
+        if fragment and fragment != text:
+            return _load_payload_from_text(fragment)
+
+        reader = csv.reader(io.StringIO(text))
+        cells: list[str] = []
+        for row in reader:
+            cells.extend(cell for cell in row if cell is not None)
+        joined = _extract_json_fragment("".join(cells).strip())
+        if not joined:
+            raise ValueError("CSV file did not contain any usable JSON text.")
+        return _load_payload_from_text(joined)
+
+
+def _load_payload_from_excel(data: bytes) -> Mapping[str, object]:
+    if load_workbook is None:  # pragma: no cover - optional dependency path
+        raise ValueError("Excel support requires the 'openpyxl' package to be installed.")
+
+    workbook = load_workbook(filename=io.BytesIO(data), data_only=True)
+    text_parts: list[str] = []
+    for sheet in workbook.worksheets:
+        for row in sheet.iter_rows():
+            for cell in row:
+                value = cell.value
+                if value is None:
+                    continue
+                text_parts.append(str(value))
+    combined = _extract_json_fragment("\n".join(text_parts).strip())
+    if not combined:
+        raise ValueError("Excel file did not contain any readable text.")
+    return _load_payload_from_text(combined)
+
+
+def _load_payload_from_docx(data: bytes) -> Mapping[str, object]:
+    if Document is None:  # pragma: no cover - optional dependency path
+        raise ValueError("Word support requires the 'python-docx' package to be installed.")
+
+    document = Document(io.BytesIO(data))
+    text = _extract_json_fragment(
+        "\n".join(paragraph.text for paragraph in document.paragraphs).strip()
+    )
+    if not text:
+        raise ValueError("Word document did not contain any readable text.")
+    return _load_payload_from_text(text)
+
+
+def _load_payload_from_pdf(data: bytes) -> Mapping[str, object]:
+    if PdfReader is None:  # pragma: no cover - optional dependency path
+        raise ValueError("PDF support requires the 'PyPDF2' package to be installed.")
+
+    reader = PdfReader(io.BytesIO(data))
+    text_parts: list[str] = []
+    for page in reader.pages:
+        extracted = page.extract_text() or ""
+        text_parts.append(extracted)
+    combined = _extract_json_fragment("\n".join(text_parts).strip())
+    if not combined:
+        raise ValueError("PDF file did not contain any readable text.")
+    return _load_payload_from_text(combined)
 
 
 def _render_report_download(model: FinancialModel, outputs: FinancialOutputs) -> None:

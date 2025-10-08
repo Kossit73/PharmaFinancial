@@ -6,3 +6,4 @@ streamlit
 openpyxl
 python-docx
 fpdf
+PyPDF2

@@ -1,10 +1,25 @@
 import importlib
 import json
-import json
 import sys
 import types
 import unittest
+from io import BytesIO
 from pathlib import Path
+
+try:  # pragma: no cover - optional dependency check
+    from docx import Document
+except Exception:  # pragma: no cover - import guard for missing optional dependency
+    Document = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency check
+    from fpdf import FPDF
+except Exception:  # pragma: no cover - import guard for missing optional dependency
+    FPDF = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency check
+    from openpyxl import Workbook
+except Exception:  # pragma: no cover - import guard for missing optional dependency
+    Workbook = None  # type: ignore
 
 
 class _NoOp:
@@ -179,6 +194,61 @@ class RerunHelperTest(unittest.TestCase):
         self.assertIn("moving_average", updated["ml_methods"])
         self.assertIn("risk_review", updated["generative_features"])
         self.assertEqual(updated["api_key"], "test-key")
+
+
+class UploadLoaderTests(unittest.TestCase):
+    def setUp(self):
+        if "pharma_financial.app" in sys.modules:
+            importlib.reload(sys.modules["pharma_financial.app"])
+            self.app = sys.modules["pharma_financial.app"]
+        else:
+            self.app = importlib.import_module("pharma_financial.app")
+
+        self.sample_payload = {
+            "example": True,
+            "years": [2024, 2025],
+        }
+        self.json_text = json.dumps(self.sample_payload)
+
+    def test_load_from_json_bytes(self):
+        loaded = self.app._load_payload_from_bytes(self.json_text.encode("utf-8"), ".json")
+        self.assertEqual(loaded["example"], True)
+
+    def test_load_from_csv_fragment(self):
+        csv_text = f"header,value\njson,{self.json_text}\n"
+        loaded = self.app._load_payload_from_bytes(csv_text.encode("utf-8"), ".csv")
+        self.assertEqual(loaded["years"], [2024, 2025])
+
+    @unittest.skipUnless(Workbook is not None, "openpyxl is required for this test")
+    def test_load_from_excel_fragment(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet["A1"] = "Assumptions"
+        sheet["A2"] = self.json_text
+        buffer = BytesIO()
+        workbook.save(buffer)
+        loaded = self.app._load_payload_from_bytes(buffer.getvalue(), ".xlsx")
+        self.assertIn("example", loaded)
+
+    @unittest.skipUnless(Document is not None, "python-docx is required for this test")
+    def test_load_from_docx_fragment(self):
+        document = Document()
+        document.add_paragraph("Example assumptions")
+        document.add_paragraph(self.json_text)
+        buffer = BytesIO()
+        document.save(buffer)
+        loaded = self.app._load_payload_from_bytes(buffer.getvalue(), ".docx")
+        self.assertEqual(loaded["years"], [2024, 2025])
+
+    @unittest.skipUnless(FPDF is not None, "fpdf is required for this test")
+    def test_load_from_pdf_fragment(self):
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", size=12)
+        pdf.multi_cell(0, 10, txt=f"Example assumptions\n{self.json_text}")
+        pdf_bytes = pdf.output(dest="S").encode("latin-1")
+        loaded = self.app._load_payload_from_bytes(pdf_bytes, ".pdf")
+        self.assertTrue(loaded["example"])
 
 
 if __name__ == "__main__":  # pragma: no cover
