@@ -9,6 +9,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
+import math
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 import streamlit as st
@@ -1317,16 +1318,45 @@ def _render_break_even(outputs: FinancialOutputs) -> None:
     st.dataframe(_with_year(outputs.discounted_payback), use_container_width=True)
 
 
-def _render_break_even_inputs(payload: dict) -> None:
-    rows: list[dict] = st.session_state.get("break_even_rows", [])
 
-    if not rows:
-        defaults = _payload_to_break_even_rows(payload)
-        if not defaults:
-            defaults = _default_break_even_rows(payload)
-        if defaults:
-            rows = defaults
-            st.session_state["break_even_rows"] = rows
+def _render_break_even_inputs(payload: dict) -> None:
+    defaults = _payload_to_break_even_rows(payload)
+    if not defaults:
+        defaults = _default_break_even_rows(payload)
+
+    default_map = {
+        str(row.get("Product", "")): dict(row)
+        for row in defaults
+        if isinstance(row, Mapping) and row.get("Product")
+    }
+
+    overrides = set(st.session_state.get("break_even_overrides", []) or [])
+    rows: list[dict] = list(st.session_state.get("break_even_rows", []) or [])
+
+    if default_map:
+        if not rows:
+            rows = [dict(value) for value in default_map.values()]
+        else:
+            row_map = {
+                str(row.get("Product", "")): dict(row)
+                for row in rows
+                if isinstance(row, Mapping) and row.get("Product")
+            }
+            aligned_rows: list[dict] = []
+            for product, default_row in default_map.items():
+                if product in overrides and product in row_map:
+                    aligned_rows.append(row_map[product])
+                else:
+                    aligned_rows.append(dict(default_row))
+                    if product in overrides and product not in row_map:
+                        overrides.discard(product)
+            for product, row in row_map.items():
+                if product not in default_map:
+                    aligned_rows.append(row)
+                    overrides.add(product)
+            rows = aligned_rows
+
+        st.session_state["break_even_rows"] = rows
 
     if not rows:
         st.info("No break-even assumptions configured. Use the form below to add entries.")
@@ -1341,6 +1371,7 @@ def _render_break_even_inputs(payload: dict) -> None:
     )
 
     updated_rows: list[dict] = []
+    overrides_updated = set(overrides)
     for index, row in enumerate(rows):
         container = st.container()
         with container:
@@ -1436,21 +1467,31 @@ def _render_break_even_inputs(payload: dict) -> None:
             ):
                 cols[5].warning("Break-even exceeds expected volume")
 
+            clean_product = product_value.strip()
             if remove:
+                overrides_updated.discard(clean_product)
                 continue
 
-            updated_rows.append(
-                {
-                    "Product": product_value.strip(),
-                    "Fixed Cost": fixed_cost,
-                    "Selling Price": selling_price,
-                    "Variable Cost": variable_cost,
-                    "Target Profit": target_profit,
-                    "Expected Volume": expected_volume,
-                }
-            )
+            current_row = {
+                "Product": clean_product,
+                "Fixed Cost": fixed_cost,
+                "Selling Price": selling_price,
+                "Variable Cost": variable_cost,
+                "Target Profit": target_profit,
+                "Expected Volume": expected_volume,
+            }
+            updated_rows.append(current_row)
+
+            default_row = default_map.get(clean_product)
+            if default_row is None:
+                overrides_updated.add(clean_product)
+            elif _row_matches_default(current_row, default_row):
+                overrides_updated.discard(clean_product)
+            else:
+                overrides_updated.add(clean_product)
 
     st.session_state["break_even_rows"] = updated_rows
+    st.session_state["break_even_overrides"] = sorted(overrides_updated)
     _break_even_rows_to_payload(updated_rows, payload)
 
     totals = _aggregate_break_even_metrics(updated_rows)
@@ -1475,19 +1516,44 @@ def _render_break_even_inputs(payload: dict) -> None:
             "break_even_new_product",
         )
         new_fixed = st.number_input(
-            "Fixed Cost", value=0.0, step=1000.0, format="%.2f", key="break_even_new_fixed", min_value=0.0
+            "Fixed Cost",
+            value=0.0,
+            step=1000.0,
+            format="%.2f",
+            key="break_even_new_fixed",
+            min_value=0.0,
         )
         new_price = st.number_input(
-            "Selling Price", value=0.0, step=0.001, format="%.4f", key="break_even_new_price", min_value=0.0
+            "Selling Price",
+            value=0.0,
+            step=0.001,
+            format="%.4f",
+            key="break_even_new_price",
+            min_value=0.0,
         )
         new_variable = st.number_input(
-            "Variable Cost", value=0.0, step=0.001, format="%.4f", key="break_even_new_variable", min_value=0.0
+            "Variable Cost",
+            value=0.0,
+            step=0.001,
+            format="%.4f",
+            key="break_even_new_variable",
+            min_value=0.0,
         )
         new_target = st.number_input(
-            "Target Profit", value=0.0, step=1000.0, format="%.2f", key="break_even_new_target", min_value=0.0
+            "Target Profit",
+            value=0.0,
+            step=1000.0,
+            format="%.2f",
+            key="break_even_new_target",
+            min_value=0.0,
         )
         new_volume = st.number_input(
-            "Expected Volume", value=0.0, step=1.0, format="%.4f", key="break_even_new_volume", min_value=0.0
+            "Expected Volume",
+            value=0.0,
+            step=1.0,
+            format="%.4f",
+            key="break_even_new_volume",
+            min_value=0.0,
         )
         submitted = st.form_submit_button("Add")
 
@@ -1496,7 +1562,7 @@ def _render_break_even_inputs(payload: dict) -> None:
         if not cleaned_product:
             st.warning("Product name is required to add a break-even row.")
         else:
-            additions = st.session_state.get("break_even_rows", [])
+            additions = list(st.session_state.get("break_even_rows", []) or [])
             additions.append(
                 {
                     "Product": cleaned_product,
@@ -1508,6 +1574,9 @@ def _render_break_even_inputs(payload: dict) -> None:
                 }
             )
             st.session_state["break_even_rows"] = additions
+            overrides_updated = set(st.session_state.get("break_even_overrides", []) or [])
+            overrides_updated.add(cleaned_product)
+            st.session_state["break_even_overrides"] = sorted(overrides_updated)
             _break_even_rows_to_payload(additions, payload)
             for key in (
                 "break_even_new_product",
@@ -5042,6 +5111,17 @@ def _default_break_even_rows(payload: Mapping) -> list[dict]:
 
     return rows
 
+
+
+
+def _row_matches_default(row: Mapping[str, float], default_row: Mapping[str, float]) -> bool:
+    keys = ("Fixed Cost", "Selling Price", "Variable Cost", "Target Profit", "Expected Volume")
+    for key in keys:
+        actual = float(row.get(key, 0.0) or 0.0)
+        reference = float(default_row.get(key, 0.0) or 0.0)
+        if not math.isclose(actual, reference, rel_tol=1e-9, abs_tol=1e-6):
+            return False
+    return True
 
 def _calculate_break_even_metrics(row: Mapping[str, float]) -> dict[str, float]:
     fixed_cost = float(row.get("Fixed Cost", 0.0) or 0.0)
