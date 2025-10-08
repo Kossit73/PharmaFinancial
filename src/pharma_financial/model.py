@@ -1390,6 +1390,12 @@ class FinancialModel:
                 seen[name] = None
                 product_order.append(name)
 
+        product_count = len(product_order)
+        if product_count > 0:
+            split_fixed_cost_default = fixed_cost_default / product_count
+        else:
+            split_fixed_cost_default = fixed_cost_default
+
         columns: Dict[str, List[float]] = {
             "Fixed Cost": [],
             "Variable Cost per Unit": [],
@@ -1419,7 +1425,9 @@ class FinancialModel:
                 else variable_lookup.get(product, (params.production_cost + params.freight_cost) if params else 0.0)
             )
             fixed_cost = (
-                override.fixed_cost if override is not None else fixed_cost_default
+                override.fixed_cost
+                if override is not None
+                else split_fixed_cost_default
             )
             target_profit = override.target_profit if override is not None else 0.0
             expected_volume = (
