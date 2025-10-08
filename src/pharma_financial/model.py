@@ -155,10 +155,13 @@ class FinancialModel:
         return {name: params.freight_cost for name, params in self.inputs.unit_costs.items()}
 
     def _variable_costs(self) -> Dict[str, float]:
-        return {
-            name: params.production_cost + params.freight_cost
-            for name, params in self.inputs.unit_costs.items()
-        }
+        overrides = getattr(self.inputs, "variable_cost_overrides", {})
+        results: Dict[str, float] = {}
+        for name, params in self.inputs.unit_costs.items():
+            default_value = params.production_cost + params.freight_cost
+            value = overrides.get(name, default_value)
+            results[name] = float(value)
+        return results
 
     def _total_units(self) -> Dict[str, float]:
         return {name: float(value) for name, value in self.inputs.total_production_units.items()}
@@ -1381,6 +1384,7 @@ class FinancialModel:
 
         price_lookup = self._unit_prices()
         variable_lookup = self._variable_costs()
+        fixed_overrides = getattr(self.inputs, "fixed_cost_overrides", {})
         total_units_lookup = self._total_units()
 
         product_order: List[str] = []
@@ -1424,11 +1428,10 @@ class FinancialModel:
                 if override is not None
                 else variable_lookup.get(product, (params.production_cost + params.freight_cost) if params else 0.0)
             )
-            fixed_cost = (
-                override.fixed_cost
-                if override is not None
-                else split_fixed_cost_default
-            )
+            if override is not None:
+                fixed_cost = override.fixed_cost
+            else:
+                fixed_cost = float(fixed_overrides.get(product, split_fixed_cost_default))
             target_profit = override.target_profit if override is not None else 0.0
             expected_volume = (
                 override.expected_volume

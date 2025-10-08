@@ -420,6 +420,31 @@ class FinancialModelTest(unittest.TestCase):
         expected_units = (override_row["fixed_cost"] + override_row["target_profit"]) / contribution
         self.assertAlmostEqual(break_even_units, expected_units, places=6)
 
+    def test_fixed_variable_cost_overrides(self):
+        default_path = Path("src/pharma_financial/data/default_inputs.json")
+        raw = json.loads(default_path.read_text(encoding="utf-8"))
+        raw["fixed_variable_costs"] = {
+            "rows": [
+                {
+                    "product": "Tablets",
+                    "fixed_cost": 123.0,
+                    "variable_cost": 0.99,
+                }
+            ]
+        }
+
+        inputs = parse_inputs(raw)
+        model = FinancialModel(inputs)
+
+        variable_costs = model._variable_costs()
+        self.assertAlmostEqual(variable_costs.get("Tablets"), 0.99, places=6)
+
+        table = model.break_even_analysis()
+        self.assertIn("Tablets", table.index)
+        idx = table.index.index("Tablets")
+        fixed_cost_value = table.data["Fixed Cost"][idx]
+        self.assertAlmostEqual(fixed_cost_value, 123.0, places=6)
+
     def test_senior_debt_outstanding_clears_by_horizon(self):
         _, outstanding = self.model._senior_debt_schedules()
         self.assertTrue(outstanding)

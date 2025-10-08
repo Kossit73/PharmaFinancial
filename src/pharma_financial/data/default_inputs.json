@@ -282,6 +282,26 @@
       "Driver": 1.0
     }
   },
+  "fixed_variable_costs": {
+    "rows": [
+      {
+        "product": "Tablets",
+        "variable_cost": 0.05
+      },
+      {
+        "product": "Capsules",
+        "variable_cost": 0.065
+      },
+      {
+        "product": "Liquid",
+        "variable_cost": 1.525
+      },
+      {
+        "product": "Ointment",
+        "variable_cost": 3.026
+      }
+    ]
+  },
   "depreciation": {
     "rows": [
       {

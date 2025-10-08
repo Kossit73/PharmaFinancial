@@ -77,6 +77,7 @@ MAX_VISIBLE_RISK_ROWS = 2
 MAX_VISIBLE_UTILITY_ROWS = 2
 MAX_VISIBLE_RECEIVABLE_ROWS = 2
 MAX_VISIBLE_COMMISSION_ROWS = 6
+MAX_VISIBLE_COST_ROWS = 6
 MIN_PROJECTION_YEAR = 1900
 MAX_PROJECTION_YEAR = 2300
 SCENARIO_TOOL_LABELS = {
@@ -482,6 +483,11 @@ def _resolve_inputs() -> tuple[ModelInputs, str]:
     )
     _inventory_rows_to_payload(inventory_rows, payload)
 
+    cost_rows = st.session_state.setdefault(
+        "fixed_variable_rows", _payload_to_fixed_variable_rows(payload)
+    )
+    _fixed_variable_rows_to_payload(cost_rows, payload)
+
     break_even_rows = st.session_state.setdefault(
         "break_even_rows", _payload_to_break_even_rows(payload)
     )
@@ -862,6 +868,9 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
 
     st.markdown("### Indirect Labour Structure")
     _render_labor_section("indirect", "indirect_labor_rows", payload)
+
+    st.markdown("### Fixed & Variable Costs Input Table")
+    _render_fixed_variable_costs(payload)
 
     st.markdown("### Utility Schedule")
     _render_utility_schedule(payload)
@@ -1678,6 +1687,132 @@ def _render_labor_section(section: str, state_key: str, payload: dict) -> None:
         for row in st.session_state.get(state_key, [])
         if row.get("Role")
     }
+
+
+def _render_fixed_variable_costs(payload: dict) -> None:
+    rows: list[dict] = st.session_state.get("fixed_variable_rows", [])
+
+    if not rows:
+        defaults = _payload_to_fixed_variable_rows(payload)
+        if defaults:
+            rows = defaults
+            st.session_state["fixed_variable_rows"] = rows
+
+    if not rows:
+        st.info(
+            "No fixed or variable cost assumptions configured. Use the form below to add entries."
+        )
+
+    product_catalog = sorted(
+        value
+        for value in {
+            *(payload.get("unit_costs", {}) or {}).keys(),
+            *(row.get("Product", "") or "" for row in rows),
+        }
+        if value
+    )
+
+    visible_rows = rows[:MAX_VISIBLE_COST_ROWS] if rows else []
+    if rows and len(rows) > MAX_VISIBLE_COST_ROWS:
+        st.caption(
+            "Showing the first few fixed and variable cost entries. Use the add form to access other products."
+        )
+
+    updated_rows: list[dict] = []
+    for index, row in enumerate(visible_rows):
+        container = st.container()
+        with container:
+            cols = st.columns([2.0, 1.4, 1.4, 0.8])
+            product_value = _select_or_create_option(
+                cols[0],
+                "Product",
+                product_catalog,
+                f"fixed_variable_product_{index}",
+                current_value=str(row.get("Product", "")),
+            )
+            fixed_cost = cols[1].number_input(
+                "Fixed Cost",
+                value=float(row.get("Fixed Cost", 0.0)),
+                key=f"fixed_variable_fixed_{index}",
+                step=1000.0,
+                format="%.2f",
+                min_value=0.0,
+            )
+            variable_cost = cols[2].number_input(
+                "Variable Cost",
+                value=float(row.get("Variable Cost", 0.0)),
+                key=f"fixed_variable_variable_{index}",
+                step=0.001,
+                format="%.4f",
+                min_value=0.0,
+            )
+            remove = cols[3].button("Remove", key=f"fixed_variable_remove_{index}")
+
+            if remove:
+                continue
+
+            updated_rows.append(
+                {
+                    "Product": product_value.strip(),
+                    "Fixed Cost": float(fixed_cost),
+                    "Variable Cost": float(variable_cost),
+                }
+            )
+
+    for hidden_row in rows[MAX_VISIBLE_COST_ROWS:]:
+        updated_rows.append(dict(hidden_row))
+
+    st.session_state["fixed_variable_rows"] = updated_rows
+    _fixed_variable_rows_to_payload(updated_rows, payload)
+
+    st.markdown("#### Add Fixed & Variable Cost")
+    with st.form("fixed_variable_add_form", clear_on_submit=True):
+        new_product = _select_or_create_option(
+            st,
+            "Product",
+            product_catalog,
+            "fixed_variable_new_product",
+        )
+        new_fixed = st.number_input(
+            "Fixed Cost",
+            value=0.0,
+            step=1000.0,
+            format="%.2f",
+            key="fixed_variable_new_fixed",
+            min_value=0.0,
+        )
+        new_variable = st.number_input(
+            "Variable Cost",
+            value=0.0,
+            step=0.001,
+            format="%.4f",
+            key="fixed_variable_new_variable",
+            min_value=0.0,
+        )
+        submitted = st.form_submit_button("Add")
+
+    if submitted:
+        cleaned_product = (new_product or "").strip()
+        if not cleaned_product:
+            st.warning("Product name is required to add a cost entry.")
+        else:
+            additions = st.session_state.get("fixed_variable_rows", [])
+            additions.append(
+                {
+                    "Product": cleaned_product,
+                    "Fixed Cost": float(new_fixed),
+                    "Variable Cost": float(new_variable),
+                }
+            )
+            st.session_state["fixed_variable_rows"] = additions
+            for key in (
+                "fixed_variable_new_product",
+                "fixed_variable_new_fixed",
+                "fixed_variable_new_variable",
+            ):
+                st.session_state.pop(key, None)
+            _fixed_variable_rows_to_payload(additions, payload)
+            _rerun()
 
 
 def _render_utility_schedule(payload: dict) -> None:
@@ -5454,6 +5589,129 @@ def _inflation_factors_from_payload(payload: Mapping) -> list[float]:
             running *= 1.0 + rate
             factors.append(running)
     return factors
+
+
+def _payload_to_fixed_variable_rows(payload: Mapping) -> list[dict]:
+    section = payload.get("fixed_variable_costs") if isinstance(payload, Mapping) else None
+    rows: list[dict] = []
+
+    raw_rows: Iterable | None
+    if isinstance(section, Mapping):
+        raw_rows = section.get("rows", section.get("data", []))
+    else:
+        raw_rows = section if isinstance(section, Iterable) else None
+
+    if isinstance(raw_rows, Iterable) and not isinstance(raw_rows, (str, bytes)):
+        for entry in raw_rows:
+            if not isinstance(entry, Mapping):
+                continue
+            product = str(entry.get("product") or entry.get("Product") or "").strip()
+            if not product:
+                continue
+            fixed_cost = float(entry.get("fixed_cost", entry.get("Fixed Cost", 0.0)) or 0.0)
+            variable_cost = float(
+                entry.get("variable_cost", entry.get("Variable Cost", 0.0)) or 0.0
+            )
+            rows.append(
+                {
+                    "Product": product,
+                    "Fixed Cost": fixed_cost,
+                    "Variable Cost": variable_cost,
+                }
+            )
+
+    if rows:
+        return rows
+
+    break_even = payload.get("break_even") if isinstance(payload, Mapping) else None
+    if isinstance(break_even, Mapping):
+        for entry in break_even.get("rows", []):
+            if not isinstance(entry, Mapping):
+                continue
+            product = str(entry.get("product") or entry.get("Product") or "").strip()
+            if not product:
+                continue
+            rows.append(
+                {
+                    "Product": product,
+                    "Fixed Cost": float(entry.get("fixed_cost", entry.get("Fixed Cost", 0.0)) or 0.0),
+                    "Variable Cost": float(
+                        entry.get("variable_cost", entry.get("Variable Cost", 0.0)) or 0.0
+                    ),
+                }
+            )
+
+    if rows:
+        return rows
+
+    unit_costs = payload.get("unit_costs", {}) if isinstance(payload, Mapping) else {}
+    if isinstance(unit_costs, Mapping):
+        for product in unit_costs.keys():
+            if not product:
+                continue
+            rows.append({"Product": str(product), "Fixed Cost": 0.0, "Variable Cost": 0.0})
+
+    return rows
+
+
+def _fixed_variable_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
+    if rows is None:
+        return
+
+    section = payload.setdefault("fixed_variable_costs", {})
+    if not isinstance(section, dict):
+        section = {}
+        payload["fixed_variable_costs"] = section
+
+    serialised: list[dict] = []
+    mapping: dict[str, tuple[float, float]] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        product = str(row.get("Product", "") or "").strip()
+        if not product:
+            continue
+        fixed_cost = float(row.get("Fixed Cost", 0.0) or 0.0)
+        variable_cost = float(row.get("Variable Cost", 0.0) or 0.0)
+        serialised.append(
+            {
+                "product": product,
+                "fixed_cost": fixed_cost,
+                "variable_cost": variable_cost,
+            }
+        )
+        mapping[product] = (fixed_cost, variable_cost)
+
+    section["rows"] = serialised
+
+    break_even = payload.get("break_even")
+    if isinstance(break_even, dict):
+        raw_rows = break_even.setdefault("rows", [])
+        if isinstance(raw_rows, list):
+            for entry in raw_rows:
+                if not isinstance(entry, dict):
+                    continue
+                product = str(entry.get("product") or entry.get("Product") or "").strip()
+                if product in mapping:
+                    fixed_cost, variable_cost = mapping[product]
+                    entry["fixed_cost"] = fixed_cost
+                    entry["variable_cost"] = variable_cost
+
+    if "break_even_rows" in st.session_state and isinstance(
+        st.session_state["break_even_rows"], list
+    ):
+        updated: list[dict] = []
+        for entry in st.session_state["break_even_rows"]:
+            product = str(entry.get("Product", "") or "").strip()
+            if product in mapping:
+                fixed_cost, variable_cost = mapping[product]
+                new_entry = dict(entry)
+                new_entry["Fixed Cost"] = fixed_cost
+                new_entry["Variable Cost"] = variable_cost
+                updated.append(new_entry)
+            else:
+                updated.append(entry)
+        st.session_state["break_even_rows"] = updated
 
 
 def _payload_to_commission_rows(payload: Mapping) -> list[dict]:
