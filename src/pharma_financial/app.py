@@ -909,7 +909,17 @@ def _render_statement_tab(title: str, df: pd.DataFrame) -> None:
 
 def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -> None:
     st.subheader("Statement of Financial Performance")
-    st.dataframe(_with_year(outputs.income_statement), use_container_width=True)
+    income_frame = _with_year(outputs.income_statement)
+    if pd is not None and isinstance(income_frame, pd.DataFrame):
+        display_frame = income_frame.drop(columns=["Depreciation"], errors="ignore")
+    elif isinstance(income_frame, list):
+        display_frame = [
+            {key: value for key, value in row.items() if key != "Depreciation"}
+            for row in income_frame
+        ]
+    else:
+        display_frame = income_frame
+    st.dataframe(display_frame, use_container_width=True)
 
     st.markdown("#### Gross Revenue Schedule")
     try:
