@@ -445,6 +445,26 @@ class FinancialModelTest(unittest.TestCase):
         fixed_cost_value = table.data["Fixed Cost"][idx]
         self.assertAlmostEqual(fixed_cost_value, 123.0, places=6)
 
+    def test_variable_cost_override_updates_cost_of_sales(self):
+        base_costs = self.outputs.income_statement.column("Cost of Sales")
+
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+        )
+        payload.setdefault("fixed_variable_costs", {})["rows"] = [
+            {
+                "product": "Tablets",
+                "variable_cost": 0.5,
+            }
+        ]
+
+        parsed = parse_inputs(payload)
+        override_model = FinancialModel(parsed)
+        override_costs = override_model.income_statement().column("Cost of Sales")
+
+        self.assertNotEqual(base_costs[0], override_costs[0])
+        self.assertGreater(override_costs[0], base_costs[0])
+
     def test_break_even_fixed_cost_defaults_split_even_without_overrides(self):
         inputs = load_inputs(Path("src/pharma_financial/data/default_inputs.json"))
         model = FinancialModel(inputs)

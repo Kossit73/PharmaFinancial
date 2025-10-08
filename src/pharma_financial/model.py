@@ -216,10 +216,24 @@ class FinancialModel:
                 return risk_factors[-1]
             return 1.0
 
-        raw_material_cost = [
-            units * self.inputs.raw_material_cost_per_unit * _risk_for_index(idx)
-            for idx, units in enumerate(total_units)
-        ]
+        variable_lookup = self._variable_costs()
+        default_variable_costs: Dict[str, float] = {}
+        for name, params in self.inputs.unit_costs.items():
+            default_variable_costs[name] = params.production_cost + params.freight_cost
+
+        raw_material_cost: List[float] = []
+        for idx, units in enumerate(total_units):
+            base = units * self.inputs.raw_material_cost_per_unit * _risk_for_index(idx)
+            adjustment = 0.0
+            for product in self.products:
+                product_units = production[product][idx]
+                default_value = default_variable_costs.get(product, 0.0)
+                override_value = variable_lookup.get(product, default_value)
+                delta = override_value - default_value
+                if abs(delta) < 1e-12:
+                    continue
+                adjustment += product_units * delta * _risk_for_index(idx)
+            raw_material_cost.append(base + adjustment)
 
         utility = self.inputs.utility_schedule
         utilities: List[float] = []
