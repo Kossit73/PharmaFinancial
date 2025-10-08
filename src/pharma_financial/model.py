@@ -369,12 +369,19 @@ class FinancialModel:
         ebit = [ea - dep for ea, dep in zip(ebitda, depreciation)]
         interest = self._interest_schedule()
         ebt = [e - i for e, i in zip(ebit, interest)]
-        taxes = [value * rate for value, rate in zip(ebt, self._tax_schedule())]
         risk_factors = self._risk_factors()
-        net_income = [
-            (value - tax) * risk_factors[idx]
-            for idx, (value, tax) in enumerate(zip(ebt, taxes))
-        ]
+        taxes: List[float] = []
+        net_income: List[float] = []
+        for idx, (value, rate) in enumerate(zip(ebt, self._tax_schedule())):
+            if value <= 0:
+                tax = 0.0
+                base_net = value
+            else:
+                tax = value * rate
+                base_net = value - tax
+
+            taxes.append(tax)
+            net_income.append(base_net * risk_factors[idx])
 
         ebitda_margin = [_safe_ratio(e, r) for e, r in zip(ebitda, net_revenue)]
         ebit_margin = [_safe_ratio(e, r) for e, r in zip(ebit, net_revenue)]
