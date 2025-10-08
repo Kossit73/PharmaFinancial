@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import hashlib
 import re
+from datetime import datetime
 from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple
@@ -55,6 +56,8 @@ MAX_VISIBLE_RISK_ROWS = 2
 MAX_VISIBLE_UTILITY_ROWS = 2
 MAX_VISIBLE_RECEIVABLE_ROWS = 2
 MAX_VISIBLE_COMMISSION_ROWS = 6
+MIN_PROJECTION_YEAR = 1900
+MAX_PROJECTION_YEAR = 2300
 SCENARIO_TOOL_LABELS = {
     "decision_tree": "Decision Tree Tools",
     "stress_testing": "Stress Testing",
@@ -129,6 +132,62 @@ def _set_widget_value(key: str, value: float) -> None:
         st.session_state[key] = value
     except Exception:  # pragma: no cover - depends on Streamlit runtime
         pass
+
+
+def _render_projection_horizon(payload: dict) -> None:
+    """Allow users to adjust the model start and end years via dropdowns."""
+
+    current_years = [
+        _parse_year_value(year, default=0)
+        for year in payload.get("years", [])
+        if year is not None
+    ]
+
+    if not current_years:
+        fallback_start = datetime.now().year
+        fallback_end = fallback_start + 9
+        current_years = list(range(fallback_start, fallback_end + 1))
+        payload["years"] = current_years
+
+    current_start = int(current_years[0])
+    current_end = int(current_years[-1])
+
+    base_min = min(MIN_PROJECTION_YEAR, current_start, current_end)
+    base_max = max(MAX_PROJECTION_YEAR, current_start, current_end)
+    year_options = list(range(base_min, base_max + 1))
+
+    start_index = year_options.index(current_start) if current_start in year_options else 0
+    end_index = year_options.index(current_end) if current_end in year_options else len(year_options) - 1
+
+    cols = st.columns([1, 1, 1])
+    start_year = cols[0].selectbox(
+        "Start Year",
+        year_options,
+        index=start_index,
+        key="horizon_start_year",
+        help="Select the first projection year for the financial model.",
+    )
+    end_year = cols[1].selectbox(
+        "End Year",
+        year_options,
+        index=end_index,
+        key="horizon_end_year",
+        help="Select the final projection year for the financial model.",
+    )
+
+    if end_year < start_year:
+        cols[2].error("End year must be greater than or equal to start year.")
+        return
+
+    if start_year == current_start and end_year == current_end:
+        return
+
+    new_years = list(range(int(start_year), int(end_year) + 1))
+    payload["years"] = new_years
+    labels = [str(year) for year in new_years]
+    _align_payload_horizon(payload, labels, len(new_years))
+    _initialise_session_payload(payload)
+    _rerun()
 
 
 def _select_or_create_option(
@@ -411,6 +470,9 @@ def _render_report_download(model: FinancialModel, outputs: FinancialOutputs) ->
 
 def _render_inputs_tab(inputs: ModelInputs) -> None:
     payload = st.session_state["input_payload"]
+
+    st.markdown("### Projection Horizon")
+    _render_projection_horizon(payload)
 
     st.subheader("Core Assumptions")
     rows: List[dict] = st.session_state.get("core_assumption_rows", [])

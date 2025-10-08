@@ -704,8 +704,20 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
     tax_schedule = _coerce_schedule(schedule, len(years)) if schedule else [
         float(tax_data.get("rate", 0.0)) for _ in years
     ]
+    inflation_series = _coerce_schedule(raw.get("inflation_series", []), len(years))
 
-    production_estimate = raw["production_estimate"]
+    production_source = raw.get("production_estimate", {})
+    production_estimate: Dict[str, List[float]] = {}
+    if isinstance(production_source, Mapping):
+        for name, values in production_source.items():
+            if isinstance(values, Iterable) and not isinstance(values, (str, bytes)):
+                sequence = [float(value) for value in values]
+            else:
+                sequence = [float(values) if values is not None else 0.0]
+            production_estimate[str(name)] = _coerce_schedule(sequence, years_length)
+    else:
+        production_source = {}
+
 
     total_units_raw = raw.get("total_production_units", {})
     capacity_raw = raw.get("production_capacity", {})
@@ -761,15 +773,20 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
 
     ai_params = _parse_ai(raw.get("ai", {}))
 
+    if not production_estimate:
+        production_estimate = {
+            str(name): _coerce_schedule([], len(years)) for name in unit_costs.keys()
+        }
+
     return ModelInputs(
         years=years,
-        production_estimate=raw["production_estimate"],
+        production_estimate=production_estimate,
         unit_costs=unit_costs,
         markup=raw["markup"],
         total_production_units=total_units,
         production_capacity=capacity,
         break_even_rows=break_even_rows,
-        inflation_series=raw["inflation_series"],
+        inflation_series=inflation_series,
         raw_material_cost_per_unit=float(raw["raw_material_cost"]["per_unit"]),
         utility_schedule=utility,
         direct_labor_costs=raw["labor"]["direct"],

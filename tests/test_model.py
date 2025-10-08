@@ -120,6 +120,19 @@ class FinancialModelTest(unittest.TestCase):
             expected_total = cost_of_sales[idx] + general[idx]
             self.assertAlmostEqual(total_expenses[idx], expected_total, places=6)
 
+    def test_custom_projection_years(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+        )
+        payload["years"] = [2026, 2027, 2028, 2029]
+        parsed = parse_inputs(payload)
+        self.assertEqual(parsed.years, [2026, 2027, 2028, 2029])
+        horizon = len(parsed.years)
+        for series in parsed.production_estimate.values():
+            self.assertEqual(len(series), horizon)
+        self.assertEqual(len(parsed.inflation_series), horizon)
+        self.assertEqual(len(parsed.utility_schedule.electricity_per_day), horizon)
+
     def test_income_statement_relationships(self):
         income = self.outputs.income_statement
         gross_revenue = income.column("Gross Revenue")
