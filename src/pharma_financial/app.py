@@ -1417,10 +1417,12 @@ def _render_break_even_inputs(payload: dict) -> None:
                 if cost_info is not None
                 else float(row.get("Variable Cost", 0.0))
             )
+            fixed_key = f"break_even_fixed_{index}"
+            _set_widget_value(fixed_key, float(fixed_default))
             cols[1].number_input(
                 "Fixed Cost",
-                value=fixed_default,
-                key=f"break_even_fixed_{index}",
+                value=float(fixed_default),
+                key=fixed_key,
                 step=1000.0,
                 format="%.2f",
                 min_value=0.0,
@@ -1435,10 +1437,12 @@ def _render_break_even_inputs(payload: dict) -> None:
                 format="%.4f",
                 min_value=0.0,
             )
+            variable_key = f"break_even_variable_{index}"
+            _set_widget_value(variable_key, float(variable_default))
             cols[3].number_input(
                 "Variable Cost",
-                value=variable_default,
-                key=f"break_even_variable_{index}",
+                value=float(variable_default),
+                key=variable_key,
                 step=0.001,
                 format="%.4f",
                 min_value=0.0,
