@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
 import math
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, cast
 
 import streamlit as st
 
@@ -3712,68 +3712,92 @@ def _render_tax_schedule(payload: dict) -> None:
 
     schedule = _ensure_schedule_length(tax.get("schedule", []), len(years), fill=base_rate)
 
-    default_rows = [
-        {
-            "Year": str(year if year is not None else f"Year {index + 1}"),
-            "Rate": float(schedule[index]),
-        }
+    session_key = "tax_entries"
+    default_entries = [
+        _normalise_tax_entry(
+            {
+                "label": str(year) if year is not None else f"Year {index + 1}",
+                "rate": float(schedule[index]),
+            },
+            index,
+            base_rate,
+        )
         for index, year in enumerate(years)
     ]
+    if not default_entries:
+        default_entries = [_normalise_tax_entry({}, 0, base_rate)]
 
-    rows_key = "tax_rows"
-    if rows_key not in st.session_state:
-        st.session_state[rows_key] = default_rows
+    if session_key not in st.session_state or not st.session_state.get(session_key):
+        st.session_state[session_key] = default_entries
 
-    rows: list[dict] = st.session_state.get(rows_key, default_rows)
-    if len(rows) != len(default_rows):
-        rows = default_rows
-        st.session_state[rows_key] = rows
+    rows: list[dict] = list(st.session_state.get(session_key, default_entries))
+    updated_rows: list[dict] = []
 
-    # keep the editor compact while still allowing inline edits
-    edited = st.data_editor(
-        rows,
-        hide_index=True,
-        use_container_width=True,
-        key="tax_schedule_editor",
-        column_config={
-            "Year": st.column_config.Column(
+    for index, row in enumerate(rows):
+        entry = _normalise_tax_entry(row, index, base_rate)
+        container = st.container()
+        with container:
+            cols = st.columns([2.0, 1.2, 0.8])
+            label_value = cols[0].text_input(
                 "Year",
-                width="medium",
-                help="Projection year associated with the tax rate.",
-            ),
-            "Rate": st.column_config.NumberColumn(
-                "Tax Rate",
+                value=entry["label"],
+                key=f"tax_year_label_{index}",
+            ).strip()
+            if not label_value:
+                label_value = f"Year {index + 1}"
+
+            rate_value = cols[1].number_input(
+                "Tax rate",
+                value=float(entry["rate"]),
                 min_value=0.0,
+                step=0.01,
                 format="%.4f",
-                help="Effective tax rate applied for the selected year.",
-            ),
-        },
-        height=200,
-    )
+                key=f"tax_rate_value_{index}",
+            )
 
-    if hasattr(edited, "to_dict"):
-        edited_rows = edited.to_dict("records")
-    else:
-        edited_rows = list(edited)
+            remove_clicked = cols[2].button("Remove", key=f"tax_remove_{index}")
 
-    st.session_state[rows_key] = edited_rows
+        if remove_clicked and len(rows) > 1:
+            rows.pop(index)
+            st.session_state[session_key] = rows
+            _tax_entries_to_payload(rows, tax, years, base_rate)
+            _rerun()
+        else:
+            updated_rows.append({"label": label_value, "rate": float(rate_value)})
 
-    # rebuild the ordered schedule matching the projection years
-    rate_lookup: dict[str, float] = {
-        str(row.get("Year", "")).strip(): float(row.get("Rate", base_rate))
-        for row in edited_rows
-        if row.get("Year") is not None
-    }
+    if updated_rows != rows and updated_rows:
+        rows = updated_rows
+        st.session_state[session_key] = rows
 
-    resolved_schedule: list[float] = []
-    for index, year in enumerate(years):
-        key = str(year)
-        fallback_key = f"Year {index + 1}"
-        resolved_schedule.append(
-            rate_lookup.get(key, rate_lookup.get(fallback_key, float(schedule[index])))
+    _tax_entries_to_payload(rows, tax, years, base_rate)
+
+    st.markdown("#### Add tax assumption")
+    default_entry = _next_tax_entry(rows, years, base_rate)
+    with st.form("tax_add_form", clear_on_submit=True):
+        new_label = st.text_input(
+            "Year",
+            value=default_entry.get("label", f"Year {len(rows) + 1}"),
+            key="tax_new_label",
+        ).strip()
+        new_rate = st.number_input(
+            "Tax rate",
+            value=float(default_entry.get("rate", base_rate)),
+            min_value=0.0,
+            step=0.01,
+            format="%.4f",
+            key="tax_new_rate",
         )
+        submitted = st.form_submit_button("Add tax year")
 
-    tax["schedule"] = resolved_schedule
+    if submitted:
+        label = new_label or default_entry.get("label", f"Year {len(rows) + 1}")
+        new_entry = _normalise_tax_entry({"label": label, "rate": new_rate}, len(rows), base_rate)
+        updated = rows + [new_entry]
+        st.session_state[session_key] = updated
+        _tax_entries_to_payload(updated, tax, years, base_rate)
+        for key in ("tax_new_label", "tax_new_rate"):
+            st.session_state.pop(key, None)
+        _rerun()
 
 
 def _render_inflation_schedule(payload: dict) -> None:
@@ -4672,6 +4696,96 @@ def _resize_utility_entries(
     return rows
 
 
+
+
+def _normalise_tax_entry(row: Mapping | None, index: int, base_rate: float) -> dict:
+    label_value = f"Year {index + 1}"
+    rate_value = float(base_rate)
+
+    if isinstance(row, Mapping):
+        raw_label = row.get("label") or row.get("Year")
+        if raw_label not in (None, ""):
+            label_value = str(raw_label).strip() or label_value
+
+        raw_rate = row.get("rate") if "rate" in row else row.get("Rate")
+        if raw_rate not in (None, ""):
+            try:
+                rate_value = float(raw_rate)
+            except (TypeError, ValueError):  # pragma: no cover - defensive parsing
+                rate_value = float(base_rate)
+
+    return {"label": label_value, "rate": rate_value}
+
+
+def _tax_entries_to_payload(
+    rows: Sequence[Mapping], tax: Mapping, years: Sequence, base_rate: float
+) -> None:
+    lookup: dict[str, float] = {}
+    normalised_rows: list[dict] = []
+
+    for index, row in enumerate(rows or []):
+        normalised = _normalise_tax_entry(row, index, base_rate)
+        label = normalised["label"]
+        rate = float(normalised["rate"])
+        normalised_rows.append(normalised)
+
+        lookup[label] = rate
+        try:
+            numeric_key = str(int(float(label)))
+            lookup.setdefault(numeric_key, rate)
+        except Exception:  # pragma: no cover - label is not numeric
+            pass
+        lookup.setdefault(f"Year {index + 1}", rate)
+
+    resolved: list[float] = []
+    for index, year in enumerate(years or []):
+        key = str(year)
+        fallback = f"Year {index + 1}"
+        value = lookup.get(key)
+        if value is None:
+            value = lookup.get(fallback)
+        if value is None and index < len(normalised_rows):
+            value = float(normalised_rows[index]["rate"])
+        if value is None:
+            value = float(base_rate)
+        resolved.append(float(value))
+
+    if not resolved:
+        resolved = [float(base_rate)]
+
+    tax = cast(dict, tax)
+    tax["schedule"] = resolved
+
+
+def _next_tax_entry(
+    rows: Sequence[Mapping], years: Sequence | None, base_rate: float
+) -> dict:
+    used_labels = {
+        _normalise_tax_entry(row, index, base_rate)["label"]
+        for index, row in enumerate(rows or [])
+    }
+
+    candidate_label: str | None = None
+    if isinstance(years, Sequence):
+        for raw in years:
+            if raw is None:
+                continue
+            label = str(raw)
+            if label not in used_labels:
+                candidate_label = label
+                break
+
+    if candidate_label is None and rows:
+        last = _normalise_tax_entry(rows[-1], len(rows) - 1, base_rate)["label"]
+        try:
+            candidate_label = str(int(float(last)) + 1)
+        except Exception:  # pragma: no cover - fallback when last label not numeric
+            candidate_label = f"Year {len(rows) + 1}"
+
+    if candidate_label is None:
+        candidate_label = f"Year {len(rows) + 1}"
+
+    return {"label": candidate_label, "rate": float(base_rate)}
 
 
 def _payload_to_depreciation_rows(payload: Mapping) -> list[dict]:
