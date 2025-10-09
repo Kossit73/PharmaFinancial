@@ -3132,7 +3132,6 @@ def _render_depreciation_schedule(payload: dict) -> None:
         _set_widget_value(f"dep_open_nb_{index}", prior_net_book)
         cols[5].number_input(
             "Net Book Value (prev year)",
-            value=prior_net_book,
             key=f"dep_open_nb_{index}",
             step=0.001,
             format="%.4f",
