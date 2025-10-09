@@ -839,14 +839,12 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
 
             cols[7].number_input(
                 "Total Revenue",
-                value=float(total_revenue),
                 key=revenue_key,
                 format="%.4f",
                 disabled=True,
             )
             cols[8].number_input(
                 "Total Cost",
-                value=float(total_cost),
                 key=cost_key,
                 format="%.4f",
                 disabled=True,
