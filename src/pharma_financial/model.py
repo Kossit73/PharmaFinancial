@@ -552,28 +552,50 @@ class FinancialModel:
         income = self.income_statement()
         depreciation = self.depreciation_schedule()
         working_capital_change = self._working_capital_changes()
-        operating_cash_flow = [ni + dep - wc for ni, dep, wc in zip(income.column("Net Income"), depreciation, working_capital_change)]
+        operating_cash_flow = [
+            ni + dep - wc
+            for ni, dep, wc in zip(
+                income.column("Net Income"),
+                depreciation,
+                working_capital_change,
+            )
+        ]
 
         capex = self._capex_series()
         investing_cash_flow = [-value for value in capex]
 
-        financing_cash_flow = self._financing_cash_flow()
+        financing_components = self._financing_cash_flow_components()
+        financing_cash_flow = [
+            sum(values)
+            for values in zip(*financing_components.values(), strict=False)
+        ]
 
-        cash_change = [op + inv + fin for op, inv, fin in zip(operating_cash_flow, investing_cash_flow, financing_cash_flow)]
+        cash_change = [
+            op + inv + fin
+            for op, inv, fin in zip(
+                operating_cash_flow,
+                investing_cash_flow,
+                financing_cash_flow,
+            )
+        ]
         beginning_cash = _shift(_cumulative(cash_change), fill_value=0.0)
         ending_cash = [begin + change for begin, change in zip(beginning_cash, cash_change)]
 
-        return build_table(
-            self.years,
+        columns: Dict[str, List[float]] = {
+            "Operating Cash Flow": operating_cash_flow,
+            "Investing Cash Flow": investing_cash_flow,
+        }
+        columns.update(financing_components)
+        columns["Financing Cash Flow"] = financing_cash_flow
+        columns.update(
             {
-                "Operating Cash Flow": operating_cash_flow,
-                "Investing Cash Flow": investing_cash_flow,
-                "Financing Cash Flow": financing_cash_flow,
                 "Net Change in Cash": cash_change,
                 "Beginning Cash": beginning_cash,
                 "Ending Cash": ending_cash,
-            },
+            }
         )
+
+        return build_table(self.years, columns)
 
     def balance_sheet(self) -> Table:
         cash_flow = self.cash_flow_statement()
@@ -851,22 +873,37 @@ class FinancialModel:
         _, overdraft = self._overdraft_schedules()
         return [senior[idx] + revolver[idx] + overdraft[idx] for idx in range(len(self.years))]
 
-    def _financing_cash_flow(self) -> List[float]:
+    def _financing_cash_flow_components(self) -> Dict[str, List[float]]:
         financing = self.inputs.financing
-        dividends = [ni * financing.dividend_payout for ni in self.income_statement().column("Net Income")]
+        net_income = self.income_statement().column("Net Income")
+        dividends = [ni * financing.dividend_payout for ni in net_income]
+
         _, senior_outstanding = self._senior_debt_schedules()
         senior_changes = _difference(senior_outstanding)
         _, revolver_outstanding = self._revolver_schedules()
         revolver_changes = _difference(revolver_outstanding)
         _, overdraft_outstanding = self._overdraft_schedules()
         overdraft_changes = _difference(overdraft_outstanding)
-        debt_changes = [
+
+        debt_movements = [
             senior_changes[idx] + revolver_changes[idx] + overdraft_changes[idx]
             for idx in range(len(self.years))
         ]
+
         share_issuance = [0.0 for _ in self.years]
-        share_issuance[0] = financing.share_capital
-        return [change + share - div for change, share, div in zip(debt_changes, share_issuance, dividends)]
+        if share_issuance:
+            share_issuance[0] = float(financing.share_capital)
+
+        initial_investment = [0.0 for _ in self.years]
+        if initial_investment:
+            initial_investment[0] = -float(financing.initial_investment)
+
+        return {
+            "Debt Drawdown/(Repayment)": debt_movements,
+            "Share Capital Raised": share_issuance,
+            "Initial Investment": initial_investment,
+            "Dividends Paid": [-value for value in dividends],
+        }
 
     def _equity_schedule(self, cash_flow: Table, income: Table) -> List[float]:
         financing = self.inputs.financing
@@ -1325,8 +1362,8 @@ class FinancialModel:
         cash_flow = self.cash_flow_statement().column("Net Change in Cash")
         discount_rate = self.inputs.financing.discount_rate
         discounted = [cf / (1 + discount_rate) ** (idx + 1) for idx, cf in enumerate(cash_flow)]
-        npv_value = sum(discounted) - self.inputs.financing.initial_investment
-        irr_value = npf_irr([-self.inputs.financing.initial_investment] + cash_flow)
+        npv_value = sum(discounted)
+        irr_value = npf_irr(cash_flow)
         payback_years = self._payback_period(cash_flow)
         discounted_payback_years = self._payback_period(discounted)
         return build_table(
@@ -1501,22 +1538,21 @@ class FinancialModel:
 
     def _payback_period(self, cash_flows: Iterable[Number]) -> float:
         cumulative = _cumulative(cash_flows)
-        invested = self.inputs.financing.initial_investment
         for idx, value in enumerate(cumulative):
-            if value >= invested:
+            if value >= 0:
                 return float(self.years[idx])
         return float("nan")
 
     def payback_schedule(self) -> Table:
         cash_flows = self.cash_flow_statement().column("Net Change in Cash")
-        cumulative = [value - self.inputs.financing.initial_investment for value in _cumulative(cash_flows)]
+        cumulative = _cumulative(cash_flows)
         return build_table(self.years, {"Cash Flow": cash_flows, "Cumulative": cumulative})
 
     def discounted_payback_schedule(self) -> Table:
         discount_rate = self.inputs.financing.discount_rate
         cash_flows = self.cash_flow_statement().column("Net Change in Cash")
         discounted = [cf / (1 + discount_rate) ** (idx + 1) for idx, cf in enumerate(cash_flows)]
-        cumulative = [value - self.inputs.financing.initial_investment for value in _cumulative(discounted)]
+        cumulative = _cumulative(discounted)
         return build_table(self.years, {"Discounted Cash Flow": discounted, "Cumulative": cumulative})
 
     def run(self) -> FinancialOutputs:
