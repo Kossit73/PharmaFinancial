@@ -2033,11 +2033,15 @@ def _render_utility_schedule(payload: dict) -> None:
             st.session_state["utility_rows"] = rows
 
     if not rows:
-        st.info("No utility schedule configured. Use the form below to add entries.")
-        rows = []
+        st.info("No utility schedule configured yet. Use the form below to add entries.")
+        rows = [_default_utility_row(0)]
+        st.session_state["utility_rows"] = rows
 
-    summary: list[dict[str, float | str]] = []
+    label_map = [str(row.get("label") or f"Year {index + 1}") for index, row in enumerate(rows)]
+
+    st.markdown("#### Configured Utility Years")
     for index, row in enumerate(rows):
+        label = label_map[index]
         electricity_total = (
             float(row.get("electricity_per_day", 0.0))
             * float(row.get("electricity_rate", 0.0))
@@ -2054,348 +2058,241 @@ def _render_utility_schedule(payload: dict) -> None:
             * int(float(row.get("steam_days", 0)))
             * int(float(row.get("steam_hours", 0)))
         )
-        summary.append(
-            {
-                "Year": row.get("label") or f"Year {index + 1}",
-                "Electricity Cost": electricity_total,
-                "Water Cost": water_total,
-                "Steam Cost": steam_total,
-                "Total Utility Cost": electricity_total + water_total + steam_total,
-            }
+        st.caption(
+            (
+                f"{label}: Electricity {electricity_total:,.2f}, "
+                f"Water {water_total:,.2f}, "
+                f"Steam {steam_total:,.2f}, "
+                f"Total {(electricity_total + water_total + steam_total):,.2f}"
+            )
         )
 
-    if summary:
-        st.dataframe(summary, use_container_width=True, height=min(300, 60 + 35 * len(summary)))
-
-    if not rows:
-        rows = [_default_utility_row(0)]
-        st.session_state["utility_rows"] = rows
-
-    selection_options = list(range(len(rows)))
-    label_map = [row.get("label") or f"Year {index + 1}" for index, row in enumerate(rows)]
-    default_selection = st.session_state.get("utility_selected_index_widget")
-    if default_selection is None or default_selection >= len(rows):
-        default_selection = len(rows) - 1
-
-    selected_index = st.selectbox(
-        "Select utility year",
-        selection_options,
-        index=default_selection,
-        format_func=lambda idx: str(label_map[idx]),
-        key="utility_selected_index_widget",
-    )
-
-    current_row = dict(rows[selected_index])
-
-    def _field_key(name: str) -> str:
-        return f"utility_{name}_{selected_index}"
+    existing_years: list[int] = []
+    for index, row in enumerate(rows):
+        parsed = _parse_year_value(str(row.get("label", "")), index + 1)
+        if parsed is None:
+            candidate = row.get("year")
+            if isinstance(candidate, (int, float)):
+                parsed = int(candidate)
+        if parsed is not None:
+            existing_years.append(int(parsed))
+    max_existing_year = max(existing_years) if existing_years else None
 
     label_catalog = [str(year) for year in payload_years if year is not None]
     for label in label_map:
-        if label not in label_catalog:
+        if str(label) not in label_catalog:
             label_catalog.append(str(label))
 
-    header_cols = st.columns([2, 1])
-    selected_label = _select_or_create_option(
-        header_cols[0],
-        "Year",
-        label_catalog,
-        f"utility_label_{selected_index}",
-        current_value=str(current_row.get("label") or label_map[selected_index]),
-    )
-    if header_cols[1].button("Remove", key=f"utility_remove_{selected_index}"):
-        new_rows = list(rows)
-        del new_rows[selected_index]
-        st.session_state["utility_rows"] = new_rows or [_default_utility_row(0)]
-        remaining_index = min(selected_index, len(new_rows) - 1) if new_rows else 0
-        _set_widget_value("utility_selected_index_widget", remaining_index)
-        _utility_rows_to_payload(st.session_state.get("utility_rows", []), payload)
-        _rerun()
+    action = "Add Year"
+    target_index: Optional[int] = None
+    selected_label = ""
+    electricity_per_day = water_per_day = steam_per_hour = 0.0
+    electricity_rate = water_rate = steam_rate = 0.0
+    electricity_days = water_days = steam_days = steam_hours = 0
+    submitted = False
 
-    parsed_year = _parse_year_value(selected_label, selected_index + 1)
+    with st.form("utility_manage_year"):
+        st.markdown("#### Manage Utility Year")
+        action = st.selectbox(
+            "Action",
+            ("Add Year", "Modify Year"),
+            index=0,
+            key="utility_manage_action",
+        )
+        if action == "Modify Year" and not rows:
+            st.warning("There are no utility years to modify. Add a new entry instead.")
+            action = "Add Year"
 
-    electricity_cols = st.columns([2, 2, 2, 2])
-    _set_widget_value(_field_key("e_day"), float(current_row.get("electricity_per_day", 0.0)))
-    electricity_per_day = electricity_cols[0].number_input(
-        "Electricity per day",
-        key=_field_key("e_day"),
-        step=1.0,
-        format="%.4f",
-    )
-    _set_widget_value(_field_key("e_rate"), float(current_row.get("electricity_rate", 0.0)))
-    electricity_rate = electricity_cols[1].number_input(
-        "Price per kWh",
-        key=_field_key("e_rate"),
-        step=0.001,
-        format="%.4f",
-    )
-    _set_widget_value(_field_key("e_days"), int(float(current_row.get("electricity_days", 0))))
-    electricity_days = electricity_cols[2].number_input(
-        "Operating Days",
-        key=_field_key("e_days"),
-        min_value=0,
-        step=1,
-    )
-    total_electricity = electricity_per_day * electricity_rate * electricity_days
-    _set_widget_value(_field_key("e_total"), float(total_electricity))
-    electricity_cols[3].number_input(
-        "Total Annual Electricity Cost",
-        key=_field_key("e_total"),
-        value=float(total_electricity),
-        format="%.4f",
-        disabled=True,
-    )
-
-    water_cols = st.columns([2, 2, 2, 2])
-    _set_widget_value(_field_key("w_day"), float(current_row.get("water_per_day", 0.0)))
-    water_per_day = water_cols[0].number_input(
-        "Water per day",
-        key=_field_key("w_day"),
-        step=1.0,
-        format="%.4f",
-    )
-    _set_widget_value(_field_key("w_rate"), float(current_row.get("water_rate", 0.0)))
-    water_rate = water_cols[1].number_input(
-        "Price per cubic meter",
-        key=_field_key("w_rate"),
-        step=0.001,
-        format="%.4f",
-    )
-    _set_widget_value(_field_key("w_days"), int(float(current_row.get("water_days", 0))))
-    water_days = water_cols[2].number_input(
-        "Operating Days",
-        key=_field_key("w_days"),
-        min_value=0,
-        step=1,
-    )
-    total_water = water_per_day * water_rate * water_days
-    _set_widget_value(_field_key("w_total"), float(total_water))
-    water_cols[3].number_input(
-        "Total Annual Water Cost",
-        key=_field_key("w_total"),
-        value=float(total_water),
-        format="%.4f",
-        disabled=True,
-    )
-
-    steam_cols = st.columns([2, 2, 2, 2, 2])
-    _set_widget_value(_field_key("s_hour"), float(current_row.get("steam_per_hour", 0.0)))
-    steam_per_hour = steam_cols[0].number_input(
-        "Steam per hour",
-        key=_field_key("s_hour"),
-        step=0.1,
-        format="%.4f",
-    )
-    _set_widget_value(_field_key("s_rate"), float(current_row.get("steam_rate", 0.0)))
-    steam_rate = steam_cols[1].number_input(
-        "Price per steam hour",
-        key=_field_key("s_rate"),
-        step=0.001,
-        format="%.4f",
-    )
-    _set_widget_value(_field_key("s_days"), int(float(current_row.get("steam_days", 0))))
-    steam_days = steam_cols[2].number_input(
-        "Operating Days",
-        key=_field_key("s_days"),
-        min_value=0,
-        step=1,
-    )
-    _set_widget_value(_field_key("s_hours"), int(float(current_row.get("steam_hours", 0))))
-    steam_hours = steam_cols[3].number_input(
-        "Operating Hours",
-        key=_field_key("s_hours"),
-        min_value=0,
-        step=1,
-    )
-    total_steam = steam_per_hour * steam_rate * steam_days * steam_hours
-    _set_widget_value(_field_key("s_total"), float(total_steam))
-    steam_cols[4].number_input(
-        "Total Annual Steam Cost",
-        key=_field_key("s_total"),
-        value=float(total_steam),
-        format="%.4f",
-        disabled=True,
-    )
-
-    new_row = {
-        "label": selected_label or label_map[selected_index],
-        "year": parsed_year,
-        "electricity_per_day": float(electricity_per_day),
-        "electricity_rate": float(electricity_rate),
-        "electricity_days": int(electricity_days),
-        "water_per_day": float(water_per_day),
-        "water_rate": float(water_rate),
-        "water_days": int(water_days),
-        "steam_per_hour": float(steam_per_hour),
-        "steam_rate": float(steam_rate),
-        "steam_days": int(steam_days),
-        "steam_hours": int(steam_hours),
-    }
-
-    if new_row != rows[selected_index]:
-        updated_rows = list(rows)
-        updated_rows[selected_index] = new_row
-        st.session_state["utility_rows"] = updated_rows
-
-    year_catalog = [str(option) for option in label_map]
-    for value in payload_years:
-        if value is not None and str(value) not in year_catalog:
-            year_catalog.append(str(value))
-
-    last_row = st.session_state.get("utility_rows", rows)[-1]
-    existing_years = [
-        _parse_year_value(str(row.get("label", "")), index + 1)
-        if row.get("year") is None
-        else _parse_year_value(str(row.get("year")), index + 1)
-        for index, row in enumerate(st.session_state.get("utility_rows", rows))
-    ]
-    existing_years = [value for value in existing_years if value is not None]
-    max_existing_year = max(existing_years) if existing_years else None
-
-    with st.form("add_utility_year"):
-        st.markdown("#### Add Utility Year")
-        candidate_year = last_row.get("year")
-        if not isinstance(candidate_year, (int, float)):
-            candidate_year = _parse_year_value(str(last_row.get("label")), len(rows) + 1)
-        if isinstance(candidate_year, (int, float)):
-            new_label_default = str(int(candidate_year) + 1)
-        elif max_existing_year is not None:
-            new_label_default = str(max_existing_year + 1)
+        if action == "Modify Year" and rows:
+            target_index = st.selectbox(
+                "Select year to modify",
+                list(range(len(rows))),
+                format_func=lambda idx: label_map[idx],
+                key="utility_modify_selector",
+            )
+            template = dict(rows[target_index])
         else:
-            new_label_default = f"Year {len(rows) + 1}"
+            target_index = None
+            template = dict(rows[-1]) if rows else _default_utility_row(0)
 
-        new_label = _select_or_create_option(
+        if action == "Add Year":
+            candidate_year: Optional[int] = None
+            candidate_value = template.get("year")
+            if isinstance(candidate_value, (int, float)):
+                candidate_year = int(candidate_value)
+            else:
+                parsed_candidate = _parse_year_value(
+                    str(template.get("label")), len(rows) + 1
+                )
+                if parsed_candidate is not None:
+                    candidate_year = int(parsed_candidate)
+            if candidate_year is not None:
+                default_label = str(candidate_year + 1)
+            elif max_existing_year is not None:
+                default_label = str(max_existing_year + 1)
+            else:
+                default_label = f"Year {len(rows) + 1}"
+        else:
+            default_label = str(template.get("label") or label_map[target_index or 0])
+
+        selected_label = _select_or_create_option(
             st,
             "Year",
-            year_catalog,
-            "utility_new_label",
-            current_value=new_label_default,
+            label_catalog,
+            "utility_manage_label",
+            current_value=default_label,
         )
 
-        template = dict(last_row) if last_row else _default_utility_row(len(rows))
-        new_electricity_per_day = st.number_input(
-            "Electricity per day (new)",
-            value=float(template.get("electricity_per_day", 0.0)),
-            key="utility_new_e_day",
+        def _manage_key(name: str) -> str:
+            return f"utility_manage_{name}"
+
+        _set_widget_value(_manage_key("e_day"), float(template.get("electricity_per_day", 0.0)))
+        electricity_per_day = st.number_input(
+            "Electricity per day",
+            key=_manage_key("e_day"),
             step=1.0,
             format="%.4f",
         )
-        new_electricity_rate = st.number_input(
-            "Price per kWh (new)",
-            value=float(template.get("electricity_rate", 0.0)),
-            key="utility_new_e_rate",
+        _set_widget_value(_manage_key("e_rate"), float(template.get("electricity_rate", 0.0)))
+        electricity_rate = st.number_input(
+            "Price per kWh",
+            key=_manage_key("e_rate"),
             step=0.001,
             format="%.4f",
         )
-        new_electricity_days = st.number_input(
-            "Operating Days (new)",
-            value=int(template.get("electricity_days", 0)),
-            key="utility_new_e_days",
+        _set_widget_value(
+            _manage_key("e_days"), int(float(template.get("electricity_days", 0)))
+        )
+        electricity_days = st.number_input(
+            "Operating Days",
+            key=_manage_key("e_days"),
             min_value=0,
             step=1,
         )
-        new_water_per_day = st.number_input(
-            "Water per day (new)",
-            value=float(template.get("water_per_day", 0.0)),
-            key="utility_new_w_day",
+
+        _set_widget_value(_manage_key("w_day"), float(template.get("water_per_day", 0.0)))
+        water_per_day = st.number_input(
+            "Water per day",
+            key=_manage_key("w_day"),
             step=1.0,
             format="%.4f",
         )
-        new_water_rate = st.number_input(
-            "Price per cubic meter (new)",
-            value=float(template.get("water_rate", 0.0)),
-            key="utility_new_w_rate",
+        _set_widget_value(_manage_key("w_rate"), float(template.get("water_rate", 0.0)))
+        water_rate = st.number_input(
+            "Price per cubic meter",
+            key=_manage_key("w_rate"),
             step=0.001,
             format="%.4f",
         )
-        new_water_days = st.number_input(
-            "Water operating days (new)",
-            value=int(template.get("water_days", 0)),
-            key="utility_new_w_days",
+        _set_widget_value(_manage_key("w_days"), int(float(template.get("water_days", 0))))
+        water_days = st.number_input(
+            "Water operating days",
+            key=_manage_key("w_days"),
             min_value=0,
             step=1,
         )
-        new_steam_per_hour = st.number_input(
-            "Steam per hour (new)",
-            value=float(template.get("steam_per_hour", 0.0)),
-            key="utility_new_s_hour",
+
+        _set_widget_value(_manage_key("s_hour"), float(template.get("steam_per_hour", 0.0)))
+        steam_per_hour = st.number_input(
+            "Steam per hour",
+            key=_manage_key("s_hour"),
             step=0.1,
             format="%.4f",
         )
-        new_steam_rate = st.number_input(
-            "Price per steam hour (new)",
-            value=float(template.get("steam_rate", 0.0)),
-            key="utility_new_s_rate",
+        _set_widget_value(_manage_key("s_rate"), float(template.get("steam_rate", 0.0)))
+        steam_rate = st.number_input(
+            "Price per steam hour",
+            key=_manage_key("s_rate"),
             step=0.001,
             format="%.4f",
         )
-        new_steam_days = st.number_input(
-            "Steam operating days (new)",
-            value=int(template.get("steam_days", 0)),
-            key="utility_new_s_days",
+        _set_widget_value(_manage_key("s_days"), int(float(template.get("steam_days", 0))))
+        steam_days = st.number_input(
+            "Steam operating days",
+            key=_manage_key("s_days"),
             min_value=0,
             step=1,
         )
-        new_steam_hours = st.number_input(
-            "Steam operating hours (new)",
-            value=int(template.get("steam_hours", 0)),
-            key="utility_new_s_hours",
+        _set_widget_value(_manage_key("s_hours"), int(float(template.get("steam_hours", 0))))
+        steam_hours = st.number_input(
+            "Steam operating hours",
+            key=_manage_key("s_hours"),
             min_value=0,
             step=1,
         )
-        submitted = st.form_submit_button("Add Year")
+
+        submit_label = "Save Changes" if action == "Modify Year" else "Add Year"
+        submitted = st.form_submit_button(submit_label)
 
     if submitted:
-        cleaned_label = new_label.strip()
+        cleaned_label = (selected_label or "").strip()
         if not cleaned_label:
-            st.warning("Year label is required to add a utility schedule entry.")
+            st.warning("Year label is required to update the utility schedule.")
         else:
-            parsed_year = _parse_year_value(cleaned_label, len(rows) + 1)
+            parsed_year = _parse_year_value(
+                cleaned_label,
+                (target_index + 1) if target_index is not None else len(rows) + 1,
+            )
             if parsed_year is None:
                 parsed_year = (max_existing_year or len(rows)) + 1
                 cleaned_label = str(parsed_year)
-            elif max_existing_year is not None and parsed_year <= max_existing_year:
+            elif (
+                action == "Add Year"
+                and max_existing_year is not None
+                and parsed_year <= max_existing_year
+            ):
                 parsed_year = max_existing_year + 1
                 cleaned_label = str(parsed_year)
 
             new_entry = {
                 "label": cleaned_label,
                 "year": parsed_year,
-                "electricity_per_day": new_electricity_per_day,
-                "electricity_rate": new_electricity_rate,
-                "electricity_days": int(new_electricity_days),
-                "water_per_day": new_water_per_day,
-                "water_rate": new_water_rate,
-                "water_days": int(new_water_days),
-                "steam_per_hour": new_steam_per_hour,
-                "steam_rate": new_steam_rate,
-                "steam_days": int(new_steam_days),
-                "steam_hours": int(new_steam_hours),
+                "electricity_per_day": float(electricity_per_day),
+                "electricity_rate": float(electricity_rate),
+                "electricity_days": int(electricity_days),
+                "water_per_day": float(water_per_day),
+                "water_rate": float(water_rate),
+                "water_days": int(water_days),
+                "steam_per_hour": float(steam_per_hour),
+                "steam_rate": float(steam_rate),
+                "steam_days": int(steam_days),
+                "steam_hours": int(steam_hours),
             }
 
-            new_rows = list(st.session_state.get("utility_rows", rows)) + [new_entry]
-            st.session_state["utility_rows"] = new_rows
-            _utility_rows_to_payload(new_rows, payload)
-            _set_widget_value("utility_selected_index_widget", len(new_rows) - 1)
+            if action == "Modify Year" and target_index is not None:
+                updated_rows = list(rows)
+                updated_rows[target_index] = new_entry
+            else:
+                updated_rows = list(rows) + [new_entry]
 
-            for key in (
-                "utility_new_label",
-                "utility_new_label_select",
-                "utility_new_label_custom",
-                "utility_new_e_day",
-                "utility_new_e_rate",
-                "utility_new_e_days",
-                "utility_new_w_day",
-                "utility_new_w_rate",
-                "utility_new_w_days",
-                "utility_new_s_hour",
-                "utility_new_s_rate",
-                "utility_new_s_days",
-                "utility_new_s_hours",
-            ):
-                st.session_state.pop(key, None)
-
+            st.session_state["utility_rows"] = updated_rows
+            _utility_rows_to_payload(updated_rows, payload)
             _rerun()
+
+    if st.session_state.get("utility_rows"):
+        rows = st.session_state["utility_rows"]
+        label_map = [
+            str(row.get("label") or f"Year {index + 1}") for index, row in enumerate(rows)
+        ]
+
+    if rows:
+        removal_cols = st.columns([3, 1])
+        remove_index = removal_cols[0].selectbox(
+            "Select year to remove",
+            list(range(len(rows))),
+            format_func=lambda idx: label_map[idx],
+            key="utility_remove_selector",
+        )
+        if removal_cols[1].button("Remove Year", key="utility_remove_button"):
+            updated_rows = list(rows)
+            del updated_rows[remove_index]
+            if not updated_rows:
+                updated_rows = [_default_utility_row(0)]
+            st.session_state["utility_rows"] = updated_rows
+            _utility_rows_to_payload(updated_rows, payload)
+            _rerun()
+
+    _utility_rows_to_payload(st.session_state.get("utility_rows", rows), payload)
 
 
 def _render_receivable_inputs(payload: dict) -> None:
