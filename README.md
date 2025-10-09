@@ -118,6 +118,25 @@ PY
 
 The printed dictionary lists NPV, IRR, and payback metrics derived from the default assumptions.
 
+### Updating the Utility Schedule
+
+You can revise electricity, water, and steam assumptions directly from the **Utility Schedule**
+editor on the Input Landing Page:
+
+1. **Open Streamlit** using `streamlit run streamlit_app.py` and navigate to the Input Landing
+   Page.
+2. Locate the **Utility Schedule** section. Each row represents a projection year with columns
+   for the per-day (or per-hour) quantities and the applicable unit prices.
+3. Click into any cell to adjust the quantity, rate, or operating-day/hour assumptions. The table
+   updates in place and immediately syncs the new values back into the modelling payload.
+4. To add an additional year, use the “Add row” control at the bottom of the table. A blank entry
+   will appear that you can populate with the relevant year label and utility inputs.
+5. Remove a year by selecting the corresponding row and choosing the built-in delete action.
+
+All changes are reflected instantly across the Key Metrics dashboard, financial statements, and
+analytics tabs, so you can observe the downstream impact of revised utility assumptions without
+editing the underlying JSON manually.
+
 ## Notes
 
 - The IRR calculation uses a Newton iteration approach implemented in pure Python.
