@@ -196,6 +196,40 @@ class FinancialModelTest(unittest.TestCase):
             expected_total = sum(column[idx] for column in product_columns)
             self.assertAlmostEqual(expected_total, gross[idx], places=6)
 
+    def test_gross_revenue_matches_pricing_assumptions(self):
+        schedule = self.model.revenue_schedule()
+        gross = schedule.column("Gross Revenue")
+
+        inflation_series = list(self.inputs.inflation_series)
+        risk_schedule = dict(self.inputs.risk_schedule)
+
+        expected: list[float] = []
+        cumulative_inflation: list[float] = []
+        running = 1.0
+        for rate in inflation_series:
+            running *= 1.0 + float(rate)
+            cumulative_inflation.append(running)
+
+        for idx, year in enumerate(self.inputs.years):
+            inflation_factor = cumulative_inflation[idx] if idx < len(cumulative_inflation) else cumulative_inflation[-1]
+            risk_factor = 1.0
+            for values in risk_schedule.values():
+                if not values:
+                    continue
+                rate = values[idx] if idx < len(values) else values[-1]
+                risk_factor *= max(0.0, 1.0 - float(rate))
+
+            total = 0.0
+            for product in self.inputs.products:
+                units = float(self.inputs.production_estimate[product][idx])
+                price = float(self.inputs.unit_costs[product].selling_price)
+                total += units * price * inflation_factor * risk_factor
+            expected.append(total)
+
+        self.assertEqual(len(expected), len(gross))
+        for actual, expected_value in zip(gross, expected):
+            self.assertAlmostEqual(actual, expected_value, places=6)
+
     def test_distributor_commission_uses_configured_rates(self):
         schedule = self.model.revenue_schedule()
         commission_column = schedule.column("Distributors Commission")
