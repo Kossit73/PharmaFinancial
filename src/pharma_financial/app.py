@@ -2024,34 +2024,56 @@ def _render_utility_schedule(payload: dict) -> None:
     updated_rows: list[dict] = []
     payload_years: Sequence | None = payload.get("years")
 
+    year_catalog = [str(year) for year in payload_years if year is not None]
+    existing_labels = [
+        str(row.get("label"))
+        for row in rows
+        if isinstance(row, Mapping) and row.get("label")
+    ]
+    for label in existing_labels:
+        if label not in year_catalog:
+            year_catalog.append(label)
+    if not year_catalog:
+        year_catalog = [f"Year {idx + 1}" for idx in range(len(rows) or 1)]
+
     for index, row in enumerate(rows):
         entry = _normalise_utility_entry(row, index)
         container = st.container()
         with container:
             cols = st.columns([2.0, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 0.8])
 
-            label_value = cols[0].text_input(
+            default_label = None
+            if (
+                isinstance(payload_years, Sequence)
+                and index < len(payload_years)
+                and payload_years[index] is not None
+            ):
+                default_label = str(payload_years[index])
+            else:
+                candidate = entry.get("year")
+                if isinstance(candidate, (int, float)):
+                    default_label = str(int(candidate))
+            if not default_label:
+                default_label = str(entry.get("label") or f"Year {index + 1}")
+
+            label_value = _select_or_create_option(
+                cols[0],
                 "Year",
-                value=str(entry.get("label", f"Year {index + 1}")),
-                key=f"utility_label_{index}",
+                year_catalog,
+                f"utility_label_{index}",
+                current_value=default_label,
             )
+            if label_value and label_value not in year_catalog:
+                year_catalog.append(label_value)
             if not label_value:
-                label_value = f"Year {index + 1}"
+                label_value = default_label
+
             parsed_year = _parse_year_value(
                 label_value,
                 entry.get("year")
                 if isinstance(entry.get("year"), int)
                 else index + 1,
             )
-            if (
-                isinstance(payload_years, Sequence)
-                and index < len(payload_years)
-                and payload_years[index] is not None
-            ):
-                try:
-                    parsed_year = int(payload_years[index])
-                except Exception:  # pragma: no cover - defensive parsing
-                    parsed_year = parsed_year
 
             electricity_per_day = cols[1].number_input(
                 "Electricity per day",
@@ -2171,12 +2193,19 @@ def _render_utility_schedule(payload: dict) -> None:
 
     st.markdown("#### Add utility assumption")
     default_entry = _next_utility_entry(rows, payload_years)
+    default_label = str(default_entry.get("label", f"Year {len(rows) + 1}"))
+    if default_label and default_label not in year_catalog:
+        year_catalog.append(default_label)
     with st.form("utility_add_row"):
-        new_label = st.text_input(
+        new_label = _select_or_create_option(
+            st,
             "Year",
-            value=str(default_entry.get("label", f"Year {len(rows) + 1}")),
-            key="utility_new_label",
+            year_catalog,
+            "utility_new_label",
+            current_value=default_label,
         )
+        if new_label and new_label not in year_catalog:
+            year_catalog.append(new_label)
         new_electricity_per_day = st.number_input(
             "Electricity per day",
             value=float(default_entry.get("electricity_per_day", 0.0)),
