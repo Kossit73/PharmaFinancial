@@ -545,6 +545,10 @@ def _resolve_inputs() -> tuple[ModelInputs, str]:
     rows = st.session_state.setdefault(
         "core_assumption_rows", _payload_to_core_rows(payload)
     )
+    synced_rows = _sync_core_rows_from_widgets(rows)
+    if synced_rows != rows:
+        st.session_state["core_assumption_rows"] = synced_rows
+        rows = synced_rows
     _core_rows_to_payload(rows, payload)
 
     commission_rows = st.session_state.setdefault(
@@ -5514,6 +5518,67 @@ def _inventory_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
         st.session_state["inventory_rows"] = _payload_to_inventory_rows(payload)
     except Exception:  # pragma: no cover - depends on Streamlit runtime
         pass
+
+
+def _sync_core_rows_from_widgets(rows: Sequence[Mapping]) -> list[dict]:
+    """Return core assumption rows updated from widget session state.
+
+    When users edit the number inputs on the Streamlit page the widget values are
+    stored in ``st.session_state`` before the next script run.  The model is
+    parsed prior to rendering the input tab, so we normalise the stored rows
+    against the widget state here to ensure the latest user edits feed straight
+    into the payload digest that powers the financial outputs.
+    """
+
+    updated_rows: list[dict] = []
+    for index, row in enumerate(rows):
+        current = dict(row)
+
+        description = st.session_state.get(f"core_desc_{index}")
+        if description is not None:
+            current["Product"] = str(description).strip()
+
+        production = st.session_state.get(f"core_prod_{index}")
+        if production is not None:
+            current["Production Cost"] = float(production)
+
+        selling = st.session_state.get(f"core_sell_{index}")
+        if selling is not None:
+            current["Selling Price"] = float(selling)
+
+        freight = st.session_state.get(f"core_freight_{index}")
+        if freight is not None:
+            current["Freight Cost"] = float(freight)
+
+        markup = st.session_state.get(f"core_markup_{index}")
+        if markup is not None:
+            current["Markup"] = float(markup)
+
+        units = st.session_state.get(f"core_units_{index}")
+        if units is not None:
+            current["Total Production Units"] = float(units)
+
+        capacity = st.session_state.get(f"core_capacity_{index}")
+        if capacity is not None:
+            current["Max Capacity"] = float(capacity)
+
+        total_units = float(current.get("Total Production Units", 0.0))
+        max_capacity = float(current.get("Max Capacity", 0.0))
+        if max_capacity > 0.0 and total_units > max_capacity:
+            total_units = max_capacity
+        current["Total Production Units"] = total_units
+
+        production_cost = float(current.get("Production Cost", 0.0))
+        selling_price = float(current.get("Selling Price", 0.0))
+        freight_cost = float(current.get("Freight Cost", 0.0))
+        markup_value = float(current.get("Markup", 0.0))
+
+        current["Total Revenue"] = total_units * selling_price
+        current["Total Cost"] = total_units * (production_cost + freight_cost + markup_value)
+
+        updated_rows.append(current)
+
+    return updated_rows
 
 
 def _core_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:

@@ -35,6 +35,7 @@ class DummyStreamlit(types.ModuleType):
         super().__init__("streamlit")
         self._no_op = _NoOp()
         self.calls: list[str] = []
+        self.session_state: dict = {}
 
     def rerun(self):  # pragma: no cover - behaviour exercised in tests
         self.calls.append("rerun")
@@ -153,6 +154,36 @@ class RerunHelperTest(unittest.TestCase):
             )
             if capacity > 0:
                 self.assertLessEqual(units, capacity + 1e-9)
+
+    def test_core_rows_widget_sync_updates_payload(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+        )
+        rows = self.app._payload_to_core_rows(payload)
+        self.assertTrue(rows)
+
+        original = rows[0]
+        product_name = str(original["Product"])
+        new_price = float(original["Selling Price"]) + 0.25
+        new_units = float(original["Total Production Units"]) + 10.0
+
+        self.app.st.session_state[f"core_desc_0"] = product_name
+        self.app.st.session_state[f"core_sell_0"] = new_price
+        self.app.st.session_state[f"core_units_0"] = new_units
+
+        synced = self.app._sync_core_rows_from_widgets(rows)
+        self.assertNotEqual(synced, rows)
+
+        payload_copy = json.loads(json.dumps(payload))
+        self.app._core_rows_to_payload(synced, payload_copy)
+
+        parsed = self.app.parse_inputs(payload_copy)
+        self.assertAlmostEqual(
+            parsed.unit_costs[product_name].selling_price, new_price, places=6
+        )
+
+        total_units = sum(parsed.production_estimate[product_name])
+        self.assertAlmostEqual(total_units, float(synced[0]["Total Production Units"]), places=6)
 
     def test_commission_rows_roundtrip(self):
         payload = json.loads(
