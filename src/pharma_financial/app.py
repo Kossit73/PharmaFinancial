@@ -177,6 +177,24 @@ def _payload_digest(payload: Mapping[str, object]) -> str:
     return hashlib.sha256(serialised.encode("utf-8")).hexdigest()
 
 
+def _clone_payload(payload: Mapping[str, object]) -> dict[str, object]:
+    """Return a deep copy of ``payload`` suitable for workspace storage."""
+
+    return json.loads(json.dumps(payload, default=_json_default))
+
+
+def _generate_workspace_label(existing: Mapping[str, object], prefix: str = "Workspace") -> str:
+    """Return a workspace label that does not collide with ``existing`` keys."""
+
+    index = 1
+    existing_keys = {str(key) for key in existing.keys()}
+    while True:
+        candidate = f"{prefix} {index}"
+        if candidate not in existing_keys:
+            return candidate
+        index += 1
+
+
 def _normalise_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
     """Normalise payloads prior to parsing to guarantee stable caching."""
 
@@ -455,6 +473,72 @@ def _resolve_inputs() -> tuple[ModelInputs, str]:
         _initialise_session_payload(json.loads(DEFAULT_INPUT_JSON))
 
     payload = st.session_state["input_payload"]
+
+    saved_workspaces = st.session_state.setdefault("saved_workspaces", {})
+    if not isinstance(saved_workspaces, dict):  # pragma: no cover - defensive guard
+        saved_workspaces = {}
+        st.session_state["saved_workspaces"] = saved_workspaces
+
+    if "active_workspace_name" not in st.session_state:
+        st.session_state["active_workspace_name"] = _generate_workspace_label(
+            saved_workspaces
+        )
+
+    st.session_state.setdefault("workspace_label", st.session_state["active_workspace_name"])
+
+    st.sidebar.markdown("### Workspace Controls")
+    workspace_input = st.sidebar.text_input(
+        "Workspace name",
+        key="workspace_label",
+        help="Label used when saving, loading, or creating model workspaces.",
+    )
+
+    workspace_name = (workspace_input or "").strip()
+    if not workspace_name:
+        workspace_name = st.session_state.get("active_workspace_name", "Workspace 1")
+        st.session_state["workspace_label"] = workspace_name
+    st.session_state["active_workspace_name"] = workspace_name
+
+    if st.sidebar.button("Save", key="workspace_save"):
+        saved_workspaces[workspace_name] = _clone_payload(payload)
+        st.sidebar.success(f"Workspace '{workspace_name}' saved.")
+
+    if st.sidebar.button("Reset", key="workspace_reset"):
+        st.session_state.pop("uploaded_signature", None)
+        _initialise_session_payload(json.loads(DEFAULT_INPUT_JSON))
+        st.sidebar.info("Model reset to bundled defaults.")
+        st.session_state["workspace_label"] = st.session_state.get(
+            "active_workspace_name", workspace_name
+        )
+        _rerun()
+
+    if st.sidebar.button("New", key="workspace_new"):
+        saved_workspaces[workspace_name] = _clone_payload(payload)
+        new_label = _generate_workspace_label(saved_workspaces)
+        st.session_state["workspace_label"] = new_label
+        st.session_state["active_workspace_name"] = new_label
+        st.session_state.pop("uploaded_signature", None)
+        _initialise_session_payload(json.loads(DEFAULT_INPUT_JSON))
+        st.sidebar.success(
+            f"Created new workspace '{new_label}'. Previous workspace saved as '{workspace_name}'."
+        )
+        _rerun()
+
+    if saved_workspaces:
+        st.sidebar.markdown("#### Saved Workspaces")
+        options = sorted(str(name) for name in saved_workspaces.keys())
+        selection = st.sidebar.selectbox(
+            "Load workspace",
+            options,
+            key="workspace_load_selection",
+        )
+        if selection and st.sidebar.button("Load Selected", key="workspace_load_button"):
+            restored = _clone_payload(saved_workspaces.get(selection, {}))
+            _initialise_session_payload(restored)
+            st.session_state["workspace_label"] = selection
+            st.session_state["active_workspace_name"] = selection
+            st.sidebar.success(f"Loaded workspace '{selection}'.")
+            _rerun()
 
     st.sidebar.markdown("### AI & Machine Learning Configuration")
     _render_ai_settings(payload, container=st.sidebar)

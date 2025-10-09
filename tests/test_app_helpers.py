@@ -118,6 +118,20 @@ class RerunHelperTest(unittest.TestCase):
 
         self.assertEqual(payload["years"], original_years)
 
+    def test_clone_payload_returns_independent_copy(self):
+        payload = {"a": {"b": 1}}
+        clone = self.app._clone_payload(payload)
+
+        self.assertEqual(clone, payload)
+        clone["a"]["b"] = 2
+        self.assertEqual(payload["a"]["b"], 1)
+
+    def test_generate_workspace_label_advances_index(self):
+        existing = {"Workspace 1": {}, "Workspace 2": {}}
+        label = self.app._generate_workspace_label(existing)
+
+        self.assertEqual(label, "Workspace 3")
+
     def test_core_rows_calculations_match_inputs(self):
         payload = json.loads(
             Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
