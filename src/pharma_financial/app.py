@@ -2622,6 +2622,106 @@ def _render_distributor_commission(payload: Mapping) -> None:
         st.session_state["commission_rows"] = updated_rows
 
 
+def _calculate_depreciation_preview(rows: Sequence[Mapping[str, object]]) -> list[dict]:
+    """Return derived depreciation metrics for each configured asset row.
+
+    The Streamlit editor stores user-provided depreciation assumptions in
+    ``session_state`` as a list of dictionaries.  Rendering the schedule
+    requires deriving roll-forward values—opening balances, total depreciation,
+    cumulative depreciation, and net book value—for each entry so that the UI
+    can surface read-only previews while keeping editable fields uncluttered.
+
+    This helper mirrors the logic used by :meth:`FinancialModel` when it builds
+    the depreciation roll-forward: rows are grouped by asset type, ordered by
+    year, and then processed sequentially while honouring manual overrides for
+    opening balances.  The resulting dictionaries are aligned to the original
+    row order so callers can safely index into the list during widget
+    rendering.
+    """
+
+    if not rows:
+        return []
+
+    grouped: dict[str, list[tuple[int, Mapping[str, object]]]] = {}
+    for index, row in enumerate(rows):
+        asset_key = str(row.get("asset_type", "") or "").strip().lower()
+        grouped.setdefault(asset_key, []).append((index, row))
+
+    derived_by_index: dict[int, dict] = {}
+
+    for group in grouped.values():
+        group.sort(key=lambda item: (int(item[1].get("year", 0) or 0), item[0]))
+
+        previous_net: Optional[float] = None
+        previous_cumulative: Optional[float] = None
+
+        for life_index, (original_index, row) in enumerate(group):
+            method = str(row.get("method", "straight_line") or "straight_line").strip().lower()
+            if method not in DEPRECIATION_METHOD_LABELS:
+                method = "straight_line"
+
+            acquisition = float(row.get("acquisition", 0.0) or 0.0)
+            depreciation_rate = float(row.get("depreciation_rate", 0.0) or 0.0)
+            asset_life = int(row.get("asset_life") or 0)
+            opening_net = float(row.get("opening_net_book", 0.0) or 0.0)
+            opening_cumulative = float(row.get("opening_cumulative", 0.0) or 0.0)
+
+            override_net = bool(row.get("override_net_book"))
+            override_cumulative = bool(row.get("override_cumulative"))
+
+            if previous_net is None or override_net:
+                prior_net = opening_net
+            else:
+                prior_net = previous_net
+
+            if previous_cumulative is None or override_cumulative:
+                prior_cumulative = opening_cumulative
+            else:
+                prior_cumulative = previous_cumulative
+
+            total_asset_cost = prior_net + acquisition
+            allowable = max(total_asset_cost - prior_cumulative, 0.0)
+
+            if method == "straight_line" and asset_life > 0:
+                remaining_periods = max(asset_life - life_index, 1)
+                total_depreciation = allowable / remaining_periods if remaining_periods else allowable
+            else:
+                if method == "reducing_balance":
+                    depreciation_base = prior_net + (acquisition * 0.5)
+                else:
+                    depreciation_base = total_asset_cost
+
+                total_depreciation = depreciation_base * depreciation_rate
+
+                if asset_life > 0 and life_index >= asset_life - 1:
+                    total_depreciation = allowable
+                elif total_depreciation > allowable:
+                    total_depreciation = allowable
+
+            cumulative_depreciation = prior_cumulative + total_depreciation
+            net_book_value = max(total_asset_cost - cumulative_depreciation, 0.0)
+
+            derived_by_index[original_index] = {
+                "asset_type": row.get("asset_type"),
+                "year": int(row.get("year", 0) or 0),
+                "prior_net_book": prior_net,
+                "prior_cumulative": prior_cumulative,
+                "total_asset_cost": total_asset_cost,
+                "total_depreciation": total_depreciation,
+                "cumulative_depreciation": cumulative_depreciation,
+                "net_book_value": net_book_value,
+                "method": method,
+                "life_year_index": life_index,
+                "asset_life": asset_life,
+                "is_first": previous_net is None,
+            }
+
+            previous_net = net_book_value
+            previous_cumulative = cumulative_depreciation
+
+    return [derived_by_index.get(index, {}) for index in range(len(rows))]
+
+
 def _render_depreciation_schedule(payload: dict) -> None:
     rows: list[dict] = st.session_state.get("depreciation_rows", [])
     years = payload.get("years", [])
