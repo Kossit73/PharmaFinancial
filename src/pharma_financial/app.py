@@ -2342,23 +2342,31 @@ def _render_utility_schedule(payload: dict) -> None:
             st.warning("Year label is required to add a utility schedule entry.")
         else:
             parsed_year = _parse_year_value(cleaned_label, len(rows) + 1)
-            rows.append(
-                {
-                    "label": cleaned_label,
-                    "year": parsed_year,
-                    "electricity_per_day": new_electricity_per_day,
-                    "electricity_rate": new_electricity_rate,
-                    "electricity_days": int(new_electricity_days),
-                    "water_per_day": new_water_per_day,
-                    "water_rate": new_water_rate,
-                    "water_days": int(new_water_days),
-                    "steam_per_hour": new_steam_per_hour,
-                    "steam_rate": new_steam_rate,
-                    "steam_days": int(new_steam_days),
-                    "steam_hours": int(new_steam_hours),
-                }
-            )
-            st.session_state["utility_rows"] = rows
+            new_entry = {
+                "label": cleaned_label,
+                "year": parsed_year,
+                "electricity_per_day": new_electricity_per_day,
+                "electricity_rate": new_electricity_rate,
+                "electricity_days": int(new_electricity_days),
+                "water_per_day": new_water_per_day,
+                "water_rate": new_water_rate,
+                "water_days": int(new_water_days),
+                "steam_per_hour": new_steam_per_hour,
+                "steam_rate": new_steam_rate,
+                "steam_days": int(new_steam_days),
+                "steam_hours": int(new_steam_hours),
+            }
+
+            new_rows = [*rows, new_entry]
+            st.session_state["utility_rows"] = new_rows
+            _utility_rows_to_payload(new_rows, payload)
+
+            if new_rows:
+                newest_index = len(new_rows) - 1
+                st.session_state["utility_row_selector_0"] = newest_index
+                for slot in range(1, MAX_VISIBLE_UTILITY_ROWS):
+                    st.session_state.pop(f"utility_row_selector_{slot}", None)
+
             for key in (
                 "utility_new_label",
                 "utility_new_label_select",
@@ -2375,6 +2383,7 @@ def _render_utility_schedule(payload: dict) -> None:
                 "utility_new_s_hours",
             ):
                 st.session_state.pop(key, None)
+
             _rerun()
 
 
