@@ -552,10 +552,10 @@ def _resolve_inputs() -> tuple[ModelInputs, str]:
     )
     _commission_rows_to_payload(commission_rows, payload)
 
-    utility_rows = st.session_state.setdefault(
-        "utility_rows", _payload_to_utility_rows(payload)
+    utility_entries = st.session_state.setdefault(
+        "utility_entries", _payload_to_utility_entries(payload)
     )
-    _utility_rows_to_payload(utility_rows, payload)
+    _utility_entries_to_payload(utility_entries, payload)
 
     receivable_rows = st.session_state.setdefault(
         "receivable_rows", _payload_to_receivable_rows(payload)
@@ -985,7 +985,7 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
 
     _core_rows_to_payload(st.session_state.get("core_assumption_rows", []), payload)
     _commission_rows_to_payload(st.session_state.get("commission_rows", []), payload)
-    _utility_rows_to_payload(st.session_state.get("utility_rows", []), payload)
+    _utility_entries_to_payload(st.session_state.get("utility_entries", []), payload)
     _receivable_rows_to_payload(st.session_state.get("receivable_rows", []), payload)
     _inventory_rows_to_payload(st.session_state.get("inventory_rows", []), payload)
     _depreciation_rows_to_payload(st.session_state.get("depreciation_rows", []), payload)
@@ -2007,292 +2007,49 @@ def _render_fixed_variable_costs(payload: dict) -> None:
             _rerun()
 
 
-def _render_utility_schedule(payload: dict) -> None:
-    rows: list[dict] = st.session_state.get("utility_rows", [])
-    payload_years = payload.get("years", [])
 
-    if payload_years and rows:
-        updated = False
-        for index, row in enumerate(rows):
-            if not isinstance(row, Mapping):
-                continue
-            raw_label = str(row.get("label", "") or "").strip()
-            if not raw_label:
-                continue
-            year_index = _parse_year_value(raw_label, index + 1)
-            if raw_label.lower().startswith("year") and 1 <= year_index <= len(payload_years):
-                try:
-                    actual_year = int(payload_years[year_index - 1])
-                except Exception:  # pragma: no cover - defensive conversion
-                    continue
-                if row.get("label") != str(actual_year) or row.get("year") != actual_year:
-                    row["label"] = str(actual_year)
-                    row["year"] = actual_year
-                    updated = True
-        if updated:
-            st.session_state["utility_rows"] = rows
+def _render_utility_schedule(payload: dict) -> None:
+    st.markdown("#### Utility Schedule")
+    st.caption(
+        "Update electricity, water, and steam assumptions for each projection year. "
+        "Use the add button or the table controls to insert new years and edit the "
+        "existing values."
+    )
+
+    rows: list[dict] = st.session_state.get("utility_entries") or []
+    if not rows:
+        rows = _payload_to_utility_entries(payload)
+        st.session_state["utility_entries"] = rows
 
     if not rows:
-        st.info("No utility schedule configured yet. Use the form below to add entries.")
-        rows = [_default_utility_row(0)]
-        st.session_state["utility_rows"] = rows
+        rows = [_default_utility_entry(0)]
+        st.session_state["utility_entries"] = rows
 
-    label_map = [str(row.get("label") or f"Year {index + 1}") for index, row in enumerate(rows)]
+    if st.button("Add Utility Year", key="utility_add_year"):
+        rows = list(st.session_state.get("utility_entries", rows))
+        next_entry = _next_utility_entry(rows, payload.get("years", []))
+        rows.append(next_entry)
+        st.session_state["utility_entries"] = rows
+        _utility_entries_to_payload(rows, payload)
+        _rerun()
 
-    st.markdown("#### Configured Utility Years")
-    for index, row in enumerate(rows):
-        label = label_map[index]
-        electricity_total = (
-            float(row.get("electricity_per_day", 0.0))
-            * float(row.get("electricity_rate", 0.0))
-            * int(float(row.get("electricity_days", 0)))
-        )
-        water_total = (
-            float(row.get("water_per_day", 0.0))
-            * float(row.get("water_rate", 0.0))
-            * int(float(row.get("water_days", 0)))
-        )
-        steam_total = (
-            float(row.get("steam_per_hour", 0.0))
-            * float(row.get("steam_rate", 0.0))
-            * int(float(row.get("steam_days", 0)))
-            * int(float(row.get("steam_hours", 0)))
-        )
-        st.caption(
-            (
-                f"{label}: Electricity {electricity_total:,.2f}, "
-                f"Water {water_total:,.2f}, "
-                f"Steam {steam_total:,.2f}, "
-                f"Total {(electricity_total + water_total + steam_total):,.2f}"
-            )
-        )
+    display_rows = _utility_entries_to_editor(rows)
+    edited = st.data_editor(
+        display_rows,
+        key="utility_editor",
+        num_rows="dynamic",
+        hide_index=True,
+        column_config=_utility_column_config(),
+    )
 
-    existing_years: list[int] = []
-    for index, row in enumerate(rows):
-        parsed = _parse_year_value(str(row.get("label", "")), index + 1)
-        if parsed is None:
-            candidate = row.get("year")
-            if isinstance(candidate, (int, float)):
-                parsed = int(candidate)
-        if parsed is not None:
-            existing_years.append(int(parsed))
-    max_existing_year = max(existing_years) if existing_years else None
+    editor_rows = _extract_editor_rows(edited)
+    updated_rows = _editor_rows_to_utility_entries(editor_rows)
 
-    label_catalog = [str(year) for year in payload_years if year is not None]
-    for label in label_map:
-        if str(label) not in label_catalog:
-            label_catalog.append(str(label))
+    if updated_rows != rows:
+        st.session_state["utility_entries"] = updated_rows
+        rows = updated_rows
 
-    action = "Add Year"
-    target_index: Optional[int] = None
-    selected_label = ""
-    electricity_per_day = water_per_day = steam_per_hour = 0.0
-    electricity_rate = water_rate = steam_rate = 0.0
-    electricity_days = water_days = steam_days = steam_hours = 0
-    submitted = False
-
-    with st.form("utility_manage_year"):
-        st.markdown("#### Manage Utility Year")
-        action = st.selectbox(
-            "Action",
-            ("Add Year", "Modify Year"),
-            index=0,
-            key="utility_manage_action",
-        )
-        if action == "Modify Year" and not rows:
-            st.warning("There are no utility years to modify. Add a new entry instead.")
-            action = "Add Year"
-
-        if action == "Modify Year" and rows:
-            target_index = st.selectbox(
-                "Select year to modify",
-                list(range(len(rows))),
-                format_func=lambda idx: label_map[idx],
-                key="utility_modify_selector",
-            )
-            template = dict(rows[target_index])
-        else:
-            target_index = None
-            template = dict(rows[-1]) if rows else _default_utility_row(0)
-
-        if action == "Add Year":
-            candidate_year: Optional[int] = None
-            candidate_value = template.get("year")
-            if isinstance(candidate_value, (int, float)):
-                candidate_year = int(candidate_value)
-            else:
-                parsed_candidate = _parse_year_value(
-                    str(template.get("label")), len(rows) + 1
-                )
-                if parsed_candidate is not None:
-                    candidate_year = int(parsed_candidate)
-            if candidate_year is not None:
-                default_label = str(candidate_year + 1)
-            elif max_existing_year is not None:
-                default_label = str(max_existing_year + 1)
-            else:
-                default_label = f"Year {len(rows) + 1}"
-        else:
-            default_label = str(template.get("label") or label_map[target_index or 0])
-
-        selected_label = _select_or_create_option(
-            st,
-            "Year",
-            label_catalog,
-            "utility_manage_label",
-            current_value=default_label,
-        )
-
-        def _manage_key(name: str) -> str:
-            return f"utility_manage_{name}"
-
-        _set_widget_value(_manage_key("e_day"), float(template.get("electricity_per_day", 0.0)))
-        electricity_per_day = st.number_input(
-            "Electricity per day",
-            key=_manage_key("e_day"),
-            step=1.0,
-            format="%.4f",
-        )
-        _set_widget_value(_manage_key("e_rate"), float(template.get("electricity_rate", 0.0)))
-        electricity_rate = st.number_input(
-            "Price per kWh",
-            key=_manage_key("e_rate"),
-            step=0.001,
-            format="%.4f",
-        )
-        _set_widget_value(
-            _manage_key("e_days"), int(float(template.get("electricity_days", 0)))
-        )
-        electricity_days = st.number_input(
-            "Operating Days",
-            key=_manage_key("e_days"),
-            min_value=0,
-            step=1,
-        )
-
-        _set_widget_value(_manage_key("w_day"), float(template.get("water_per_day", 0.0)))
-        water_per_day = st.number_input(
-            "Water per day",
-            key=_manage_key("w_day"),
-            step=1.0,
-            format="%.4f",
-        )
-        _set_widget_value(_manage_key("w_rate"), float(template.get("water_rate", 0.0)))
-        water_rate = st.number_input(
-            "Price per cubic meter",
-            key=_manage_key("w_rate"),
-            step=0.001,
-            format="%.4f",
-        )
-        _set_widget_value(_manage_key("w_days"), int(float(template.get("water_days", 0))))
-        water_days = st.number_input(
-            "Water operating days",
-            key=_manage_key("w_days"),
-            min_value=0,
-            step=1,
-        )
-
-        _set_widget_value(_manage_key("s_hour"), float(template.get("steam_per_hour", 0.0)))
-        steam_per_hour = st.number_input(
-            "Steam per hour",
-            key=_manage_key("s_hour"),
-            step=0.1,
-            format="%.4f",
-        )
-        _set_widget_value(_manage_key("s_rate"), float(template.get("steam_rate", 0.0)))
-        steam_rate = st.number_input(
-            "Price per steam hour",
-            key=_manage_key("s_rate"),
-            step=0.001,
-            format="%.4f",
-        )
-        _set_widget_value(_manage_key("s_days"), int(float(template.get("steam_days", 0))))
-        steam_days = st.number_input(
-            "Steam operating days",
-            key=_manage_key("s_days"),
-            min_value=0,
-            step=1,
-        )
-        _set_widget_value(_manage_key("s_hours"), int(float(template.get("steam_hours", 0))))
-        steam_hours = st.number_input(
-            "Steam operating hours",
-            key=_manage_key("s_hours"),
-            min_value=0,
-            step=1,
-        )
-
-        submit_label = "Save Changes" if action == "Modify Year" else "Add Year"
-        submitted = st.form_submit_button(submit_label)
-
-    if submitted:
-        cleaned_label = (selected_label or "").strip()
-        if not cleaned_label:
-            st.warning("Year label is required to update the utility schedule.")
-        else:
-            parsed_year = _parse_year_value(
-                cleaned_label,
-                (target_index + 1) if target_index is not None else len(rows) + 1,
-            )
-            if parsed_year is None:
-                parsed_year = (max_existing_year or len(rows)) + 1
-                cleaned_label = str(parsed_year)
-            elif (
-                action == "Add Year"
-                and max_existing_year is not None
-                and parsed_year <= max_existing_year
-            ):
-                parsed_year = max_existing_year + 1
-                cleaned_label = str(parsed_year)
-
-            new_entry = {
-                "label": cleaned_label,
-                "year": parsed_year,
-                "electricity_per_day": float(electricity_per_day),
-                "electricity_rate": float(electricity_rate),
-                "electricity_days": int(electricity_days),
-                "water_per_day": float(water_per_day),
-                "water_rate": float(water_rate),
-                "water_days": int(water_days),
-                "steam_per_hour": float(steam_per_hour),
-                "steam_rate": float(steam_rate),
-                "steam_days": int(steam_days),
-                "steam_hours": int(steam_hours),
-            }
-
-            if action == "Modify Year" and target_index is not None:
-                updated_rows = list(rows)
-                updated_rows[target_index] = new_entry
-            else:
-                updated_rows = list(rows) + [new_entry]
-
-            st.session_state["utility_rows"] = updated_rows
-            _utility_rows_to_payload(updated_rows, payload)
-            _rerun()
-
-    if st.session_state.get("utility_rows"):
-        rows = st.session_state["utility_rows"]
-        label_map = [
-            str(row.get("label") or f"Year {index + 1}") for index, row in enumerate(rows)
-        ]
-
-    if rows:
-        removal_cols = st.columns([3, 1])
-        remove_index = removal_cols[0].selectbox(
-            "Select year to remove",
-            list(range(len(rows))),
-            format_func=lambda idx: label_map[idx],
-            key="utility_remove_selector",
-        )
-        if removal_cols[1].button("Remove Year", key="utility_remove_button"):
-            updated_rows = list(rows)
-            del updated_rows[remove_index]
-            if not updated_rows:
-                updated_rows = [_default_utility_row(0)]
-            st.session_state["utility_rows"] = updated_rows
-            _utility_rows_to_payload(updated_rows, payload)
-            _rerun()
-
-    _utility_rows_to_payload(st.session_state.get("utility_rows", rows), payload)
+    _utility_entries_to_payload(rows, payload)
 
 
 def _render_receivable_inputs(payload: dict) -> None:
@@ -4321,29 +4078,46 @@ def _extract_metric_pairs(summary) -> Sequence[Tuple[str, float]]:
     return []
 
 
-def _default_utility_row(index: int, label: str | None = None, year: int | None = None) -> dict:
-    label_value = label or (str(year) if year is not None else f"Year {index + 1}")
-    year_value = year if year is not None else _parse_year_value(label_value, index + 1)
-    return {
+
+UTILITY_EDITOR_COLUMNS = [
+    ("label", "Year", "text"),
+    ("electricity_per_day", "Electricity per day", "float"),
+    ("electricity_rate", "Price per kWh", "float"),
+    ("electricity_days", "Electricity operating days", "int"),
+    ("water_per_day", "Water per day", "float"),
+    ("water_rate", "Price per cubic meter", "float"),
+    ("water_days", "Water operating days", "int"),
+    ("steam_per_hour", "Steam per hour", "float"),
+    ("steam_rate", "Price per steam hour", "float"),
+    ("steam_days", "Steam operating days", "int"),
+    ("steam_hours", "Steam operating hours", "int"),
+]
+
+
+def _default_utility_entry(index: int, label: str | None = None) -> dict:
+    label_value = str(label) if label else f"Year {index + 1}"
+    year_value = _parse_year_value(label_value, index + 1)
+    entry = {
         "label": label_value,
         "year": year_value,
-        "electricity_per_day": 0.0,
-        "electricity_rate": 0.0,
-        "electricity_days": 0,
-        "water_per_day": 0.0,
-        "water_rate": 0.0,
-        "water_days": 0,
-        "steam_per_hour": 0.0,
-        "steam_rate": 0.0,
-        "steam_days": 0,
-        "steam_hours": 0,
+        "electricity_per_day": 1.0,
+        "electricity_rate": 1.0,
+        "electricity_days": 1,
+        "water_per_day": 1.0,
+        "water_rate": 1.0,
+        "water_days": 1,
+        "steam_per_hour": 1.0,
+        "steam_rate": 1.0,
+        "steam_days": 1,
+        "steam_hours": 1,
     }
+    return entry
 
 
-def _normalise_utility_row(
-    row: Mapping | None, index: int, label: str | None = None, year: int | None = None
+def _normalise_utility_entry(
+    row: Mapping | None, index: int, label: str | None = None
 ) -> dict:
-    data = _default_utility_row(index, label, year)
+    data = dict(_default_utility_entry(index, label))
     if not isinstance(row, Mapping):
         return data
 
@@ -4355,15 +4129,15 @@ def _normalise_utility_row(
     raw_year = row.get("year") if isinstance(row, Mapping) else None
     if raw_year is not None:
         try:
-            data["year"] = int(raw_year)
+            data["year"] = int(float(raw_year))
         except Exception:  # pragma: no cover - defensive parsing
-            data["year"] = _parse_year_value(data.get("label"), data.get("year", index + 1))
-    elif "label" in data:
-        data["year"] = _parse_year_value(data.get("label"), data.get("year", index + 1))
+            data["year"] = _parse_year_value(data.get("label"), index + 1)
+    else:
+        data["year"] = _parse_year_value(data.get("label"), index + 1)
 
     for field in UTILITY_FLOAT_FIELDS:
         value = row.get(field)
-        if value is None:
+        if value is None or value == "":
             continue
         try:
             data[field] = float(value)
@@ -4372,7 +4146,7 @@ def _normalise_utility_row(
 
     for field in UTILITY_INT_FIELDS:
         value = row.get(field)
-        if value is None:
+        if value is None or value == "":
             continue
         try:
             data[field] = int(float(value))
@@ -4384,231 +4158,124 @@ def _normalise_utility_row(
     return data
 
 
-def _payload_to_utility_rows(payload: Mapping) -> list[dict]:
+def _payload_to_utility_entries(payload: Mapping) -> list[dict]:
     utility = payload.get("utility_costs", {})
     rows: list[dict] = []
-
-    payload_years = payload.get("years") or []
-
     if isinstance(utility, Mapping):
         stored_rows = utility.get("years")
         if isinstance(stored_rows, Sequence):
-            for index, raw_row in enumerate(stored_rows):
-                year_value: int | None = None
-                label_override: str | None = None
-                if index < len(payload_years):
-                    try:
-                        year_value = int(payload_years[index])
-                    except Exception:  # pragma: no cover - defensive parsing
-                        year_value = _parse_year_value(payload_years[index], index + 1)
-                    label_override = str(year_value)
-                rows.append(
-                    _normalise_utility_row(
-                        raw_row,
-                        index,
-                        label=label_override,
-                        year=year_value,
-                    )
-                )
-
-    if rows:
-        return rows
-
-    years = payload_years
-    length = max(len(years), 1)
-    if isinstance(utility, Mapping):
-        days = list(utility.get("days", []))
-        hours = list(utility.get("hours", []))
-        length = max(length, len(days), len(hours), 1)
-
-        electricity_per_day = float(utility.get("electricity_per_day", 0.0))
-        water_per_day = float(utility.get("water_per_day", 0.0))
-        steam_per_hour = float(utility.get("steam_per_hour", 0.0))
-        electricity_rate = float(utility.get("electricity_rate", utility.get("price_per_kwh", 1.0)) or 0.0)
-        water_rate = float(utility.get("water_rate", utility.get("price_per_cubic_meter", 1.0)) or 0.0)
-        steam_rate = float(utility.get("steam_rate", utility.get("price_per_steam_hour", 1.0)) or 0.0)
-
-        for index in range(length):
-            label_value = years[index] if index < len(years) else None
-            year_value = None
-            if isinstance(label_value, (int, float)):
-                year_value = int(label_value)
-            row = _default_utility_row(
-                index,
-                str(label_value) if label_value is not None else None,
-                year_value,
-            )
-            row["electricity_per_day"] = electricity_per_day
-            row["electricity_rate"] = electricity_rate or 1.0
-            row["electricity_days"] = int(days[index]) if index < len(days) else 0
-            row["water_per_day"] = water_per_day
-            row["water_rate"] = water_rate or 1.0
-            row["water_days"] = int(days[index]) if index < len(days) else 0
-            row["steam_per_hour"] = steam_per_hour
-            row["steam_rate"] = steam_rate or 1.0
-            row["steam_days"] = 1 if steam_per_hour else 0
-            row["steam_hours"] = int(hours[index]) if index < len(hours) else 0
-            rows.append(_normalise_utility_row(row, index, year=year_value))
-
-    if not rows:
-        rows = [_default_utility_row(0)]
-
+            for index, item in enumerate(stored_rows):
+                rows.append(_normalise_utility_entry(item, index))
     return rows
 
 
-def _utility_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
-    utility_rows: list[dict] = []
-    for index, row in enumerate(rows):
-        utility_rows.append(_normalise_utility_row(row, index))
-
+def _utility_entries_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
     utility = payload.setdefault("utility_costs", {})
-    utility["years"] = utility_rows
+    normalised: list[dict] = []
+    for index, row in enumerate(rows):
+        normalised.append(_normalise_utility_entry(row, index))
+    if not normalised:
+        normalised = [_default_utility_entry(0)]
+    utility["years"] = normalised
     for legacy in ("electricity_per_day", "water_per_day", "steam_per_hour", "days", "hours"):
         utility.pop(legacy, None)
 
-    labels: list[str] = []
-    for index, row in enumerate(utility_rows):
-        label = str(row.get("label") or row.get("Year") or f"Year {index + 1}")
-        labels.append(label)
 
-    current_years = payload.get("years", [])
-    target_length = max(len(current_years), len(utility_rows))
-    if target_length:
-        _align_payload_horizon(payload, labels, target_length)
-
-
-def _calculate_depreciation_preview(rows: Sequence[Mapping]) -> list[dict]:
-    preview: list[dict] = [{} for _ in rows]
-    grouped: dict[str, list[tuple[int, Mapping]]] = {}
-
-    for index, row in enumerate(rows):
-        asset = str(row.get("asset_type", "") or "").strip()
-        key = asset or f"Asset {index + 1}"
-        grouped.setdefault(key, []).append((index, row))
-
-    for entries in grouped.values():
-        entries.sort(key=lambda item: (int(item[1].get("year", 0)), item[0]))
-        previous_net_book: float | None = None
-        previous_cumulative: float | None = None
-
-        for life_index, (position, row) in enumerate(entries):
-            override_net = bool(row.get("override_net_book"))
-            override_cum = bool(row.get("override_cumulative"))
-            opening_net_book = float(row.get("opening_net_book", 0.0) or 0.0)
-            opening_cumulative = float(row.get("opening_cumulative", 0.0) or 0.0)
-
-            if previous_net_book is None:
-                prior_net_book = opening_net_book if override_net else 0.0
-            elif override_net:
-                prior_net_book = opening_net_book
-            else:
-                prior_net_book = previous_net_book
-
-            if previous_cumulative is None:
-                prior_cumulative = opening_cumulative if override_cum else 0.0
-            elif override_cum:
-                prior_cumulative = opening_cumulative
-            else:
-                prior_cumulative = previous_cumulative
-
-            acquisition_amount = float(row.get("acquisition", 0.0) or 0.0)
-            depreciation_rate = float(row.get("depreciation_rate", 0.0) or 0.0)
-            asset_life = int(row.get("asset_life", 0) or 0)
-            method = str(row.get("method", "straight_line") or "straight_line").strip().lower()
-            if method not in {"straight_line", "reducing_balance"}:
-                method = "straight_line"
-
-            total_asset_cost = acquisition_amount + prior_net_book
-            allowable = max(total_asset_cost - prior_cumulative, 0.0)
-
-            if method == "straight_line" and asset_life > 0:
-                remaining = max(asset_life - life_index, 1)
-                total_depreciation = allowable / remaining if remaining else allowable
-            else:
-                if method == "reducing_balance":
-                    depreciation_base = prior_net_book + (acquisition_amount * 0.5)
-                else:
-                    depreciation_base = total_asset_cost
-                total_depreciation = depreciation_base * depreciation_rate
-                if asset_life > 0 and life_index >= asset_life - 1:
-                    total_depreciation = allowable
-                elif total_depreciation > allowable:
-                    total_depreciation = allowable
-
-            cumulative_depreciation = prior_cumulative + total_depreciation
-            net_book_value = max(total_asset_cost - cumulative_depreciation, 0.0)
-
-            preview[position] = {
-                "prior_net_book": prior_net_book,
-                "prior_cumulative": prior_cumulative,
-                "total_asset_cost": total_asset_cost,
-                "total_depreciation": total_depreciation,
-                "cumulative_depreciation": cumulative_depreciation,
-                "net_book_value": net_book_value,
-                "method": method,
-                "life_year_index": life_index,
-                "asset_life": asset_life,
-                "is_first": previous_net_book is None,
-            }
-
-            previous_net_book = net_book_value
-            previous_cumulative = cumulative_depreciation
-
-    return preview
+def _utility_entries_to_editor(rows: Sequence[Mapping]) -> list[dict]:
+    table: list[dict] = []
+    for entry in rows:
+        normalised = _normalise_utility_entry(entry, len(table))
+        record: dict[str, float | int | str] = {}
+        for field, label, _ in UTILITY_EDITOR_COLUMNS:
+            record[label] = normalised.get(field)
+        table.append(record)
+    return table
 
 
-def _legacy_depreciation_rows(payload: Mapping) -> list[dict]:
-    depreciation = payload.get("depreciation")
-    years = payload.get("years", [])
-    if not isinstance(depreciation, Mapping) or not years:
-        return []
-
-    rows: list[dict] = []
-    for asset, values in depreciation.items():
-        if not isinstance(values, Mapping):
+def _editor_rows_to_utility_entries(rows: Sequence[Mapping]) -> list[dict]:
+    entries: list[dict] = []
+    for index, row in enumerate(rows or []):
+        if not isinstance(row, Mapping):
             continue
-        base_value = float(values.get("value", 0.0) or 0.0)
-        life_value = values.get("life")
+        payload_row = {}
+        for field, label, _ in UTILITY_EDITOR_COLUMNS:
+            payload_row[field] = row.get(label)
+        entries.append(_normalise_utility_entry(payload_row, index))
+    if not entries:
+        entries = [_default_utility_entry(0)]
+    return entries
+
+
+def _utility_column_config():
+    config = {}
+    for field, label, kind in UTILITY_EDITOR_COLUMNS:
+        if kind == "text":
+            config[label] = st.column_config.TextColumn(label, required=True)
+        elif kind == "int":
+            config[label] = st.column_config.NumberColumn(label, min_value=0, step=1)
+        else:
+            config[label] = st.column_config.NumberColumn(label, min_value=0.0, format="%.4f")
+    return config
+
+
+def _extract_editor_rows(data) -> list[Mapping]:
+    if data is None:
+        return []
+    if hasattr(data, "to_dict"):
         try:
-            life = int(life_value) if life_value not in (None, "") else None
-        except (TypeError, ValueError):
-            life = None
+            return data.to_dict(orient="records")  # type: ignore[attr-defined]
+        except Exception:  # pragma: no cover - fallback when pandas not available
+            pass
+    if isinstance(data, list):
+        return [row for row in data if isinstance(row, Mapping)]
+    if isinstance(data, tuple):
+        return [row for row in data if isinstance(row, Mapping)]
+    return []
 
-        previous_net_book = 0.0
-        previous_cumulative = 0.0
 
-        for idx, year in enumerate(years):
-            acquisition = base_value if idx == 0 else 0.0
-
-            if life and life > 0 and idx < life:
-                annual = base_value / life
+def _next_utility_entry(rows: Sequence[Mapping], payload_years: Sequence | None) -> dict:
+    index = len(rows)
+    label_override: str | None = None
+    if isinstance(payload_years, Sequence) and index < len(payload_years):
+        candidate = payload_years[index]
+        if candidate is not None:
+            label_override = str(candidate)
+    elif rows:
+        last = rows[-1]
+        last_year = None
+        if isinstance(last, Mapping):
+            candidate = last.get("year")
+            if isinstance(candidate, (int, float)):
+                last_year = int(candidate)
             else:
-                annual = 0.0
+                last_year = _parse_year_value(last.get("label"), index)
+        if last_year is not None:
+            label_override = str(last_year + 1)
+    return _default_utility_entry(index, label_override)
 
-            total_asset_cost = acquisition + previous_net_book
-            rate = annual / total_asset_cost if total_asset_cost else 0.0
 
-            rows.append(
-                {
-                    "asset_type": str(asset),
-                    "year": int(year),
-                    "acquisition": acquisition,
-                    "depreciation_rate": rate,
-                    "opening_net_book": previous_net_book,
-                    "opening_cumulative": previous_cumulative,
-                    "override_net_book": idx == 0,
-                    "override_cumulative": idx == 0,
-                }
-            )
-
-            previous_cumulative += annual
-            net_book = total_asset_cost - previous_cumulative
-            if net_book < 0 and annual > 0:
-                net_book = 0.0
-                previous_cumulative = total_asset_cost
-            previous_net_book = net_book
-
+def _resize_utility_entries(
+    entries: Sequence[Mapping], target_length: int, labels: Sequence
+) -> list[dict]:
+    source = [_normalise_utility_entry(entry, idx) for idx, entry in enumerate(entries or [])]
+    rows: list[dict] = []
+    for index in range(target_length):
+        if index < len(source):
+            base = dict(source[index])
+        elif source:
+            base = dict(source[-1])
+        else:
+            base = _default_utility_entry(index)
+        if index < len(labels):
+            override = str(labels[index])
+            base["label"] = override
+            base["year"] = _parse_year_value(override, index + 1)
+        rows.append(_normalise_utility_entry(base, index))
+    if not rows:
+        rows = [_default_utility_entry(0)]
     return rows
+
+
 
 
 def _payload_to_depreciation_rows(payload: Mapping) -> list[dict]:
@@ -4719,7 +4386,7 @@ def _initialise_session_payload(payload: dict) -> None:
         "Role",
         "Annual Cost",
     )
-    st.session_state["utility_rows"] = _payload_to_utility_rows(payload)
+    st.session_state["utility_entries"] = _payload_to_utility_entries(payload)
     st.session_state["receivable_rows"] = _payload_to_receivable_rows(payload)
     st.session_state["break_even_rows"] = _payload_to_break_even_rows(payload)
     st.session_state["inventory_rows"] = _payload_to_inventory_rows(payload)
@@ -6062,32 +5729,11 @@ def _align_payload_horizon(
         production[name] = _resize_sequence(series, target_length)
 
     utility = payload.setdefault("utility_costs", {})
-    existing_rows = []
+    existing_rows: Sequence[Mapping] | list[dict] = []
     if isinstance(utility.get("years"), Sequence):
         existing_rows = list(utility.get("years", []))
 
-    resized_rows: list[dict] = []
-    for index in range(target_length):
-        if index < len(existing_rows):
-            source_row = existing_rows[index]
-        elif existing_rows:
-            source_row = existing_rows[-1]
-        else:
-            source_row = _default_utility_row(index)
-        label_override = labels[index] if index < len(labels) else None
-        year_override = None
-        if label_override is not None:
-            year_override = _parse_year_value(label_override, index + 1)
-        resized_rows.append(
-            _normalise_utility_row(
-                source_row,
-                index,
-                str(label_override) if label_override else None,
-                year_override,
-            )
-        )
-    if not resized_rows:
-        resized_rows = [_default_utility_row(0)]
+    resized_rows = _resize_utility_entries(existing_rows, target_length, labels)
     utility["years"] = resized_rows
     for legacy in ("electricity_per_day", "water_per_day", "steam_per_hour", "days", "hours"):
         utility.pop(legacy, None)
