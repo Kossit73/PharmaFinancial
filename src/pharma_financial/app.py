@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
 import math
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Callable, List, Optional, Tuple, cast
 
 import streamlit as st
 
@@ -554,47 +554,165 @@ def _resolve_inputs() -> tuple[ModelInputs, str]:
     commission_rows = st.session_state.setdefault(
         "commission_rows", _payload_to_commission_rows(payload)
     )
+    synced_commission = _sync_commission_rows_from_widgets(commission_rows)
+    if synced_commission != commission_rows:
+        st.session_state["commission_rows"] = synced_commission
+        commission_rows = synced_commission
     _commission_rows_to_payload(commission_rows, payload)
 
     utility_entries = st.session_state.setdefault(
         "utility_entries", _payload_to_utility_entries(payload)
     )
+    synced_utilities = _sync_utility_entries_from_widgets(utility_entries)
+    if synced_utilities != utility_entries:
+        st.session_state["utility_entries"] = synced_utilities
+        utility_entries = synced_utilities
     _utility_entries_to_payload(utility_entries, payload)
 
     receivable_rows = st.session_state.setdefault(
         "receivable_rows", _payload_to_receivable_rows(payload)
     )
+    synced_receivables = _sync_receivable_rows_from_widgets(receivable_rows, payload)
+    if synced_receivables != receivable_rows:
+        st.session_state["receivable_rows"] = synced_receivables
+        receivable_rows = synced_receivables
     _receivable_rows_to_payload(receivable_rows, payload)
 
     inventory_rows = st.session_state.setdefault(
         "inventory_rows", _payload_to_inventory_rows(payload)
     )
+    synced_inventory = _sync_inventory_rows_from_widgets(inventory_rows, payload)
+    if synced_inventory != inventory_rows:
+        st.session_state["inventory_rows"] = synced_inventory
+        inventory_rows = synced_inventory
     _inventory_rows_to_payload(inventory_rows, payload)
+
+    direct_rows = st.session_state.setdefault(
+        "direct_labor_rows",
+        _mapping_to_rows(payload.get("labor", {}).get("direct", {}), "Role", "Annual Cost"),
+    )
+    synced_direct = _sync_labor_rows_from_widgets("direct_labor_rows", direct_rows)
+    if synced_direct != direct_rows:
+        st.session_state["direct_labor_rows"] = synced_direct
+        direct_rows = synced_direct
+    _labor_rows_to_payload("direct", direct_rows, payload)
+
+    indirect_rows = st.session_state.setdefault(
+        "indirect_labor_rows",
+        _mapping_to_rows(payload.get("labor", {}).get("indirect", {}), "Role", "Annual Cost"),
+    )
+    synced_indirect = _sync_labor_rows_from_widgets("indirect_labor_rows", indirect_rows)
+    if synced_indirect != indirect_rows:
+        st.session_state["indirect_labor_rows"] = synced_indirect
+        indirect_rows = synced_indirect
+    _labor_rows_to_payload("indirect", indirect_rows, payload)
 
     cost_rows = st.session_state.setdefault(
         "fixed_variable_rows", _payload_to_fixed_variable_rows(payload)
     )
+    synced_costs = _sync_fixed_variable_rows_from_widgets(cost_rows)
+    if synced_costs != cost_rows:
+        st.session_state["fixed_variable_rows"] = synced_costs
+        cost_rows = synced_costs
     _fixed_variable_rows_to_payload(cost_rows, payload)
 
     break_even_rows = st.session_state.setdefault(
         "break_even_rows", _payload_to_break_even_rows(payload)
     )
+    synced_break_even = _sync_break_even_rows_from_widgets(break_even_rows)
+    if synced_break_even != break_even_rows:
+        st.session_state["break_even_rows"] = synced_break_even
+        break_even_rows = synced_break_even
     _break_even_rows_to_payload(break_even_rows, payload)
 
     depreciation_rows = st.session_state.setdefault(
         "depreciation_rows", _payload_to_depreciation_rows(payload)
     )
+    synced_depreciation = _sync_depreciation_rows_from_widgets(depreciation_rows, payload)
+    if synced_depreciation != depreciation_rows:
+        st.session_state["depreciation_rows"] = synced_depreciation
+        depreciation_rows = synced_depreciation
     _depreciation_rows_to_payload(depreciation_rows, payload)
 
     inflation_rows = st.session_state.setdefault(
         "inflation_rows", _payload_to_inflation_rows(payload)
     )
+    synced_inflation = _sync_inflation_rows_from_widgets(inflation_rows, payload)
+    if synced_inflation != inflation_rows:
+        st.session_state["inflation_rows"] = synced_inflation
+        inflation_rows = synced_inflation
     _inflation_rows_to_payload(inflation_rows, payload)
 
     risk_rows = st.session_state.setdefault(
         "risk_rows", _payload_to_risk_rows(payload)
     )
+    synced_risk = _sync_risk_rows_from_widgets(risk_rows, payload)
+    if synced_risk != risk_rows:
+        st.session_state["risk_rows"] = synced_risk
+        risk_rows = synced_risk
     _risk_rows_to_payload(risk_rows, payload)
+
+    sensitivity_rows = st.session_state.setdefault(
+        "sensitivity_rows", _payload_to_sensitivity_rows(payload)
+    )
+    synced_sensitivity = _sync_sensitivity_rows_from_widgets(sensitivity_rows)
+    if synced_sensitivity != sensitivity_rows:
+        st.session_state["sensitivity_rows"] = synced_sensitivity
+        sensitivity_rows = synced_sensitivity
+    _sensitivity_rows_to_payload(sensitivity_rows, payload)
+
+    senior_debt_rows = st.session_state.setdefault(
+        "senior_debt_rows", _payload_to_debt_rows(payload, "senior_debt")
+    )
+    synced_senior = _sync_debt_rows_from_widgets("senior_debt", senior_debt_rows)
+    if synced_senior != senior_debt_rows:
+        st.session_state["senior_debt_rows"] = synced_senior
+        senior_debt_rows = synced_senior
+    _debt_rows_to_payload(senior_debt_rows, payload, "senior_debt")
+
+    revolver_rows = st.session_state.setdefault(
+        "revolver_rows", _payload_to_debt_rows(payload, "revolver")
+    )
+    synced_revolver = _sync_debt_rows_from_widgets("revolver", revolver_rows)
+    if synced_revolver != revolver_rows:
+        st.session_state["revolver_rows"] = synced_revolver
+        revolver_rows = synced_revolver
+    _debt_rows_to_payload(revolver_rows, payload, "revolver")
+
+    overdraft_rows = st.session_state.setdefault(
+        "overdraft_rows", _payload_to_debt_rows(payload, "overdraft")
+    )
+    synced_overdraft = _sync_debt_rows_from_widgets("overdraft", overdraft_rows)
+    if synced_overdraft != overdraft_rows:
+        st.session_state["overdraft_rows"] = synced_overdraft
+        overdraft_rows = synced_overdraft
+    _debt_rows_to_payload(overdraft_rows, payload, "overdraft")
+
+    tax_rows = st.session_state.setdefault(
+        "tax_entries", _payload_to_tax_entries(payload)
+    )
+    synced_tax = _sync_tax_entries_from_widgets(tax_rows)
+    if synced_tax != tax_rows:
+        st.session_state["tax_entries"] = synced_tax
+        tax_rows = synced_tax
+    tax_payload = payload.setdefault("tax", {})
+    if isinstance(tax_payload, dict):
+        tax_payload["rate"] = float(
+            _get_widget_number(
+                "tax_base_rate", tax_payload.get("rate", 0.0), float
+            )
+        )
+        tax_payload["timing_adjustment"] = float(
+            _get_widget_number(
+                "tax_timing", tax_payload.get("timing_adjustment", 0.0), float
+            )
+        )
+    _tax_entries_to_payload(
+        tax_rows,
+        tax_payload,
+        payload.get("years", []),
+        float(tax_payload.get("rate", 0.0)),
+    )
 
     inputs, digest = _cached_parse_inputs(payload)
     st.session_state["input_fingerprint"] = digest
@@ -5644,6 +5762,529 @@ def _core_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
     else:
         payload.pop("production_capacity", None)
 
+
+def _get_widget_value(key: str, default: Any) -> Any:
+    if key in st.session_state:
+        return st.session_state[key]
+    return default
+
+
+def _get_widget_number(key: str, default: Any, cast: Callable[[Any], Any]) -> Any:
+    value = _get_widget_value(key, default)
+    try:
+        return cast(value)
+    except (TypeError, ValueError):
+        return cast(default)
+
+
+def _read_select_value(prefix: str, fallback: str | None = None) -> str:
+    selection = _get_widget_value(f"{prefix}_select", fallback or "")
+    if selection == "Add new…":
+        custom = _get_widget_value(f"{prefix}_custom", fallback or "")
+        return str(custom or "").strip()
+    return str(selection or fallback or "").strip()
+
+
+def _sync_commission_rows_from_widgets(rows: Sequence[Mapping]) -> list[dict]:
+    updated: list[dict] = []
+    visible = min(len(rows), MAX_VISIBLE_COMMISSION_ROWS)
+    for index, row in enumerate(rows):
+        current = dict(row)
+        if index < visible:
+            current["Year"] = int(
+                _get_widget_number(f"commission_year_{index}", current.get("Year", 0), int)
+            )
+            current["Product"] = _read_select_value(
+                f"commission_product_{index}", current.get("Product", "")
+            )
+            current["Commission (%)"] = float(
+                _get_widget_number(
+                    f"commission_rate_{index}", current.get("Commission (%)", 0.0), float
+                )
+            )
+            current["Revenue Share (%)"] = float(
+                _get_widget_number(
+                    f"commission_share_{index}", current.get("Revenue Share (%)", 100.0), float
+                )
+            )
+            current["Payment Days"] = int(
+                _get_widget_number(
+                    f"commission_payment_{index}", current.get("Payment Days", 30), int
+                )
+            )
+        updated.append(current)
+    return updated
+
+
+def _sync_utility_entries_from_widgets(entries: Sequence[Mapping]) -> list[dict]:
+    updated: list[dict] = []
+    for index, entry in enumerate(entries or []):
+        normalised = _normalise_utility_entry(entry, index)
+        label = _read_select_value(
+            f"utility_label_{index}", normalised.get("label", f"Year {index + 1}")
+        )
+        parsed_year = _parse_year_value(label, normalised.get("year", index + 1))
+        updated.append(
+            _normalise_utility_entry(
+                {
+                    "label": label,
+                    "year": parsed_year,
+                    "electricity_per_day": float(
+                        _get_widget_number(
+                            f"utility_elec_per_day_{index}",
+                            normalised.get("electricity_per_day", 0.0),
+                            float,
+                        )
+                    ),
+                    "electricity_rate": float(
+                        _get_widget_number(
+                            f"utility_elec_rate_{index}",
+                            normalised.get("electricity_rate", 0.0),
+                            float,
+                        )
+                    ),
+                    "electricity_days": int(
+                        _get_widget_number(
+                            f"utility_elec_days_{index}",
+                            normalised.get("electricity_days", 0),
+                            int,
+                        )
+                    ),
+                    "water_per_day": float(
+                        _get_widget_number(
+                            f"utility_water_per_day_{index}",
+                            normalised.get("water_per_day", 0.0),
+                            float,
+                        )
+                    ),
+                    "water_rate": float(
+                        _get_widget_number(
+                            f"utility_water_rate_{index}",
+                            normalised.get("water_rate", 0.0),
+                            float,
+                        )
+                    ),
+                    "water_days": int(
+                        _get_widget_number(
+                            f"utility_water_days_{index}",
+                            normalised.get("water_days", 0),
+                            int,
+                        )
+                    ),
+                    "steam_per_hour": float(
+                        _get_widget_number(
+                            f"utility_steam_per_hour_{index}",
+                            normalised.get("steam_per_hour", 0.0),
+                            float,
+                        )
+                    ),
+                    "steam_rate": float(
+                        _get_widget_number(
+                            f"utility_steam_rate_{index}",
+                            normalised.get("steam_rate", 0.0),
+                            float,
+                        )
+                    ),
+                    "steam_days": int(
+                        _get_widget_number(
+                            f"utility_steam_days_{index}",
+                            normalised.get("steam_days", 0),
+                            int,
+                        )
+                    ),
+                    "steam_hours": int(
+                        _get_widget_number(
+                            f"utility_steam_hours_{index}",
+                            normalised.get("steam_hours", 0),
+                            int,
+                        )
+                    ),
+                },
+                index,
+            )
+        )
+    return updated
+
+
+def _sync_receivable_rows_from_widgets(
+    rows: Sequence[Mapping], _payload: Mapping
+) -> list[dict]:
+    updated = [dict(row) for row in rows]
+    for slot in range(MAX_VISIBLE_RECEIVABLE_ROWS):
+        selector_key = f"receivable_row_selector_{slot}"
+        selected_index = st.session_state.get(selector_key)
+        if not isinstance(selected_index, int) or not (0 <= selected_index < len(updated)):
+            continue
+        current = dict(updated[selected_index])
+        label = _read_select_value(
+            f"receivable_label_{slot}_{selected_index}", current.get("label") or current.get("Year")
+        )
+        parsed_year = _parse_year_value(label, current.get("year") or current.get("Year") or slot + 1)
+        current.update(
+            {
+                "label": label,
+                "year": parsed_year,
+                "days_in_year": int(
+                    _get_widget_number(
+                        f"receivable_days_in_year_{slot}_{selected_index}",
+                        current.get("days_in_year", 365),
+                        int,
+                    )
+                ),
+                "accounts_receivable_days": int(
+                    _get_widget_number(
+                        f"receivable_accounts_receivable_days_{slot}_{selected_index}",
+                        current.get("accounts_receivable_days", 0),
+                        int,
+                    )
+                ),
+                "prepaid_expense_days": int(
+                    _get_widget_number(
+                        f"receivable_prepaid_days_{slot}_{selected_index}",
+                        current.get("prepaid_expense_days", 0),
+                        int,
+                    )
+                ),
+                "other_asset_days": int(
+                    _get_widget_number(
+                        f"receivable_other_asset_days_{slot}_{selected_index}",
+                        current.get("other_asset_days", 0),
+                        int,
+                    )
+                ),
+            }
+        )
+        updated[selected_index] = current
+    return updated
+
+
+def _sync_inventory_rows_from_widgets(
+    rows: Sequence[Mapping], _payload: Mapping
+) -> list[dict]:
+    updated = [dict(row) for row in rows]
+    for slot in range(MAX_VISIBLE_INVENTORY_ROWS):
+        selector_key = f"inventory_row_selector_{slot}"
+        selected_index = st.session_state.get(selector_key)
+        if not isinstance(selected_index, int) or not (0 <= selected_index < len(updated)):
+            continue
+        current = dict(updated[selected_index])
+        label = _read_select_value(
+            f"inventory_label_{slot}_{selected_index}", current.get("label") or current.get("Year")
+        )
+        parsed_year = _parse_year_value(label, current.get("year") or current.get("Year") or slot + 1)
+        current.update(
+            {
+                "label": label,
+                "year": parsed_year,
+                "days_in_year": int(
+                    _get_widget_number(
+                        f"inventory_days_in_year_{slot}_{selected_index}",
+                        current.get("days_in_year", 365),
+                        int,
+                    )
+                ),
+                "inventory_days": int(
+                    _get_widget_number(
+                        f"inventory_inventory_days_{slot}_{selected_index}",
+                        current.get("inventory_days", 0),
+                        int,
+                    )
+                ),
+                "accounts_payable_days": int(
+                    _get_widget_number(
+                        f"inventory_accounts_payable_days_{slot}_{selected_index}",
+                        current.get("accounts_payable_days", 0),
+                        int,
+                    )
+                ),
+            }
+        )
+        updated[selected_index] = current
+    return updated
+
+
+def _sync_labor_rows_from_widgets(state_key: str, rows: Sequence[Mapping]) -> list[dict]:
+    updated: list[dict] = []
+    for index, row in enumerate(rows):
+        updated.append(
+            {
+                "Role": str(
+                    _get_widget_value(f"{state_key}_role_{index}", row.get("Role", ""))
+                ).strip(),
+                "Annual Cost": float(
+                    _get_widget_number(
+                        f"{state_key}_cost_{index}", row.get("Annual Cost", 0.0), float
+                    )
+                ),
+            }
+        )
+    return updated
+
+
+def _labor_rows_to_payload(section: str, rows: Sequence[Mapping], payload: dict) -> None:
+    labor = payload.setdefault("labor", {})
+    if not isinstance(labor, dict):
+        labor = {}
+        payload["labor"] = labor
+    labor[section] = {
+        str(row.get("Role", "")).strip(): float(row.get("Annual Cost", 0.0) or 0.0)
+        for row in rows
+        if row.get("Role")
+    }
+
+
+def _sync_fixed_variable_rows_from_widgets(rows: Sequence[Mapping]) -> list[dict]:
+    updated: list[dict] = []
+    visible = min(len(rows), MAX_VISIBLE_COST_ROWS)
+    for index, row in enumerate(rows):
+        current = dict(row)
+        if index < visible:
+            current["Product"] = _read_select_value(
+                f"fixed_variable_product_{index}", current.get("Product", "")
+            )
+            current["Fixed Cost"] = float(
+                _get_widget_number(
+                    f"fixed_variable_fixed_{index}", current.get("Fixed Cost", 0.0), float
+                )
+            )
+            current["Variable Cost"] = float(
+                _get_widget_number(
+                    f"fixed_variable_variable_{index}", current.get("Variable Cost", 0.0), float
+                )
+            )
+        updated.append(current)
+    return updated
+
+
+def _sync_break_even_rows_from_widgets(rows: Sequence[Mapping]) -> list[dict]:
+    updated: list[dict] = []
+    for index, row in enumerate(rows):
+        current = dict(row)
+        current["Product"] = _read_select_value(
+            f"break_even_product_{index}", current.get("Product", "")
+        )
+        current["Selling Price"] = float(
+            _get_widget_number(
+                f"break_even_price_{index}", current.get("Selling Price", 0.0), float
+            )
+        )
+        current["Fixed Cost"] = float(
+            _get_widget_number(
+                f"break_even_fixed_{index}", current.get("Fixed Cost", 0.0), float
+            )
+        )
+        current["Variable Cost"] = float(
+            _get_widget_number(
+                f"break_even_variable_{index}", current.get("Variable Cost", 0.0), float
+            )
+        )
+        current["Target Profit"] = float(
+            _get_widget_number(
+                f"break_even_target_{index}", current.get("Target Profit", 0.0), float
+            )
+        )
+        current["Expected Volume"] = float(
+            _get_widget_number(
+                f"break_even_volume_{index}", current.get("Expected Volume", 0.0), float
+            )
+        )
+        updated.append(current)
+    return updated
+
+
+def _sync_depreciation_rows_from_widgets(
+    rows: Sequence[Mapping], payload: Mapping
+) -> list[dict]:
+    updated: list[dict] = []
+    years = payload.get("years", []) or []
+    for index, row in enumerate(rows):
+        current = dict(row)
+        current["asset_type"] = _read_select_value(
+            f"dep_asset_{index}", current.get("asset_type", "")
+        )
+        method_label = _get_widget_value(f"dep_method_{index}", None)
+        if isinstance(method_label, str):
+            current["method"] = DEPRECIATION_LABEL_TO_VALUE.get(
+                method_label, current.get("method", "straight_line")
+            )
+        current["year"] = int(
+            _get_widget_number(
+                f"dep_year_{index}", current.get("year", years[index] if index < len(years) else 0), int
+            )
+        )
+        current["acquisition"] = float(
+            _get_widget_number(f"dep_acq_{index}", current.get("acquisition", 0.0), float)
+        )
+        current["asset_life"] = int(
+            _get_widget_number(f"dep_life_{index}", current.get("asset_life", 0), int)
+        )
+        current["depreciation_rate"] = float(
+            _get_widget_number(f"dep_rate_{index}", current.get("depreciation_rate", 0.0), float)
+        )
+        current["opening_net_book"] = float(
+            _get_widget_number(
+                f"dep_open_nb_{index}", current.get("opening_net_book", 0.0), float
+            )
+        )
+        current["total_asset_cost"] = float(
+            _get_widget_number(
+                f"dep_total_cost_{index}", current.get("total_asset_cost", 0.0), float
+            )
+        )
+        current["total_depreciation"] = float(
+            _get_widget_number(
+                f"dep_total_dep_{index}", current.get("total_depreciation", 0.0), float
+            )
+        )
+        current["cumulative_depreciation"] = float(
+            _get_widget_number(
+                f"dep_cum_dep_{index}", current.get("cumulative_depreciation", 0.0), float
+            )
+        )
+        current["net_book_value"] = float(
+            _get_widget_number(
+                f"dep_net_book_{index}", current.get("net_book_value", 0.0), float
+            )
+        )
+        updated.append(current)
+    return updated
+
+
+def _sync_inflation_rows_from_widgets(
+    rows: Sequence[Mapping], payload: Mapping
+) -> list[dict]:
+    updated = [dict(row) for row in rows]
+    for slot in range(MAX_VISIBLE_INFLATION_ROWS):
+        selector_key = f"inflation_row_selector_{slot}"
+        selected_index = st.session_state.get(selector_key)
+        if not isinstance(selected_index, int) or not (0 <= selected_index < len(updated)):
+            continue
+        current = dict(updated[selected_index])
+        current["Year"] = _read_select_value(
+            f"inflation_label_{slot}_{selected_index}", current.get("Year")
+        )
+        current["Rate"] = float(
+            _get_widget_number(
+                f"inflation_rate_{slot}_{selected_index}", current.get("Rate", 0.0), float
+            )
+        )
+        updated[selected_index] = current
+    return updated
+
+
+def _sync_risk_rows_from_widgets(
+    rows: Sequence[Mapping], payload: Mapping
+) -> list[dict]:
+    updated = [dict(row) for row in rows]
+    categories = _risk_categories(payload, rows)
+    for slot in range(MAX_VISIBLE_RISK_ROWS):
+        selector_key = f"risk_row_selector_{slot}"
+        selected_index = st.session_state.get(selector_key)
+        if not isinstance(selected_index, int) or not (0 <= selected_index < len(updated)):
+            continue
+        current = {"Year": _read_select_value(
+            f"risk_label_{slot}_{selected_index}", updated[selected_index].get("Year")
+        )}
+        for category in categories:
+            current[category] = float(
+                _get_widget_number(
+                    f"risk_{category}_{slot}_{selected_index}",
+                    updated[selected_index].get(category, 0.0),
+                    float,
+                )
+            )
+        updated[selected_index] = current
+    return updated
+
+
+def _sync_sensitivity_rows_from_widgets(rows: Sequence[Mapping]) -> list[dict]:
+    updated: list[dict] = []
+    for index, row in enumerate(rows):
+        variable = str(_get_widget_value(f"sensitivity_var_{index}", row.get("Variable", ""))).strip()
+        values_text = _get_widget_value(
+            f"sensitivity_vals_{index}", _format_float_list(row.get("Values", []))
+        )
+        try:
+            values = _parse_float_list(values_text)
+        except ValueError:
+            values = row.get("Values", [])
+        updated.append({"Variable": variable, "Values": values})
+    return updated
+
+
+def _sync_debt_rows_from_widgets(debt_type: str, rows: Sequence[Mapping]) -> list[dict]:
+    session_key = {
+        "senior_debt": "senior_debt_rows",
+        "revolver": "revolver_rows",
+        "overdraft": "overdraft_rows",
+    }.get(debt_type, f"{debt_type}_rows")
+    updated: list[dict] = []
+    for index, row in enumerate(rows):
+        current = dict(row)
+        current["Year"] = int(
+            _get_widget_number(f"{session_key}_year_{index}", current.get("Year", 0), int)
+        )
+        current["Duration"] = int(
+            _get_widget_number(
+                f"{session_key}_duration_{index}", current.get("Duration", row.get("Duration", 1) or 1), int
+            )
+        )
+        current["Amount"] = float(
+            _get_widget_number(f"{session_key}_amount_{index}", current.get("Amount", 0.0), float)
+        )
+        outstanding_key = f"{session_key}_outstanding_{index}"
+        if outstanding_key in st.session_state:
+            current["Outstanding"] = float(
+                _get_widget_number(outstanding_key, current.get("Outstanding", current["Amount"]), float)
+            )
+        else:
+            current.setdefault("Outstanding", float(current.get("Amount", 0.0)))
+
+        interest_key = f"{session_key}_interest_{index}"
+        if interest_key in st.session_state:
+            current["Interest"] = float(
+                _get_widget_number(interest_key, current.get("Interest", 0.0), float)
+            )
+        else:
+            current.setdefault("Interest", float(current.get("Interest", 0.0)))
+        updated.append(current)
+    return updated
+
+
+def _payload_to_tax_entries(payload: Mapping) -> list[dict]:
+    tax = payload.get("tax", {}) if isinstance(payload, Mapping) else {}
+    years = payload.get("years", []) if isinstance(payload, Mapping) else []
+    if not isinstance(tax, Mapping):
+        tax = {}
+    base_rate = float(tax.get("rate", 0.0) or 0.0)
+    schedule = tax.get("schedule", []) if isinstance(tax.get("schedule"), Sequence) else []
+    return [
+        {
+            "label": str(year) if year is not None else f"Year {index + 1}",
+            "rate": float(schedule[index]) if index < len(schedule) else base_rate,
+        }
+        for index, year in enumerate(years or [])
+    ]
+
+
+def _sync_tax_entries_from_widgets(rows: Sequence[Mapping]) -> list[dict]:
+    updated: list[dict] = []
+    for index, row in enumerate(rows):
+        label = str(_get_widget_value(f"tax_year_label_{index}", row.get("label", ""))).strip()
+        if not label:
+            label = f"Year {index + 1}"
+        rate = float(_get_widget_number(f"tax_rate_value_{index}", row.get("rate", 0.0), float))
+        updated.append({"label": label, "rate": rate})
+    return updated
+
+
+def _sensitivity_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
+    variables = {
+        str(row.get("Variable", "")).strip(): list(row.get("Values", []))
+        for row in rows
+        if row.get("Variable") and row.get("Values")
+    }
+    payload.setdefault("sensitivity", {})["variables"] = variables
 
 def _payload_to_debt_rows(payload: Mapping, key: str) -> list[dict]:
     financing = payload.get("financing", {}) if isinstance(payload, Mapping) else {}
