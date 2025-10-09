@@ -4558,6 +4558,16 @@ def _utility_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
     for legacy in ("electricity_per_day", "water_per_day", "steam_per_hour", "days", "hours"):
         utility.pop(legacy, None)
 
+    labels: list[str] = []
+    for index, row in enumerate(utility_rows):
+        label = str(row.get("label") or row.get("Year") or f"Year {index + 1}")
+        labels.append(label)
+
+    current_years = payload.get("years", [])
+    target_length = max(len(current_years), len(utility_rows))
+    if target_length:
+        _align_payload_horizon(payload, labels, target_length)
+
 
 def _calculate_depreciation_preview(rows: Sequence[Mapping]) -> list[dict]:
     preview: list[dict] = [{} for _ in rows]
@@ -5014,7 +5024,10 @@ def _receivable_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
     days_mapping["other_assets"] = other_asset_days
     working["calendar_days"] = calendar_days
 
-    _align_payload_horizon(payload, labels, len(rows))
+    current_years = payload.get("years", [])
+    target_length = max(len(current_years), len(rows))
+    if target_length:
+        _align_payload_horizon(payload, labels, target_length)
 
     try:
         st.session_state["receivable_rows"] = _payload_to_receivable_rows(payload)
@@ -5379,7 +5392,10 @@ def _inventory_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
     days_mapping["accounts_payable"] = accounts_payable_days
     working["calendar_days"] = calendar_days
 
-    _align_payload_horizon(payload, labels, len(rows))
+    current_years = payload.get("years", [])
+    target_length = max(len(current_years), len(rows))
+    if target_length:
+        _align_payload_horizon(payload, labels, target_length)
 
     try:
         st.session_state["inventory_rows"] = _payload_to_inventory_rows(payload)
@@ -5786,7 +5802,10 @@ def _inflation_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
 
     payload["inflation_series"] = list(rates)
     payload["inflation_labels"] = labels
-    _align_payload_horizon(payload, labels, len(rates))
+    current_years = payload.get("years", [])
+    target_length = max(len(current_years), len(rates))
+    if target_length:
+        _align_payload_horizon(payload, labels, target_length)
 
 
 def _inflation_factors_from_payload(payload: Mapping) -> list[float]:
@@ -6064,7 +6083,10 @@ def _risk_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
             risk_payload[category].append(min(max(value, 0.0), 1.0))
 
     payload["risk"] = risk_payload
-    _align_payload_horizon(payload, labels, len(rows))
+    current_years = payload.get("years", [])
+    target_length = max(len(current_years), len(rows))
+    if target_length:
+        _align_payload_horizon(payload, labels, target_length)
 
     if "risk_rows" in st.session_state:
         st.session_state["risk_rows"] = _payload_to_risk_rows(payload)

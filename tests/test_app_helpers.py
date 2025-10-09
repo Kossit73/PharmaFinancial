@@ -175,6 +175,36 @@ class RerunHelperTest(unittest.TestCase):
         self.assertAlmostEqual(first["revenue_share"] * 100.0, rows[0]["Revenue Share (%)"], places=6)
         self.assertEqual(first["payment_days"], rows[0]["Payment Days"])
 
+    def test_utility_rows_extend_projection_horizon(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+        )
+        rows = self.app._payload_to_utility_rows(payload)
+        original_years = list(payload["years"])
+        new_year = original_years[-1] + 1
+
+        new_row = dict(rows[-1])
+        new_row["label"] = str(new_year)
+        new_row["year"] = new_year
+        rows.append(new_row)
+
+        self.app._utility_rows_to_payload(rows, payload)
+
+        self.assertEqual(len(payload["years"]), len(rows))
+        self.assertEqual(payload["years"][-1], new_year)
+
+    def test_receivable_rows_do_not_shrink_horizon(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+        )
+        original_years = list(payload["years"])
+        rows = self.app._payload_to_receivable_rows(payload)
+
+        trimmed = rows[:2]
+        self.app._receivable_rows_to_payload(trimmed, payload)
+
+        self.assertEqual(payload["years"], original_years)
+
     def test_cached_parse_and_model_run_reuse_digest(self):
         payload = json.loads(
             Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
