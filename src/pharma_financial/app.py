@@ -956,7 +956,6 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     st.markdown("### Fixed & Variable Costs Input Table")
     _render_fixed_variable_costs(payload)
 
-    st.markdown("### Utility Schedule")
     _render_utility_schedule(payload)
 
     st.markdown("### Accounts Receivable Input Table")
@@ -2009,7 +2008,7 @@ def _render_fixed_variable_costs(payload: dict) -> None:
 
 
 def _render_utility_schedule(payload: dict) -> None:
-    st.markdown("#### Utility Schedule")
+    st.markdown("### Utility Schedule")
     st.caption(
         "Update electricity, water, and steam assumptions for each projection year. "
         "Use the add button or the table controls to insert new years and edit the "
