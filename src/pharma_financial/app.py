@@ -2248,12 +2248,30 @@ def _render_utility_schedule(payload: dict) -> None:
     year_catalog = _build_year_catalog()
 
     last_row = rows[-1] if rows else _default_utility_row(len(rows))
+    existing_years = [
+        _parse_year_value(str(row.get("label", "")), index + 1)
+        if row.get("year") is None
+        else _parse_year_value(str(row.get("year")), index + 1)
+        for index, row in enumerate(rows)
+    ]
+    existing_years = [value for value in existing_years if value is not None]
+    max_existing_year = max(existing_years) if existing_years else None
     with st.form("add_utility_year"):
         st.markdown("#### Add Utility Year")
         if len(year_catalog) > len(rows):
             new_label_default = year_catalog[len(rows)]
         else:
-            new_label_default = last_row.get("label", f"Year {len(rows) + 1}")
+            candidate_year = last_row.get("year")
+            if not isinstance(candidate_year, (int, float)):
+                candidate_year = _parse_year_value(
+                    str(last_row.get("label")), len(rows) + 1
+                )
+            if isinstance(candidate_year, (int, float)):
+                new_label_default = str(int(candidate_year) + 1)
+            elif max_existing_year is not None:
+                new_label_default = str(max_existing_year + 1)
+            else:
+                new_label_default = f"Year {len(rows) + 1}"
 
         new_label = _select_or_create_option(
             st,
@@ -2342,6 +2360,18 @@ def _render_utility_schedule(payload: dict) -> None:
             st.warning("Year label is required to add a utility schedule entry.")
         else:
             parsed_year = _parse_year_value(cleaned_label, len(rows) + 1)
+            if parsed_year is None:
+                if max_existing_year is not None:
+                    parsed_year = max_existing_year + 1
+                    cleaned_label = str(parsed_year)
+                else:
+                    parsed_year = len(rows) + 1
+                    cleaned_label = f"Year {parsed_year}"
+            elif max_existing_year is not None and parsed_year <= max_existing_year:
+                parsed_year = max_existing_year + 1
+                cleaned_label = str(parsed_year)
+            if cleaned_label not in year_catalog:
+                year_catalog.append(cleaned_label)
             new_entry = {
                 "label": cleaned_label,
                 "year": parsed_year,
