@@ -216,11 +216,16 @@ class FinancialModel:
         raw_material_cost: List[float] = []
         for idx in range(len(self.years)):
             risk = _risk_for_index(idx)
+            try:
+                inflation = self._inflation[idx]
+            except IndexError:  # pragma: no cover - defensive guard
+                inflation = self._inflation[-1] if self._inflation else 1.0
+
             total = 0.0
             for product in self.products:
                 product_units = production[product][idx]
                 variable_cost = variable_lookup.get(product, 0.0)
-                total += product_units * variable_cost * risk
+                total += product_units * variable_cost * inflation * risk
             raw_material_cost.append(total)
 
         utility = self.inputs.utility_schedule
