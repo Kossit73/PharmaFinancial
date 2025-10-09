@@ -640,11 +640,48 @@ class FinancialModel:
     # -------------------------------------------------------------- schedules
     def _capex_series(self) -> List[float]:
         capex = [0.0 for _ in self.years]
-        capex[0] = self.inputs.capital_expenditure.get("initial", 0.0)
-        for year_str, value in self.inputs.capital_expenditure.get("annual_additions", {}).items():
-            year = int(year_str)
-            if year in self.years:
-                capex[self.years.index(year)] += float(value)
+        if not capex:
+            return capex
+
+        config = self.inputs.capital_expenditure or {}
+
+        first_year_total = 0.0
+        for key, value in config.items():
+            if key == "annual_additions":
+                continue
+            try:
+                first_year_total += float(value)
+            except (TypeError, ValueError):
+                continue
+        capex[0] += first_year_total
+
+        additions = config.get("annual_additions", {})
+        if isinstance(additions, Mapping):
+            for year_value, addition in additions.items():
+                try:
+                    year = int(year_value)
+                except (TypeError, ValueError):
+                    continue
+                if year not in self.years:
+                    continue
+                try:
+                    capex[self.years.index(year)] += float(addition)
+                except (TypeError, ValueError):
+                    continue
+
+        year_index = {year: idx for idx, year in enumerate(self.years)}
+        for row in self.inputs.depreciation_schedule:
+            try:
+                acquisition = float(row.acquisition or 0.0)
+            except (TypeError, ValueError):
+                acquisition = 0.0
+            if not acquisition:
+                continue
+            idx = year_index.get(row.year)
+            if idx is None:
+                continue
+            capex[idx] += acquisition
+
         return capex
 
     def _calendar_days(self) -> List[float]:

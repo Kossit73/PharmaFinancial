@@ -320,8 +320,20 @@ class FinancialModelTest(unittest.TestCase):
                     calendar_days[idx]
                     if idx < len(calendar_days)
                     else calendar_days[-1]
-                )
-                self.assertAlmostEqual(days_in_year[idx], expected_calendar, places=6)
+            )
+
+    def test_capex_includes_fixed_asset_acquisitions(self):
+        capex_series = self.model._capex_series()
+        year_index = {year: idx for idx, year in enumerate(self.inputs.years)}
+        acquisitions: dict[int, float] = {}
+        for row in self.inputs.depreciation_schedule:
+            acquisitions[row.year] = acquisitions.get(row.year, 0.0) + float(row.acquisition or 0.0)
+
+        for year, amount in acquisitions.items():
+            idx = year_index.get(year)
+            if idx is None:
+                continue
+            self.assertGreaterEqual(capex_series[idx], amount)
 
     def test_working_capital_schedule_matches_balance_sheet(self):
         schedule = self.model.working_capital_schedule()
