@@ -524,7 +524,7 @@ class FinancialModel:
                 + revolver_interest[idx]
                 + overdraft_interest[idx]
             )
-            interest.append(-total_interest)
+            interest.append(total_interest)
         return interest
 
     def _tax_schedule(self) -> List[float]:
@@ -1279,7 +1279,7 @@ class FinancialModel:
             ebit = [ea - depreciation[idx] for idx, ea in enumerate(ebitda)]
 
             interest_series = [
-                -((-interest[idx]) * interest_factor)
+                interest[idx] * interest_factor
                 for idx in range(len(interest))
             ] if "senior_debt" in variable_codes else list(interest)
 

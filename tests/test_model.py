@@ -230,7 +230,7 @@ class FinancialModelTest(unittest.TestCase):
             total = senior_interest[idx]
             total += revolver_interest[idx]
             total += overdraft_interest[idx]
-            manual.append(-total)
+            manual.append(total)
 
         self.assertEqual(len(interest_column), len(manual))
         for actual, expected in zip(interest_column, manual):
