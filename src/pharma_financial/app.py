@@ -2363,7 +2363,7 @@ def _render_utility_schedule(payload: dict) -> None:
 
             if new_rows:
                 newest_index = len(new_rows) - 1
-                st.session_state["utility_row_selector_0"] = newest_index
+                _set_widget_value("utility_row_selector_0", newest_index)
                 for slot in range(1, MAX_VISIBLE_UTILITY_ROWS):
                     st.session_state.pop(f"utility_row_selector_{slot}", None)
 
