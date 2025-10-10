@@ -22,7 +22,13 @@ else:  # pragma: no cover - used when Streamlit isn't fully available
 from .ai import AIInsights
 from .debt import amortise_entries
 from .inputs import DebtEntry, ModelInputs, parse_inputs
-from .model import FinancialModel, FinancialOutputs
+from .model import (
+    CASH_FLOW_BEGIN_COLUMN,
+    CASH_FLOW_END_COLUMN,
+    CASH_FLOW_NET_COLUMN,
+    FinancialModel,
+    FinancialOutputs,
+)
 from .report import (
     REPORT_FORMATS,
     ReportGenerationError,
@@ -4277,12 +4283,14 @@ def _render_goal_seek(payload: dict) -> None:
             "Return on Equity",
         ],
         "cash_flow": [
-            "Net Cash from Operating Activities",
-            "Net Cash from Investing Activities",
-            "Net Cash from Financing Activities",
-            "Net Change in Cash",
-            "Cash and Cash Equivalents at Beginning",
-            "Cash and Cash Equivalents at End",
+            "Cash Flow from Operations",
+            "Net Cash Generated from Operating Activities",
+            "Net Cash Used in Investing Activities",
+            "Net Cash Used in Financing Activities",
+            CASH_FLOW_NET_COLUMN,
+            CASH_FLOW_BEGIN_COLUMN,
+            CASH_FLOW_END_COLUMN,
+            "Net Increase/Decrease in Cash",
         ],
         "summary": ["NPV", "IRR", "Payback Period", "Discounted Payback"],
     }

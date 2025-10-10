@@ -192,7 +192,13 @@ class GenerativeAdvisor:
         net_revenue = income.column("Net Revenue")[-1] if "Net Revenue" in income.data else 0.0
         ebitda = income.column("EBITDA")[-1] if "EBITDA" in income.data else 0.0
 
-        cash_change = cash_flow.column("Net Change in Cash")[-1] if "Net Change in Cash" in cash_flow.data else 0.0
+        cash_change = 0.0
+        if "Net Change in Cash" in cash_flow.data:
+            cash_change = cash_flow.column("Net Change in Cash")[-1]
+        elif "Net Cash Flow for the Period" in cash_flow.data:
+            cash_change = cash_flow.column("Net Cash Flow for the Period")[-1]
+        elif "Net Increase/Decrease in Cash" in cash_flow.data:
+            cash_change = cash_flow.column("Net Increase/Decrease in Cash")[-1]
 
         forecast_lines: list[str] = []
         if ml_table is not None:
@@ -297,7 +303,12 @@ class GenerativeAdvisor:
         net_income_series = income.column("Net Income") if "Net Income" in income.data else []
         latest_income = net_income_series[-1] if net_income_series else 0.0
 
-        cash_series = cash_flow.column("Ending Cash") if "Ending Cash" in cash_flow.data else []
+        if "Ending Cash" in cash_flow.data:
+            cash_series = cash_flow.column("Ending Cash")
+        elif "Cash and Cash Equivalents at the End of the Period" in cash_flow.data:
+            cash_series = cash_flow.column("Cash and Cash Equivalents at the End of the Period")
+        else:
+            cash_series = []
         latest_cash = cash_series[-1] if cash_series else 0.0
 
         forecast_note = ""

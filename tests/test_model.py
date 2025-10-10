@@ -7,7 +7,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from pharma_financial.inputs import load_inputs, parse_inputs
-from pharma_financial.model import FinancialModel, npf_irr
+from pharma_financial.model import (
+    CASH_FLOW_END_COLUMN,
+    CASH_FLOW_NET_COLUMN,
+    FinancialModel,
+    npf_irr,
+)
 
 
 class FinancialModelTest(unittest.TestCase):
@@ -39,8 +44,8 @@ class FinancialModelTest(unittest.TestCase):
 
     def test_cash_flow_consistency(self):
         cash_flow = self.outputs.cash_flow
-        net_change = cash_flow.column("Net Change in Cash")
-        ending = cash_flow.column("Ending Cash")
+        net_change = cash_flow.column(CASH_FLOW_NET_COLUMN)
+        ending = cash_flow.column(CASH_FLOW_END_COLUMN)
         self.assertEqual(len(net_change), len(self.inputs.years))
         self.assertEqual(len(ending), len(self.inputs.years))
 

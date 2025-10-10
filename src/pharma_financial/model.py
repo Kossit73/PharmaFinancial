@@ -10,6 +10,11 @@ from .inputs import BreakEvenRow, DebtEntry, ModelInputs, ProductParameters
 from .table import Table, build_table
 
 
+CASH_FLOW_NET_COLUMN = "Net Cash Flow for the Period"
+CASH_FLOW_BEGIN_COLUMN = "Cash and Cash Equivalents at the Beginning of the Period"
+CASH_FLOW_END_COLUMN = "Cash and Cash Equivalents at the End of the Period"
+
+
 Number = float | int
 
 
@@ -669,34 +674,15 @@ class FinancialModel:
         ending_cash = [begin + change for begin, change in zip(beginning_cash, net_cash_flow)]
 
         columns: Dict[str, List[float]] = {
-            "Net Income": net_income,
-            "Tax Expense": tax_expense,
-            "Interest Expense": interest_expense,
-            "Operating Profit": operating_profit,
-            "Depreciation and Amortisation": depreciation_expense,
-            "Change in Inventory": inventory_adjustment,
-            "Change in Accounts Receivable": receivable_adjustment,
-            "Change in Accounts Payable": payable_adjustment,
-            "Change in Prepaid Expenses": prepaid_adjustment,
-            "Change in Other Assets": other_asset_adjustment,
-            "Change in Other Liabilities": other_liability_adjustment,
             "Cash Flow from Operations": cash_flow_from_operations,
-            "Dividends Paid": dividends_paid,
-            "Interest Paid": interest_paid,
-            "Taxes Paid": taxes_paid,
-            "Net Cash from Operating Activities": net_cash_from_operations,
-            "Capital Expenditures": capital_expenditure,
-            "Net Cash from Investing Activities": net_cash_from_investing,
+            "Net Cash Generated from Operating Activities": net_cash_from_operations,
+            "Net Cash Used in Investing Activities": net_cash_from_investing,
+            "Net Cash Used in Financing Activities": net_cash_from_financing,
+            CASH_FLOW_NET_COLUMN: net_cash_flow,
+            CASH_FLOW_BEGIN_COLUMN: beginning_cash,
+            CASH_FLOW_END_COLUMN: ending_cash,
+            "Net Increase/Decrease in Cash": net_cash_flow,
         }
-        columns.update(financing_components)
-        columns["Net Cash from Financing Activities"] = net_cash_from_financing
-        columns["Net Cash Flow for the Period"] = net_cash_flow
-        columns["Net Increase/(Decrease) in Cash"] = net_cash_flow
-        columns["Cash and Cash Equivalents at Beginning"] = beginning_cash
-        columns["Cash and Cash Equivalents at End"] = ending_cash
-        columns["Net Change in Cash"] = net_cash_flow
-        columns["Beginning Cash"] = beginning_cash
-        columns["Ending Cash"] = ending_cash
 
         return build_table(self.years, columns)
 
@@ -714,7 +700,7 @@ class FinancialModel:
         total_current_assets = [
             cash + ar + inv + pre + other
             for cash, ar, inv, pre, other in zip(
-                cash_flow.column("Ending Cash"),
+                cash_flow.column(CASH_FLOW_END_COLUMN),
                 working_capital.column("Accounts Receivable"),
                 working_capital.column("Inventory"),
                 working_capital.column("Prepaid Expenses"),
@@ -746,7 +732,7 @@ class FinancialModel:
         return build_table(
             self.years,
             {
-                "Cash": cash_flow.column("Ending Cash"),
+                "Cash": cash_flow.column(CASH_FLOW_END_COLUMN),
                 "Accounts Receivable": working_capital.column("Accounts Receivable"),
                 "Inventory": working_capital.column("Inventory"),
                 "Prepaid Expenses": working_capital.column("Prepaid Expenses"),
@@ -1458,7 +1444,7 @@ class FinancialModel:
         return build_table(range(1, iterations + 1), results, index_name="Iteration")
 
     def summary_metrics(self) -> Table:
-        cash_flow = self.cash_flow_statement().column("Net Change in Cash")
+        cash_flow = self.cash_flow_statement().column(CASH_FLOW_NET_COLUMN)
         discount_rate = self.inputs.financing.discount_rate
         discounted = [cf / (1 + discount_rate) ** (idx + 1) for idx, cf in enumerate(cash_flow)]
         npv_value = sum(discounted)
@@ -1643,13 +1629,13 @@ class FinancialModel:
         return float("nan")
 
     def payback_schedule(self) -> Table:
-        cash_flows = self.cash_flow_statement().column("Net Change in Cash")
+        cash_flows = self.cash_flow_statement().column(CASH_FLOW_NET_COLUMN)
         cumulative = _cumulative(cash_flows)
         return build_table(self.years, {"Cash Flow": cash_flows, "Cumulative": cumulative})
 
     def discounted_payback_schedule(self) -> Table:
         discount_rate = self.inputs.financing.discount_rate
-        cash_flows = self.cash_flow_statement().column("Net Change in Cash")
+        cash_flows = self.cash_flow_statement().column(CASH_FLOW_NET_COLUMN)
         discounted = [cf / (1 + discount_rate) ** (idx + 1) for idx, cf in enumerate(cash_flows)]
         cumulative = _cumulative(discounted)
         return build_table(self.years, {"Discounted Cash Flow": discounted, "Cumulative": cumulative})
