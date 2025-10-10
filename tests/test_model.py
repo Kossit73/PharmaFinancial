@@ -8,6 +8,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from pharma_financial.inputs import load_inputs, parse_inputs
 from pharma_financial.model import (
+    CASH_FLOW_BEGIN_COLUMN,
     CASH_FLOW_END_COLUMN,
     CASH_FLOW_NET_COLUMN,
     FinancialModel,
@@ -48,6 +49,124 @@ class FinancialModelTest(unittest.TestCase):
         ending = cash_flow.column(CASH_FLOW_END_COLUMN)
         self.assertEqual(len(net_change), len(self.inputs.years))
         self.assertEqual(len(ending), len(self.inputs.years))
+
+    def test_cash_flow_ifrs_relationships(self):
+        model = self.model
+        inputs = self.inputs
+
+        cash_flow = model.cash_flow_statement()
+        income = model.income_statement()
+        depreciation = model.depreciation_schedule()
+        working_capital = model._working_capital_balances()
+
+        def _difference(values):
+            result = []
+            previous = None
+            for value in values:
+                value = float(value)
+                if previous is None:
+                    result.append(value)
+                else:
+                    result.append(value - previous)
+                previous = value
+            return result
+
+        net_income = income.column("Net Income")
+        taxes = income.column("Taxes")
+        interest = income.column("Interest")
+
+        operating_profit = [
+            ni + tax + interest_value
+            for ni, tax, interest_value in zip(net_income, taxes, interest)
+        ]
+
+        inventory_change = _difference(working_capital.column("Inventory"))
+        receivable_change = _difference(working_capital.column("Accounts Receivable"))
+        payable_change = _difference(working_capital.column("Accounts Payable"))
+        prepaid_change = _difference(working_capital.column("Prepaid Expenses"))
+        other_asset_change = _difference(working_capital.column("Other Assets"))
+        other_liability_change = _difference(working_capital.column("Other Liabilities"))
+
+        expected_cfo = [
+            op
+            + dep
+            - inv
+            - ar
+            + ap
+            - pre
+            - other_asset
+            + other_liab
+            for op, dep, inv, ar, ap, pre, other_asset, other_liab in zip(
+                operating_profit,
+                depreciation,
+                inventory_change,
+                receivable_change,
+                payable_change,
+                prepaid_change,
+                other_asset_change,
+                other_liability_change,
+            )
+        ]
+
+        cfo_column = cash_flow.column("Cash Flow from Operations")
+        for actual, expected in zip(cfo_column, expected_cfo):
+            self.assertAlmostEqual(actual, expected, places=6)
+
+        payout = inputs.financing.dividend_payout
+        dividends_paid = [-ni * payout for ni in net_income]
+        interest_paid = [-value for value in interest]
+        taxes_paid = [-value for value in taxes]
+
+        expected_net_ops = [
+            cfo + div + interest_val + tax_val
+            for cfo, div, interest_val, tax_val in zip(
+                expected_cfo, dividends_paid, interest_paid, taxes_paid
+            )
+        ]
+        net_ops_column = cash_flow.column("Net Cash Generated from Operating Activities")
+        for actual, expected in zip(net_ops_column, expected_net_ops):
+            self.assertAlmostEqual(actual, expected, places=6)
+
+        capex = model._capex_series()
+        expected_investing = [-value for value in capex]
+        investing_column = cash_flow.column("Net Cash Used in Investing Activities")
+        for actual, expected in zip(investing_column, expected_investing):
+            self.assertAlmostEqual(actual, expected, places=6)
+
+        financing_components = model._financing_cash_flow_components()
+        expected_financing = [
+            sum(values)
+            for values in zip(*financing_components.values(), strict=False)
+        ]
+        financing_column = cash_flow.column("Net Cash Used in Financing Activities")
+        for actual, expected in zip(financing_column, expected_financing):
+            self.assertAlmostEqual(actual, expected, places=6)
+
+        net_flow_column = cash_flow.column(CASH_FLOW_NET_COLUMN)
+        for idx, (expected, op, inv, fin) in enumerate(
+            zip(net_flow_column, expected_net_ops, expected_investing, expected_financing)
+        ):
+            self.assertAlmostEqual(expected, op + inv + fin, places=6)
+
+        cumulative = []
+        running_total = 0.0
+        for value in net_flow_column:
+            running_total += float(value)
+            cumulative.append(running_total)
+
+        expected_beginning = [0.0] + cumulative[:-1]
+        beginning_column = cash_flow.column(CASH_FLOW_BEGIN_COLUMN)
+        self.assertEqual(len(beginning_column), len(expected_beginning))
+        for actual, expected in zip(beginning_column, expected_beginning):
+            self.assertAlmostEqual(actual, expected, places=6)
+
+        ending_column = cash_flow.column(CASH_FLOW_END_COLUMN)
+        for begin, change, ending in zip(beginning_column, net_flow_column, ending_column):
+            self.assertAlmostEqual(begin + change, ending, places=6)
+
+        net_increase_column = cash_flow.column("Net Increase/Decrease in Cash")
+        for actual, expected in zip(net_increase_column, net_flow_column):
+            self.assertAlmostEqual(actual, expected, places=6)
 
     def test_summary_metrics_index(self):
         summary = self.outputs.summary_metrics
