@@ -402,10 +402,6 @@ class FinancialModel:
         costs = self.cost_structure()
         depreciation = self.depreciation_schedule()
 
-        product_gross = {
-            f"Gross Revenue ({product})": revenue.column(product)
-            for product in self.products
-        }
         gross_revenue = revenue.column("Gross Revenue")
         distributors_commission = revenue.column("Distributors Commission")
         net_revenue = revenue.column("Net Revenue")
@@ -436,29 +432,25 @@ class FinancialModel:
         ebit_margin = [_safe_ratio(e, r) for e, r in zip(ebit, net_revenue)]
         roe = [_safe_ratio(n, self.inputs.financing.share_capital) for n in net_income]
 
-        columns: MutableMapping[str, List[float]] = {}
-        columns.update(product_gross)
-        columns.update(
-            {
-                "Gross Revenue": gross_revenue,
-                "Distributors Commission": distributors_commission,
-                "Net Revenue": net_revenue,
-                "Cost of Sales": cost_of_sales,
-                "Gross Profit": gross_profit,
-                "General & Admin": general_admin,
-                "EBITDA": ebitda,
-                "Total Depreciation Expense": depreciation,
-                "EBIT": ebit,
-                "Interest": interest,
-                "EBT": ebt,
-                "Taxes": taxes,
-                "Net Income": net_income,
-                "Gross Profit Margin": gross_profit_margin,
-                "EBITDA Margin": ebitda_margin,
-                "EBIT Margin": ebit_margin,
-                "Return on Equity": roe,
-            }
-        )
+        columns: MutableMapping[str, List[float]] = {
+            "Gross Revenue": gross_revenue,
+            "Distributors Commission": distributors_commission,
+            "Net Revenue": net_revenue,
+            "Cost of Sales": cost_of_sales,
+            "Gross Profit": gross_profit,
+            "General & Admin": general_admin,
+            "EBITDA": ebitda,
+            "Total Depreciation Expense": depreciation,
+            "EBIT": ebit,
+            "Interest": interest,
+            "EBT": ebt,
+            "Taxes": taxes,
+            "Net Income": net_income,
+            "Gross Profit Margin": gross_profit_margin,
+            "EBITDA Margin": ebitda_margin,
+            "EBIT Margin": ebit_margin,
+            "Return on Equity": roe,
+        }
 
         return build_table(self.years, columns)
 
