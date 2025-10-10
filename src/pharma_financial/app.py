@@ -714,7 +714,21 @@ def _resolve_inputs() -> tuple[ModelInputs, str]:
         float(tax_payload.get("rate", 0.0)),
     )
 
-    inputs, digest = _cached_parse_inputs(payload)
+    #
+    # Commit the latest widget-driven edits back into session state before
+    # parsing the model inputs.  Cloning the payload ensures we hold a stable
+    # copy that no longer aliases the temporary dictionaries used during the
+    # Streamlit render cycle.  Without this step the financial engine could
+    # observe a stale view of the assumptions whenever subsequent helpers
+    # mutated the shared dictionary in-place after caching had already
+    # occurred.  By persisting a deep copy we guarantee that parse_inputs and
+    # downstream consumers always receive the exact data visible in the input
+    # tables.
+    #
+    committed_payload = _clone_payload(payload)
+    st.session_state["input_payload"] = committed_payload
+
+    inputs, digest = _cached_parse_inputs(committed_payload)
     st.session_state["input_fingerprint"] = digest
     return inputs, digest
 
