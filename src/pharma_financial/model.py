@@ -163,6 +163,16 @@ class FinancialModel:
 
     # -------------------------------------------------------------- schedules
     def revenue_schedule(self) -> Table:
+        """Build the revenue schedule from total lifetime units.
+
+        Each product's ``Total Production Units`` figure from the core assumptions
+        is treated as the full-horizon volume.  The model multiplies those totals
+        by the configured selling prices and then scales the result for each year
+        using the cumulative inflation factor and combined risk factor.  This
+        ensures the gross revenue figures shown on the Statement of Financial
+        Performance reflect the exact core-assumption totals while still
+        incorporating the year-specific macro adjustments.
+        """
         prices = self._unit_prices()
         commission_params = self._commission_parameters()
         risk_factors = self._risk_factors()
