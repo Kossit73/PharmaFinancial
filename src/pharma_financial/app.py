@@ -998,21 +998,9 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
                 payload.get("years", []),
                 production_estimate,
             )
-            first_year_units = scaled_series[0] if scaled_series else 0.0
-            inflation_factor = inflation_factors[0] if inflation_factors else 1.0
-            risk_factor = risk_factors[0] if risk_factors else 1.0
-
-            total_revenue = (
-                first_year_units
-                * float(selling)
-                * inflation_factor
-                * risk_factor
-            )
-            total_cost = (
-                first_year_units
-                * (float(production) + float(freight) + float(markup))
-                * inflation_factor
-                * risk_factor
+            total_revenue = float(clamped_units) * float(selling)
+            total_cost = float(clamped_units) * (
+                float(production) + float(freight) + float(markup)
             )
 
             revenue_key = f"core_revenue_{index}"
