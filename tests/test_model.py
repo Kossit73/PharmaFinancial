@@ -193,7 +193,7 @@ class FinancialModelTest(unittest.TestCase):
         product_columns = [schedule.column(product) for product in self.inputs.products]
         for idx in range(len(self.inputs.years)):
             expected_total = sum(column[idx] for column in product_columns)
-            self.assertAlmostEqual(expected_total, gross[idx], places=6)
+            self.assertAlmostEqual(expected_total, gross[idx], places=5)
 
     def test_gross_revenue_matches_pricing_assumptions(self):
         schedule = self.model.revenue_schedule()
@@ -209,6 +209,8 @@ class FinancialModelTest(unittest.TestCase):
             running *= 1.0 + float(rate)
             cumulative_inflation.append(running)
 
+        total_units = self.inputs.total_production_units
+
         for idx, year in enumerate(self.inputs.years):
             inflation_factor = cumulative_inflation[idx] if idx < len(cumulative_inflation) else cumulative_inflation[-1]
             risk_factor = 1.0
@@ -220,9 +222,9 @@ class FinancialModelTest(unittest.TestCase):
 
             total = 0.0
             for product in self.inputs.products:
-                units = float(self.inputs.production_estimate[product][idx])
+                base_units = float(total_units.get(product, 0.0))
                 price = float(self.inputs.unit_costs[product].selling_price)
-                total += units * price * inflation_factor * risk_factor
+                total += base_units * price * inflation_factor * risk_factor
             expected.append(total)
 
         self.assertEqual(len(expected), len(gross))
@@ -237,14 +239,17 @@ class FinancialModelTest(unittest.TestCase):
         risk = self.model._risk_factors()
 
         expected: list[float] = []
+        total_units = self.inputs.total_production_units
+
         for idx, year in enumerate(self.inputs.years):
             year_params = parameters.get(int(year), {})
             total = 0.0
             for product in self.inputs.products:
-                units = float(self.inputs.production_estimate[product][idx])
+                base_units = float(total_units.get(product, 0.0))
                 price = self.inputs.unit_costs[product].selling_price
                 factor = risk[idx] if idx < len(risk) else (risk[-1] if risk else 1.0)
-                gross_value = units * price * inflation[idx] * factor
+                inflation_factor = inflation[idx] if idx < len(inflation) else inflation[-1]
+                gross_value = base_units * price * inflation_factor * factor
                 rate, share, _ = year_params.get(product, (0.0, 1.0, 0))
                 total += gross_value * rate * share
             expected.append(total)

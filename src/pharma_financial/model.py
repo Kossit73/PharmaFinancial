@@ -163,10 +163,16 @@ class FinancialModel:
 
     # -------------------------------------------------------------- schedules
     def revenue_schedule(self) -> Table:
-        production = self._production()
         prices = self._unit_prices()
         commission_params = self._commission_parameters()
         risk_factors = self._risk_factors()
+        total_units = self._total_units()
+
+        base_revenue: Dict[str, float] = {}
+        for product in self.products:
+            units = float(total_units.get(product, 0.0))
+            price = float(prices.get(product, 0.0))
+            base_revenue[product] = units * price
 
         gross_totals: List[float] = []
         commission: List[float] = []
@@ -180,10 +186,13 @@ class FinancialModel:
             risk = risk_factors[idx] if idx < len(risk_factors) else (
                 risk_factors[-1] if risk_factors else 1.0
             )
+            try:
+                inflation_factor = self._inflation[idx]
+            except IndexError:  # pragma: no cover - defensive guard
+                inflation_factor = self._inflation[-1] if self._inflation else 1.0
             year_rates = commission_params.get(int(year), {})
             for product in self.products:
-                units = production[product][idx]
-                gross_value = units * prices[product] * self._inflation[idx] * risk
+                gross_value = base_revenue.get(product, 0.0) * inflation_factor * risk
                 columns[product].append(gross_value)
                 gross_year += gross_value
                 rate, share, _ = year_rates.get(product, (0.0, 1.0, 0))
