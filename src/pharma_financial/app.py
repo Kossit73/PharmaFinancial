@@ -4277,12 +4277,12 @@ def _render_goal_seek(payload: dict) -> None:
             "Return on Equity",
         ],
         "cash_flow": [
-            "Operating Cash Flow",
-            "Investing Cash Flow",
-            "Financing Cash Flow",
+            "Net Cash from Operating Activities",
+            "Net Cash from Investing Activities",
+            "Net Cash from Financing Activities",
             "Net Change in Cash",
-            "Beginning Cash",
-            "Ending Cash",
+            "Cash and Cash Equivalents at Beginning",
+            "Cash and Cash Equivalents at End",
         ],
         "summary": ["NPV", "IRR", "Payback Period", "Discounted Payback"],
     }

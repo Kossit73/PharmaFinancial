@@ -577,22 +577,18 @@ class FinancialModel:
         working_capital_change = self._working_capital_changes()
 
         net_income = income.column("Net Income")
-        non_cash_expenses = list(depreciation)
-        operating_cash_flow = [
-            ni + non_cash - wc
-            for ni, non_cash, wc in zip(
+        depreciation_expense = list(depreciation)
+        net_cash_from_operations = [
+            ni + dep - wc
+            for ni, dep, wc in zip(
                 net_income,
-                non_cash_expenses,
+                depreciation_expense,
                 working_capital_change,
             )
         ]
 
         capex = self._capex_series()
-        investing_cash_flow = [-value for value in capex]
-        free_cash_flow = [
-            ocf - cap
-            for ocf, cap in zip(operating_cash_flow, capex)
-        ]
+        capital_expenditure = [-value for value in capex]
 
         financing_components = self._financing_cash_flow_components()
         financing_cash_flow = [
@@ -600,17 +596,13 @@ class FinancialModel:
             for values in zip(*financing_components.values(), strict=False)
         ]
 
-        activity_flows = [operating_cash_flow, investing_cash_flow, financing_cash_flow]
-        total_inflows = [
-            sum(max(value, 0.0) for value in values)
-            for values in zip(*activity_flows, strict=False)
-        ]
-        total_outflows = [
-            sum(-min(value, 0.0) for value in values)
-            for values in zip(*activity_flows, strict=False)
-        ]
         net_cash_flow = [
-            inflow - outflow for inflow, outflow in zip(total_inflows, total_outflows)
+            op + inv + fin
+            for op, inv, fin in zip(
+                net_cash_from_operations,
+                capital_expenditure,
+                financing_cash_flow,
+            )
         ]
 
         beginning_cash = _shift(_cumulative(net_cash_flow), fill_value=0.0)
@@ -618,26 +610,23 @@ class FinancialModel:
 
         columns: Dict[str, List[float]] = {
             "Net Income": net_income,
-            "Non-Cash Expenses": non_cash_expenses,
+            "Depreciation and Amortisation": depreciation_expense,
             "Change in Working Capital": working_capital_change,
-            "Operating Cash Flow": operating_cash_flow,
-            "Cash Flow from Operations (Indirect)": operating_cash_flow,
-            "Capital Expenditures": capex,
-            "Investing Cash Flow": investing_cash_flow,
-            "Free Cash Flow": free_cash_flow,
+            "Net Cash from Operating Activities": net_cash_from_operations,
+            "Capital Expenditures": capital_expenditure,
+            "Net Cash from Investing Activities": capital_expenditure,
         }
         columns.update(financing_components)
-        columns["Financing Cash Flow"] = financing_cash_flow
+        columns["Net Cash from Financing Activities"] = financing_cash_flow
         columns.update(
             {
-                "Total Cash Inflows": total_inflows,
-                "Total Cash Outflows": total_outflows,
-                "Net Cash Flow": net_cash_flow,
                 "Net Change in Cash": net_cash_flow,
-                "Beginning Cash": beginning_cash,
-                "Ending Cash": ending_cash,
+                "Cash and Cash Equivalents at Beginning": beginning_cash,
+                "Cash and Cash Equivalents at End": ending_cash,
             }
         )
+        columns["Beginning Cash"] = beginning_cash
+        columns["Ending Cash"] = ending_cash
 
         return build_table(self.years, columns)
 
