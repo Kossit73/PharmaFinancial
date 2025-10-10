@@ -140,6 +140,14 @@ class RerunHelperTest(unittest.TestCase):
         rows = self.app._payload_to_core_rows(payload)
         self.assertTrue(rows)
 
+        inflation = self.app._inflation_factors_from_payload(payload)
+        risk = self.app._risk_factors_from_payload(payload)
+        years = payload.get("years", [])
+        estimates = payload.get("production_estimate", {})
+
+        inflation_factor = inflation[0] if inflation else 1.0
+        risk_factor = risk[0] if risk else 1.0
+
         for row in rows:
             units = float(row["Total Production Units"])
             selling = float(row["Selling Price"])
@@ -148,10 +156,18 @@ class RerunHelperTest(unittest.TestCase):
             markup = float(row.get("Markup", 0.0))
             capacity = float(row.get("Max Capacity", 0.0))
 
-            self.assertAlmostEqual(row["Total Revenue"], units * selling, places=8)
-            self.assertAlmostEqual(
-                row["Total Cost"], units * (production + freight + markup), places=8
+            scaled = self.app._scaled_production_series(
+                str(row["Product"]), units, years, estimates
             )
+            first_year_units = scaled[0] if scaled else 0.0
+
+            expected_revenue = first_year_units * selling * inflation_factor * risk_factor
+            expected_cost = (
+                first_year_units * (production + freight + markup) * inflation_factor * risk_factor
+            )
+
+            self.assertAlmostEqual(row["Total Revenue"], expected_revenue, places=8)
+            self.assertAlmostEqual(row["Total Cost"], expected_cost, places=8)
             if capacity > 0:
                 self.assertLessEqual(units, capacity + 1e-9)
 

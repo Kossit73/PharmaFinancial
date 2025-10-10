@@ -898,6 +898,8 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     production_estimate = payload.get("production_estimate", {})
     total_unit_defaults = payload.get("total_production_units", {})
     capacity_defaults = payload.get("production_capacity", {})
+    inflation_factors = _inflation_factors_from_payload(payload)
+    risk_factors = _risk_factors_from_payload(payload)
 
     updated_rows: list[dict] = []
     for index, row in enumerate(rows):
@@ -990,9 +992,27 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
                 cols[5].error("Capacity exceeded")
                 clamped_units = max_capacity
 
-            total_revenue = clamped_units * float(selling)
-            total_cost = clamped_units * (
-                float(production) + float(freight) + float(markup)
+            scaled_series = _scaled_production_series(
+                description.strip(),
+                clamped_units,
+                payload.get("years", []),
+                production_estimate,
+            )
+            first_year_units = scaled_series[0] if scaled_series else 0.0
+            inflation_factor = inflation_factors[0] if inflation_factors else 1.0
+            risk_factor = risk_factors[0] if risk_factors else 1.0
+
+            total_revenue = (
+                first_year_units
+                * float(selling)
+                * inflation_factor
+                * risk_factor
+            )
+            total_cost = (
+                first_year_units
+                * (float(production) + float(freight) + float(markup))
+                * inflation_factor
+                * risk_factor
             )
 
             revenue_key = f"core_revenue_{index}"
@@ -5111,6 +5131,9 @@ def _payload_to_core_rows(payload: Mapping) -> list[dict]:
     totals = payload.get("total_production_units", {})
     capacities = payload.get("production_capacity", {})
     estimates = payload.get("production_estimate", {})
+    years = payload.get("years", [])
+    inflation_factors = _inflation_factors_from_payload(payload)
+    risk_factors = _risk_factors_from_payload(payload)
     rows: list[dict] = []
     for name, values in unit_costs.items():
         production_cost = float(values.get("production", 0.0))
@@ -5124,8 +5147,17 @@ def _payload_to_core_rows(payload: Mapping) -> list[dict]:
         max_capacity = float(capacities.get(name, 0.0))
         if max_capacity > 0.0 and total_units > max_capacity:
             total_units = max_capacity
-        total_revenue = total_units * selling_price
-        total_cost = total_units * (production_cost + freight_cost + markup_value)
+        scaled_series = _scaled_production_series(name, total_units, years, estimates)
+        first_year_units = scaled_series[0] if scaled_series else 0.0
+        inflation_factor = inflation_factors[0] if inflation_factors else 1.0
+        risk_factor = risk_factors[0] if risk_factors else 1.0
+        total_revenue = first_year_units * selling_price * inflation_factor * risk_factor
+        total_cost = (
+            first_year_units
+            * (production_cost + freight_cost + markup_value)
+            * inflation_factor
+            * risk_factor
+        )
         rows.append(
             {
                 "Product": str(name),
@@ -5797,28 +5829,7 @@ def _core_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
         total_units_map[name] = total_units
         capacity_map[name] = max_capacity
 
-        if isinstance(existing_estimate, Mapping) and name in existing_estimate:
-            series = [float(value) for value in existing_estimate[name]]
-        else:
-            series = [0.0 for _ in years]
-
-        target_length = len(years)
-        if target_length:
-            if len(series) < target_length:
-                series = series + [0.0] * (target_length - len(series))
-            elif len(series) > target_length:
-                series = series[:target_length]
-
-        current_total = sum(series)
-        if target_length == 0:
-            scaled = []
-        elif current_total > 0:
-            factor = total_units / current_total
-            scaled = [value * factor for value in series]
-        else:
-            per_year = total_units / target_length if target_length else 0.0
-            scaled = [per_year for _ in range(target_length)]
-
+        scaled = _scaled_production_series(name, total_units, years, existing_estimate)
         production_estimate[name] = scaled
 
     payload["unit_costs"] = unit_costs
@@ -6712,6 +6723,71 @@ def _inflation_factors_from_payload(payload: Mapping) -> list[float]:
             running *= 1.0 + rate
             factors.append(running)
     return factors
+
+
+def _risk_factors_from_payload(payload: Mapping) -> list[float]:
+    if not isinstance(payload, Mapping):
+        return []
+
+    schedule = payload.get("risk", {})
+    if not isinstance(schedule, Mapping):
+        schedule = {}
+
+    years = payload.get("years", [])
+    target_length = len(years)
+    if target_length == 0 and schedule:
+        target_length = max((len(values) for values in schedule.values()), default=0)
+
+    factors: list[float] = []
+    for index in range(target_length):
+        factor = 1.0
+        for values in schedule.values():
+            if not isinstance(values, Iterable) or isinstance(values, (str, bytes)):
+                continue
+            if not values:
+                continue
+            raw = values[index] if index < len(values) else values[-1]
+            try:
+                rate = float(raw)
+            except (TypeError, ValueError):
+                rate = 0.0
+            factor *= max(0.0, 1.0 - rate)
+        factors.append(factor)
+    return factors
+
+
+def _scaled_production_series(
+    product: str,
+    total_units: float,
+    years: Sequence[Any],
+    existing_estimate: Mapping[str, Sequence[Any]] | Sequence[Any] | None,
+) -> list[float]:
+    if isinstance(existing_estimate, Mapping) and product in existing_estimate:
+        series = [float(value) for value in existing_estimate.get(product, [])]
+    elif isinstance(existing_estimate, Sequence) and not isinstance(
+        existing_estimate, (str, bytes)
+    ):
+        # Legacy payloads may store a simple list when only one product exists.
+        series = [float(value) for value in existing_estimate]
+    else:
+        series = []
+
+    target_length = len(years)
+    if target_length == 0:
+        return []
+
+    if len(series) < target_length:
+        series = series + [0.0] * (target_length - len(series))
+    elif len(series) > target_length:
+        series = series[:target_length]
+
+    current_total = sum(series)
+    if current_total > 0:
+        factor = total_units / current_total if current_total else 0.0
+        return [value * factor for value in series]
+
+    per_year = total_units / target_length if target_length else 0.0
+    return [per_year for _ in range(target_length)]
 
 
 def _payload_to_fixed_variable_rows(payload: Mapping) -> list[dict]:
