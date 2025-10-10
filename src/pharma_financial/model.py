@@ -574,24 +574,83 @@ class FinancialModel:
     def cash_flow_statement(self) -> Table:
         income = self.income_statement()
         depreciation = self.depreciation_schedule()
-        working_capital_change = self._working_capital_changes()
+        working_balances = self._working_capital_balances()
 
         net_income = income.column("Net Income")
+        tax_expense = income.column("Taxes")
+        interest_expense = income.column("Interest")
         depreciation_expense = list(depreciation)
-        net_cash_from_operations = [
-            ni + dep - wc
-            for ni, dep, wc in zip(
+
+        operating_profit = [
+            ni + tax + interest
+            for ni, tax, interest in zip(
                 net_income,
+                tax_expense,
+                interest_expense,
+            )
+        ]
+
+        inventory_change = _difference(working_balances.column("Inventory"))
+        receivable_change = _difference(working_balances.column("Accounts Receivable"))
+        payable_change = _difference(working_balances.column("Accounts Payable"))
+        prepaid_change = _difference(working_balances.column("Prepaid Expenses"))
+        other_asset_change = _difference(working_balances.column("Other Assets"))
+        other_liability_change = _difference(working_balances.column("Other Liabilities"))
+
+        inventory_adjustment = [-value for value in inventory_change]
+        receivable_adjustment = [-value for value in receivable_change]
+        payable_adjustment = [value for value in payable_change]
+        prepaid_adjustment = [-value for value in prepaid_change]
+        other_asset_adjustment = [-value for value in other_asset_change]
+        other_liability_adjustment = [value for value in other_liability_change]
+
+        cash_flow_from_operations = [
+            op
+            + dep
+            + inv
+            + ar
+            + ap
+            + pre
+            + other_asset_adj
+            + other_liab
+            for op, dep, inv, ar, ap, pre, other_asset_adj, other_liab in zip(
+                operating_profit,
                 depreciation_expense,
-                working_capital_change,
+                inventory_adjustment,
+                receivable_adjustment,
+                payable_adjustment,
+                prepaid_adjustment,
+                other_asset_adjustment,
+                other_liability_adjustment,
+                strict=False,
+            )
+        ]
+
+        financing = self.inputs.financing
+        dividends_paid = [
+            -ni * financing.dividend_payout
+            for ni in net_income
+        ]
+        interest_paid = [-value for value in interest_expense]
+        taxes_paid = [-value for value in tax_expense]
+
+        net_cash_from_operations = [
+            cfo + div + interest + tax
+            for cfo, div, interest, tax in zip(
+                cash_flow_from_operations,
+                dividends_paid,
+                interest_paid,
+                taxes_paid,
+                strict=False,
             )
         ]
 
         capex = self._capex_series()
         capital_expenditure = [-value for value in capex]
+        net_cash_from_investing = list(capital_expenditure)
 
         financing_components = self._financing_cash_flow_components()
-        financing_cash_flow = [
+        net_cash_from_financing = [
             sum(values)
             for values in zip(*financing_components.values(), strict=False)
         ]
@@ -600,8 +659,9 @@ class FinancialModel:
             op + inv + fin
             for op, inv, fin in zip(
                 net_cash_from_operations,
-                capital_expenditure,
-                financing_cash_flow,
+                net_cash_from_investing,
+                net_cash_from_financing,
+                strict=False,
             )
         ]
 
@@ -610,21 +670,31 @@ class FinancialModel:
 
         columns: Dict[str, List[float]] = {
             "Net Income": net_income,
+            "Tax Expense": tax_expense,
+            "Interest Expense": interest_expense,
+            "Operating Profit": operating_profit,
             "Depreciation and Amortisation": depreciation_expense,
-            "Change in Working Capital": working_capital_change,
+            "Change in Inventory": inventory_adjustment,
+            "Change in Accounts Receivable": receivable_adjustment,
+            "Change in Accounts Payable": payable_adjustment,
+            "Change in Prepaid Expenses": prepaid_adjustment,
+            "Change in Other Assets": other_asset_adjustment,
+            "Change in Other Liabilities": other_liability_adjustment,
+            "Cash Flow from Operations": cash_flow_from_operations,
+            "Dividends Paid": dividends_paid,
+            "Interest Paid": interest_paid,
+            "Taxes Paid": taxes_paid,
             "Net Cash from Operating Activities": net_cash_from_operations,
             "Capital Expenditures": capital_expenditure,
-            "Net Cash from Investing Activities": capital_expenditure,
+            "Net Cash from Investing Activities": net_cash_from_investing,
         }
         columns.update(financing_components)
-        columns["Net Cash from Financing Activities"] = financing_cash_flow
-        columns.update(
-            {
-                "Net Change in Cash": net_cash_flow,
-                "Cash and Cash Equivalents at Beginning": beginning_cash,
-                "Cash and Cash Equivalents at End": ending_cash,
-            }
-        )
+        columns["Net Cash from Financing Activities"] = net_cash_from_financing
+        columns["Net Cash Flow for the Period"] = net_cash_flow
+        columns["Net Increase/(Decrease) in Cash"] = net_cash_flow
+        columns["Cash and Cash Equivalents at Beginning"] = beginning_cash
+        columns["Cash and Cash Equivalents at End"] = ending_cash
+        columns["Net Change in Cash"] = net_cash_flow
         columns["Beginning Cash"] = beginning_cash
         columns["Ending Cash"] = ending_cash
 
@@ -908,9 +978,6 @@ class FinancialModel:
 
     def _financing_cash_flow_components(self) -> Dict[str, List[float]]:
         financing = self.inputs.financing
-        net_income = self.income_statement().column("Net Income")
-        dividends = [ni * financing.dividend_payout for ni in net_income]
-
         _, senior_outstanding = self._senior_debt_schedules()
         senior_changes = _difference(senior_outstanding)
         _, revolver_outstanding = self._revolver_schedules()
@@ -935,7 +1002,6 @@ class FinancialModel:
             "Debt Drawdown/(Repayment)": debt_movements,
             "Share Capital Raised": share_issuance,
             "Initial Investment": initial_investment,
-            "Dividends Paid": [-value for value in dividends],
         }
 
     def _equity_schedule(self, cash_flow: Table, income: Table) -> List[float]:
