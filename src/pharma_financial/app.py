@@ -4005,97 +4005,72 @@ def _render_tax_schedule(payload: dict) -> None:
 def _render_inflation_schedule(payload: dict) -> None:
     rows: list[dict] = st.session_state.get("inflation_rows", [])
     payload_years = payload.get("years", [])
-    updated_rows: list[dict] = list(rows)
 
     if not rows:
         st.info("No inflation assumptions configured. Use the form below to add entries.")
 
-    def _build_year_catalog() -> list[str]:
+    def _build_year_catalog(current_rows: Sequence[Mapping]) -> list[str]:
         base_years = [str(year) for year in payload_years if year is not None]
         existing = [
-            str(row.get("Year", "")).strip() for row in updated_rows if row.get("Year")
+            str(row.get("Year", "")).strip() for row in current_rows if row.get("Year")
         ]
         catalog = list(dict.fromkeys([*base_years, *existing]))
         if not catalog:
-            max_length = max(len(updated_rows), len(payload_years), 1)
+            max_length = max(len(current_rows), len(payload_years), 1)
             catalog = [f"Year {index + 1}" for index in range(max_length)]
         return catalog
 
-    visible_count = min(len(updated_rows), MAX_VISIBLE_INFLATION_ROWS)
+    updated_rows: list[dict] = []
+    removal_index: int | None = None
+    year_catalog = _build_year_catalog(rows)
 
-    if visible_count and len(updated_rows) > MAX_VISIBLE_INFLATION_ROWS:
-        st.caption(
-            "Select which inflation year to edit using the dropdowns below. Additional "
-            "years remain part of the model and can be chosen from the selectors."
+    for index, row in enumerate(rows):
+        cols = st.columns([2.0, 1.2, 0.7])
+        current_label = str(
+            row.get("Year")
+            or (year_catalog[index] if index < len(year_catalog) else f"Year {index + 1}")
+        )
+        selected_label = _select_or_create_option(
+            cols[0],
+            "Year",
+            year_catalog,
+            f"inflation_label_{index}",
+            current_value=current_label,
+        )
+        if selected_label and selected_label not in year_catalog:
+            year_catalog.append(selected_label)
+
+        label = (selected_label or current_label).strip() or f"Year {index + 1}"
+        rate_value = cols[1].number_input(
+            "Rate",
+            value=float(row.get("Rate", 0.0)),
+            min_value=0.0,
+            step=0.001,
+            format="%.4f",
+            key=f"inflation_rate_{index}",
         )
 
-    for slot in range(visible_count):
-        if not updated_rows:
-            break
+        remove_clicked = cols[2].button(
+            "Remove", key=f"inflation_remove_{index}", help="Delete this inflation row"
+        )
 
-        option_indices = list(range(len(updated_rows)))
-        default_index = min(slot, len(option_indices) - 1)
+        if remove_clicked and len(rows) > 0:
+            removal_index = index
+            continue
 
-        container = st.container()
-        with container:
-            selected_index = container.selectbox(
-                "Inflation year",
-                option_indices,
-                index=option_indices.index(default_index),
-                format_func=lambda idx: str(
-                    updated_rows[idx].get("Year") or f"Year {idx + 1}"
-                ),
-                key=f"inflation_row_selector_{slot}",
-            )
+        updated_rows.append({"Year": label, "Rate": float(rate_value)})
 
-            row = updated_rows[selected_index]
-            year_catalog = _build_year_catalog()
-
-            cols = st.columns([2.0, 1.2, 0.7])
-            current_label = str(
-                row.get("Year")
-                or (
-                    year_catalog[selected_index]
-                    if selected_index < len(year_catalog)
-                    else f"Year {selected_index + 1}"
-                )
-            )
-            selected_label = _select_or_create_option(
-                cols[0],
-                "Year",
-                year_catalog,
-                f"inflation_label_{slot}_{selected_index}",
-                current_value=current_label,
-            )
-            if selected_label and selected_label not in year_catalog:
-                year_catalog.append(selected_label)
-
-            label = (selected_label or current_label).strip()
-            if not label:
-                label = f"Year {selected_index + 1}"
-
-            rate_value = cols[1].number_input(
-                "Rate",
-                value=float(row.get("Rate", 0.0)),
-                min_value=0.0,
-                step=0.001,
-                format="%.4f",
-                key=f"inflation_rate_{slot}_{selected_index}",
-            )
-
-            if cols[2].button("Remove", key=f"inflation_remove_{slot}_{selected_index}"):
-                del updated_rows[selected_index]
-                st.session_state["inflation_rows"] = updated_rows
-                _rerun()
-                continue
-
-            updated_rows[selected_index] = {"Year": label, "Rate": float(rate_value)}
+    if removal_index is not None:
+        del rows[removal_index]
+        st.session_state["inflation_rows"] = rows
+        _rerun()
+        return
 
     if updated_rows != rows:
         st.session_state["inflation_rows"] = updated_rows
         rows = updated_rows
 
-    year_catalog = _build_year_catalog()
+    year_catalog = _build_year_catalog(rows)
     reference = rows[-1] if rows else {"Year": year_catalog[0] if year_catalog else "Year 1"}
 
     st.markdown("#### Add inflation entry")
@@ -4149,101 +4124,74 @@ def _render_risk_schedule(payload: dict) -> None:
     if not rows:
         st.info("No risk assumptions configured. Use the form below to add entries.")
 
-    updated_rows: list[dict] = list(rows)
-
-    def _build_year_catalog() -> list[str]:
+    def _build_year_catalog(current_rows: Sequence[Mapping]) -> list[str]:
         payload_years = payload.get("years") or []
         base_years = [str(year) for year in payload_years if year is not None]
         existing = [
-            str(row.get("Year", "")).strip() for row in updated_rows if row.get("Year")
+            str(row.get("Year", "")).strip() for row in current_rows if row.get("Year")
         ]
         catalog = list(dict.fromkeys([*base_years, *existing]))
         if not catalog:
-            max_length = max(len(updated_rows), len(payload_years), 1)
+            max_length = max(len(current_rows), len(payload_years), 1)
             catalog = [f"Year {index + 1}" for index in range(max_length)]
         return catalog
 
-    visible_count = min(len(updated_rows), MAX_VISIBLE_RISK_ROWS)
+    updated_rows: list[dict] = []
+    removal_index: int | None = None
+    year_catalog = _build_year_catalog(rows)
 
-    if visible_count and len(updated_rows) > MAX_VISIBLE_RISK_ROWS:
-        st.caption(
-            "Select which risk year to edit using the dropdowns below. Additional years "
-            "remain part of the model and can be chosen from the selectors."
+    for index, row in enumerate(rows):
+        column_widths = [2.0] + [1.0 for _ in categories] + [0.7]
+        cols = st.columns(column_widths)
+
+        current_label = str(
+            row.get("Year")
+            or (year_catalog[index] if index < len(year_catalog) else f"Year {index + 1}")
+        )
+        selected_label = _select_or_create_option(
+            cols[0],
+            "Year",
+            year_catalog,
+            f"risk_label_{index}",
+            current_value=current_label,
+        )
+        if selected_label and selected_label not in year_catalog:
+            year_catalog.append(selected_label)
+
+        label = (selected_label or current_label).strip() or f"Year {index + 1}"
+        cleaned_row = {"Year": label}
+        for position, category in enumerate(categories, start=1):
+            cleaned_row[category] = cols[position].number_input(
+                f"{category.title()} Risk",
+                value=float(row.get(category, 0.0)),
+                min_value=0.0,
+                max_value=1.0,
+                step=0.01,
+                format="%.4f",
+                key=f"risk_{category}_{index}",
+            )
+
+        remove_clicked = cols[-1].button(
+            "Remove", key=f"risk_remove_{index}", help="Delete this risk row"
         )
 
-    for slot in range(visible_count):
-        if not updated_rows:
-            break
+        if remove_clicked and len(rows) > 0:
+            removal_index = index
+            continue
 
-        option_indices = list(range(len(updated_rows)))
-        default_index = min(slot, len(option_indices) - 1)
+        updated_rows.append(cleaned_row)
 
-        container = st.container()
-        with container:
-            selected_index = container.selectbox(
-                "Risk year",
-                option_indices,
-                index=option_indices.index(default_index),
-                format_func=lambda idx: str(
-                    updated_rows[idx].get("Year") or f"Year {idx + 1}"
-                ),
-                key=f"risk_row_selector_{slot}",
-            )
-
-            row = updated_rows[selected_index]
-            year_catalog = _build_year_catalog()
-
-            column_widths = [2.0] + [1.0 for _ in categories] + [0.7]
-            cols = st.columns(column_widths)
-
-            current_label = str(
-                row.get("Year")
-                or (
-                    year_catalog[selected_index]
-                    if selected_index < len(year_catalog)
-                    else f"Year {selected_index + 1}"
-                )
-            )
-            selected_label = _select_or_create_option(
-                cols[0],
-                "Year",
-                year_catalog,
-                f"risk_label_{slot}_{selected_index}",
-                current_value=current_label,
-            )
-            if selected_label and selected_label not in year_catalog:
-                year_catalog.append(selected_label)
-
-            label = (selected_label or current_label).strip()
-            if not label:
-                label = f"Year {selected_index + 1}"
-
-            cleaned_row = {"Year": label}
-            for position, category in enumerate(categories, start=1):
-                value = float(row.get(category, 0.0))
-                cleaned_row[category] = cols[position].number_input(
-                    f"{category.title()} Risk",
-                    value=value,
-                    min_value=0.0,
-                    max_value=1.0,
-                    step=0.01,
-                    format="%.4f",
-                    key=f"risk_{category}_{slot}_{selected_index}",
-                )
-
-            if cols[-1].button("Remove", key=f"risk_remove_{slot}_{selected_index}"):
-                del updated_rows[selected_index]
-                st.session_state["risk_rows"] = updated_rows
-                _rerun()
-                continue
-
-            updated_rows[selected_index] = cleaned_row
+    if removal_index is not None:
+        del rows[removal_index]
+        st.session_state["risk_rows"] = rows
+        _rerun()
+        return
 
     if updated_rows != rows:
         st.session_state["risk_rows"] = updated_rows
         rows = updated_rows
 
-    year_catalog = _build_year_catalog()
+    year_catalog = _build_year_catalog(rows)
     reference = rows[-1] if rows else {"Year": year_catalog[0] if year_catalog else "Year 1"}
 
     with st.form("add_risk_row"):
@@ -6224,47 +6172,37 @@ def _sync_depreciation_rows_from_widgets(
 def _sync_inflation_rows_from_widgets(
     rows: Sequence[Mapping], payload: Mapping
 ) -> list[dict]:
-    updated = [dict(row) for row in rows]
-    for slot in range(MAX_VISIBLE_INFLATION_ROWS):
-        selector_key = f"inflation_row_selector_{slot}"
-        selected_index = st.session_state.get(selector_key)
-        if not isinstance(selected_index, int) or not (0 <= selected_index < len(updated)):
-            continue
-        current = dict(updated[selected_index])
+    updated: list[dict] = []
+    for index, row in enumerate(rows):
+        current = dict(row)
         current["Year"] = _read_select_value(
-            f"inflation_label_{slot}_{selected_index}", current.get("Year")
+            f"inflation_label_{index}", current.get("Year")
         )
         current["Rate"] = float(
             _get_widget_number(
-                f"inflation_rate_{slot}_{selected_index}", current.get("Rate", 0.0), float
+                f"inflation_rate_{index}", current.get("Rate", 0.0), float
             )
         )
-        updated[selected_index] = current
+        updated.append(current)
     return updated
 
 
 def _sync_risk_rows_from_widgets(
     rows: Sequence[Mapping], payload: Mapping
 ) -> list[dict]:
-    updated = [dict(row) for row in rows]
+    updated: list[dict] = []
     categories = _risk_categories(payload, rows)
-    for slot in range(MAX_VISIBLE_RISK_ROWS):
-        selector_key = f"risk_row_selector_{slot}"
-        selected_index = st.session_state.get(selector_key)
-        if not isinstance(selected_index, int) or not (0 <= selected_index < len(updated)):
-            continue
+    for index, row in enumerate(rows):
         current = {"Year": _read_select_value(
-            f"risk_label_{slot}_{selected_index}", updated[selected_index].get("Year")
+            f"risk_label_{index}", row.get("Year")
         )}
         for category in categories:
             current[category] = float(
                 _get_widget_number(
-                    f"risk_{category}_{slot}_{selected_index}",
-                    updated[selected_index].get(category, 0.0),
-                    float,
+                    f"risk_{category}_{index}", row.get(category, 0.0), float
                 )
             )
-        updated[selected_index] = current
+        updated.append(current)
     return updated
 
 
