@@ -575,17 +575,24 @@ class FinancialModel:
         income = self.income_statement()
         depreciation = self.depreciation_schedule()
         working_capital_change = self._working_capital_changes()
+
+        net_income = income.column("Net Income")
+        non_cash_expenses = list(depreciation)
         operating_cash_flow = [
-            ni + dep - wc
-            for ni, dep, wc in zip(
-                income.column("Net Income"),
-                depreciation,
+            ni + non_cash - wc
+            for ni, non_cash, wc in zip(
+                net_income,
+                non_cash_expenses,
                 working_capital_change,
             )
         ]
 
         capex = self._capex_series()
         investing_cash_flow = [-value for value in capex]
+        free_cash_flow = [
+            ocf - cap
+            for ocf, cap in zip(operating_cash_flow, capex)
+        ]
 
         financing_components = self._financing_cash_flow_components()
         financing_cash_flow = [
@@ -593,26 +600,40 @@ class FinancialModel:
             for values in zip(*financing_components.values(), strict=False)
         ]
 
-        cash_change = [
-            op + inv + fin
-            for op, inv, fin in zip(
-                operating_cash_flow,
-                investing_cash_flow,
-                financing_cash_flow,
-            )
+        activity_flows = [operating_cash_flow, investing_cash_flow, financing_cash_flow]
+        total_inflows = [
+            sum(max(value, 0.0) for value in values)
+            for values in zip(*activity_flows, strict=False)
         ]
-        beginning_cash = _shift(_cumulative(cash_change), fill_value=0.0)
-        ending_cash = [begin + change for begin, change in zip(beginning_cash, cash_change)]
+        total_outflows = [
+            sum(-min(value, 0.0) for value in values)
+            for values in zip(*activity_flows, strict=False)
+        ]
+        net_cash_flow = [
+            inflow - outflow for inflow, outflow in zip(total_inflows, total_outflows)
+        ]
+
+        beginning_cash = _shift(_cumulative(net_cash_flow), fill_value=0.0)
+        ending_cash = [begin + change for begin, change in zip(beginning_cash, net_cash_flow)]
 
         columns: Dict[str, List[float]] = {
+            "Net Income": net_income,
+            "Non-Cash Expenses": non_cash_expenses,
+            "Change in Working Capital": working_capital_change,
             "Operating Cash Flow": operating_cash_flow,
+            "Cash Flow from Operations (Indirect)": operating_cash_flow,
+            "Capital Expenditures": capex,
             "Investing Cash Flow": investing_cash_flow,
+            "Free Cash Flow": free_cash_flow,
         }
         columns.update(financing_components)
         columns["Financing Cash Flow"] = financing_cash_flow
         columns.update(
             {
-                "Net Change in Cash": cash_change,
+                "Total Cash Inflows": total_inflows,
+                "Total Cash Outflows": total_outflows,
+                "Net Cash Flow": net_cash_flow,
+                "Net Change in Cash": net_cash_flow,
                 "Beginning Cash": beginning_cash,
                 "Ending Cash": ending_cash,
             }
@@ -914,11 +935,11 @@ class FinancialModel:
         ]
 
         share_issuance = [0.0 for _ in self.years]
-        if share_issuance:
+        if financing.share_capital:
             share_issuance[0] = float(financing.share_capital)
 
         initial_investment = [0.0 for _ in self.years]
-        if initial_investment:
+        if financing.initial_investment:
             initial_investment[0] = -float(financing.initial_investment)
 
         return {
