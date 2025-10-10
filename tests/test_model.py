@@ -20,6 +20,9 @@ class FinancialModelTest(unittest.TestCase):
     def test_income_statement_columns(self):
         income = self.outputs.income_statement
         self.assertEqual(income.index, self.inputs.years)
+        for product in self.inputs.products:
+            column_name = f"Gross Revenue ({product})"
+            self.assertIn(column_name, income.data)
         for column in [
             "Gross Revenue",
             "Distributors Commission",
@@ -147,8 +150,13 @@ class FinancialModelTest(unittest.TestCase):
         gross_margin = income.column("Gross Profit Margin")
         ebitda_margin = income.column("EBITDA Margin")
         ebit_margin = income.column("EBIT Margin")
+        per_product = [
+            income.column(f"Gross Revenue ({product})") for product in self.inputs.products
+        ]
 
         for idx in range(len(self.inputs.years)):
+            total_products = sum(column[idx] for column in per_product)
+            self.assertAlmostEqual(gross_revenue[idx], total_products, places=6)
             self.assertAlmostEqual(
                 net_revenue[idx], gross_revenue[idx] - commission[idx], places=6
             )
