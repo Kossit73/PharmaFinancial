@@ -141,7 +141,17 @@ def _rerun() -> None:
             continue
 
 
-def _set_widget_value(key: str, value: float) -> None:
+def _ensure_widget_default(key: str, value: object) -> None:
+    """Initialise a widget's session value without overwriting edits."""
+
+    try:
+        if key not in st.session_state:
+            st.session_state[key] = value
+    except Exception:  # pragma: no cover - depends on Streamlit runtime
+        pass
+
+
+def _set_widget_value(key: str, value: object) -> None:
     """Synchronise a widget's value in ``st.session_state``.
 
     Streamlit widgets retain their initial value once instantiated. To ensure
@@ -880,6 +890,7 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
 
     st.subheader("Core Assumptions")
     rows: List[dict] = st.session_state.get("core_assumption_rows", [])
+    _prime_core_widget_state(rows)
 
     if not rows:
         st.info("No core assumptions configured. Use the form below to add entries.")
@@ -907,52 +918,68 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
                 default_capacity = float(capacity_defaults[row_product])
 
             cols = st.columns([3, 2, 2, 2, 2, 2, 2, 2, 2, 1])
+            desc_key = f"core_desc_{index}"
+            prod_key = f"core_prod_{index}"
+            sell_key = f"core_sell_{index}"
+            freight_key = f"core_freight_{index}"
+            markup_key = f"core_markup_{index}"
+            units_key = f"core_units_{index}"
+            capacity_key = f"core_capacity_{index}"
+
+            _ensure_widget_default(desc_key, row.get("Product", ""))
+            _ensure_widget_default(prod_key, float(row.get("Production Cost", 0.0)))
+            _ensure_widget_default(sell_key, float(row.get("Selling Price", 0.0)))
+            _ensure_widget_default(freight_key, float(row.get("Freight Cost", 0.0)))
+            _ensure_widget_default(markup_key, float(row.get("Markup", 0.0)))
+            _ensure_widget_default(units_key, default_units)
+            _ensure_widget_default(capacity_key, default_capacity)
+
             description = cols[0].text_input(
                 "Description",
-                value=row.get("Product", ""),
-                key=f"core_desc_{index}",
+                value=str(st.session_state.get(desc_key, "")),
+                key=desc_key,
                 help="Name of the product or assumption this row represents.",
             )
             production = cols[1].number_input(
                 "Production Cost",
-                value=float(row.get("Production Cost", 0.0)),
-                key=f"core_prod_{index}",
+                value=float(st.session_state.get(prod_key, 0.0)),
+                key=prod_key,
                 step=0.001,
                 format="%.4f",
             )
             selling = cols[2].number_input(
                 "Selling Price",
-                value=float(row.get("Selling Price", 0.0)),
-                key=f"core_sell_{index}",
+                value=float(st.session_state.get(sell_key, 0.0)),
+                key=sell_key,
                 step=0.001,
                 format="%.4f",
             )
             freight = cols[3].number_input(
                 "Freight Cost",
-                value=float(row.get("Freight Cost", 0.0)),
-                key=f"core_freight_{index}",
+                value=float(st.session_state.get(freight_key, 0.0)),
+                key=freight_key,
                 step=0.001,
                 format="%.4f",
             )
             markup = cols[4].number_input(
                 "Markup",
-                value=float(row.get("Markup", 0.0)),
-                key=f"core_markup_{index}",
+                value=float(st.session_state.get(markup_key, 0.0)),
+                key=markup_key,
                 step=0.01,
                 format="%.2f",
             )
             total_units = cols[5].number_input(
                 "Total Production Units",
-                value=default_units,
-                key=f"core_units_{index}",
+                value=float(st.session_state.get(units_key, default_units)),
+                key=units_key,
                 step=1.0,
                 format="%.4f",
                 min_value=0.0,
             )
             max_capacity = cols[6].number_input(
                 "Max Capacity",
-                value=default_capacity,
-                key=f"core_capacity_{index}",
+                value=float(st.session_state.get(capacity_key, default_capacity)),
+                key=capacity_key,
                 step=1.0,
                 format="%.4f",
                 min_value=0.0,
@@ -988,6 +1015,7 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
             if cols[9].button("Remove", key=f"core_remove_{index}"):
                 del rows[index]
                 st.session_state["core_assumption_rows"] = rows
+                _prime_core_widget_state(rows)
                 _rerun()
 
         updated_rows.append(
@@ -1006,6 +1034,7 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
 
     if updated_rows != rows:
         st.session_state["core_assumption_rows"] = updated_rows
+        _prime_core_widget_state(updated_rows)
 
     st.markdown("#### Add a core assumption")
     with st.form("add_core_assumption"):
@@ -1066,6 +1095,7 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
                 }
             )
             st.session_state["core_assumption_rows"] = rows
+            _prime_core_widget_state(rows)
             for key in (
                 "core_new_description",
                 "core_new_prod",
@@ -5648,6 +5678,34 @@ def _inventory_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
 
     try:
         st.session_state["inventory_rows"] = _payload_to_inventory_rows(payload)
+    except Exception:  # pragma: no cover - depends on Streamlit runtime
+        pass
+
+
+def _prime_core_widget_state(rows: Sequence[Mapping]) -> None:
+    """Synchronise core assumption widget keys with the supplied rows."""
+
+    try:
+        for index, row in enumerate(rows):
+            _set_widget_value(f"core_desc_{index}", str(row.get("Product", "")))
+            _set_widget_value(
+                f"core_prod_{index}", float(row.get("Production Cost", 0.0))
+            )
+            _set_widget_value(
+                f"core_sell_{index}", float(row.get("Selling Price", 0.0))
+            )
+            _set_widget_value(
+                f"core_freight_{index}", float(row.get("Freight Cost", 0.0))
+            )
+            _set_widget_value(
+                f"core_markup_{index}", float(row.get("Markup", 0.0))
+            )
+            _set_widget_value(
+                f"core_units_{index}", float(row.get("Total Production Units", 0.0))
+            )
+            _set_widget_value(
+                f"core_capacity_{index}", float(row.get("Max Capacity", 0.0))
+            )
     except Exception:  # pragma: no cover - depends on Streamlit runtime
         pass
 
