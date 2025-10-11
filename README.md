@@ -142,3 +142,4 @@ editing the underlying JSON manually.
 - The IRR calculation uses a Newton iteration approach implemented in pure Python.
 - Monte Carlo simulations rely on Python's `random` module with a fixed seed for reproducibility.
 - Scenario and sensitivity analyses mutate internal parameters temporarily; all baselines are restored after each computation so results remain consistent.
+- For a mapping of the IFRS-style cash flow statement to its data sources, see [`docs/cash_flow_mapping.md`](docs/cash_flow_mapping.md).
