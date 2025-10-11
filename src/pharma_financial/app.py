@@ -12,7 +12,22 @@ from collections.abc import Iterable, Mapping, Sequence
 import math
 from typing import TYPE_CHECKING, Any, Callable, List, Optional, Tuple, cast
 
-import streamlit as st
+try:  # pragma: no cover - allow importing helper functions without Streamlit installed
+    import streamlit as st
+except Exception:  # pragma: no cover - lightweight stub for non-Streamlit environments
+    class _StreamlitStub:
+        session_state: dict = {}
+
+        def __getattr__(self, name: str):  # noqa: D401 - simple runtime guard
+            def _missing(*args, **kwargs):
+                raise RuntimeError(
+                    "Streamlit runtime is required for UI operations."
+                )
+
+            return _missing
+
+    st = _StreamlitStub()  # type: ignore
+    st.sidebar = _StreamlitStub()  # type: ignore[attr-defined]
 
 if TYPE_CHECKING:  # pragma: no cover - typing aid only
     from streamlit.delta_generator import DeltaGenerator
@@ -1689,13 +1704,18 @@ def _render_break_even_inputs(payload: dict) -> None:
                 disabled=True,
                 help="Managed via the Fixed & Variable Costs table.",
             )
+            price_default = price_lookup.get(clean_product, float(row.get("Selling Price", 0.0)))
+            price_key = f"break_even_price_{index}"
+            _set_widget_value(price_key, float(price_default))
             selling_price = cols[2].number_input(
                 "Selling Price",
-                value=float(row.get("Selling Price", 0.0)),
-                key=f"break_even_price_{index}",
+                value=float(price_default),
+                key=price_key,
                 step=0.001,
                 format="%.4f",
                 min_value=0.0,
+                disabled=True,
+                help="Managed via the Core Assumptions table.",
             )
             variable_key = f"break_even_variable_{index}"
             _set_widget_value(variable_key, float(variable_default))
@@ -1730,6 +1750,10 @@ def _render_break_even_inputs(payload: dict) -> None:
             if cost_info is None:
                 cols[1].warning(
                     "Configure this product in the Fixed & Variable Costs table to set its costs."
+                )
+            if clean_product and clean_product not in price_lookup:
+                cols[2].warning(
+                    "Set this product's selling price in the Core Assumptions table."
                 )
 
             fixed_cost = fixed_default
@@ -1823,13 +1847,16 @@ def _render_break_even_inputs(payload: dict) -> None:
             product_catalog,
             "break_even_new_product",
         )
-        new_price = st.number_input(
+        new_price_lookup = price_lookup.get(str(new_product or "").strip(), 0.0)
+        st.number_input(
             "Selling Price",
-            value=price_lookup.get(str(new_product or "").strip(), 0.0),
+            value=float(new_price_lookup),
             step=0.001,
             format="%.4f",
             key="break_even_new_price",
             min_value=0.0,
+            disabled=True,
+            help="Managed via the Core Assumptions table.",
         )
         new_target = st.number_input(
             "Target Profit",
@@ -1857,13 +1884,17 @@ def _render_break_even_inputs(payload: dict) -> None:
             st.warning(
                 "Add fixed and variable cost details for this product in the Fixed & Variable Costs table first."
             )
+        elif cleaned_product not in price_lookup:
+            st.warning(
+                "Assign a selling price for this product in the Core Assumptions table before adding it."
+            )
         else:
             additions = list(st.session_state.get("break_even_rows", []) or [])
             additions.append(
                 {
                     "Product": cleaned_product,
                     "Fixed Cost": float(cost_lookup[cleaned_product]["fixed"]),
-                    "Selling Price": float(new_price),
+                    "Selling Price": float(price_lookup[cleaned_product]),
                     "Variable Cost": float(cost_lookup[cleaned_product]["variable"]),
                     "Target Profit": float(new_target),
                     "Expected Volume": float(new_volume),
