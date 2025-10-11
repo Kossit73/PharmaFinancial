@@ -323,7 +323,7 @@ def _parse_depreciation_schedule(
             else:
                 annual_depreciation = 0.0
 
-            total_asset_cost = acquisition + previous_net_book
+            total_asset_cost = acquisition + previous_net_book + previous_cumulative
             rate = annual_depreciation / total_asset_cost if total_asset_cost else 0.0
             cumulative = previous_cumulative + annual_depreciation
             net_book = total_asset_cost - cumulative

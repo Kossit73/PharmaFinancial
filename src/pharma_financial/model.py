@@ -362,7 +362,9 @@ class FinancialModel:
                 acquisition_amount = row.acquisition if offset == 0 else 0.0
                 opening_net_book = previous_net_book
                 opening_cumulative = previous_cumulative
-                total_asset_cost = opening_net_book + acquisition_amount
+                total_asset_cost = (
+                    opening_net_book + opening_cumulative + acquisition_amount
+                )
                 allowable = max(total_asset_cost - opening_cumulative, 0.0)
 
                 if configured_life is not None and method == "straight_line":

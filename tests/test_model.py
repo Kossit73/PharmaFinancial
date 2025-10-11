@@ -711,10 +711,10 @@ class FinancialModelTest(unittest.TestCase):
                 if previous_net_book is not None:
                     self.assertAlmostEqual(opening_net, previous_net_book, places=5)
 
-                expected_total = acquisition + opening_net
+                base_cumulative = 0.0 if previous_cumulative is None else previous_cumulative
+                expected_total = acquisition + opening_net + base_cumulative
                 self.assertAlmostEqual(total_cost, expected_total, places=6)
 
-                base_cumulative = 0.0 if previous_cumulative is None else previous_cumulative
                 allowable = max(total_cost - base_cumulative, 0.0)
 
                 if method == "straight_line" and configured_life and configured_life > 0:
@@ -724,7 +724,7 @@ class FinancialModelTest(unittest.TestCase):
                     if method == "reducing_balance":
                         expected_base = opening_net + (acquisition * 0.5)
                     else:
-                        expected_base = opening_net + acquisition
+                        expected_base = total_cost
                     expected_depreciation = expected_base * configured_rate
                     if configured_life and configured_life > 0 and life_index >= configured_life - 1:
                         expected_depreciation = allowable

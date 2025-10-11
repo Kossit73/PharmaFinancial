@@ -3216,7 +3216,7 @@ def _calculate_depreciation_preview(rows: Sequence[Mapping[str, object]]) -> lis
             else:
                 prior_cumulative = previous_cumulative
 
-            total_asset_cost = prior_net + acquisition
+            total_asset_cost = prior_net + prior_cumulative + acquisition
             allowable = max(total_asset_cost - prior_cumulative, 0.0)
 
             if method == "straight_line" and asset_life > 0:
@@ -3357,7 +3357,12 @@ def _render_depreciation_schedule(payload: dict) -> None:
             format="%.5f",
         )
 
-        total_asset_cost = float(data.get("total_asset_cost", acquisition_input + prior_net_book))
+        total_asset_cost = float(
+            data.get(
+                "total_asset_cost",
+                acquisition_input + prior_net_book + prior_cumulative,
+            )
+        )
         total_depreciation = float(data.get("total_depreciation", 0.0))
         if total_depreciation <= 0.0 and total_asset_cost > 0.0:
             method_used = str(data.get("method", method_selection) or method_selection)
