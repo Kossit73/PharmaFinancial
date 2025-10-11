@@ -1,6 +1,6 @@
-# Longevity Pharmaceuticals Financial Model
+# Pharmaceuticals Financial Model
 
-This project provides a Python implementation of the Longevity Pharmaceuticals financial model, translating the comprehensive set of assumptions provided into a reproducible analytical engine and interactive dashboards.
+This project provides a Python implementation of the Pharmaceuticals financial model, translating the comprehensive set of assumptions provided into a reproducible analytical engine and interactive dashboards.
 
 ## Features
 

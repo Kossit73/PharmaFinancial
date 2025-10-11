@@ -1,4 +1,4 @@
-"""Streamlit web application for the Longevity Pharmaceuticals financial model."""
+"""Streamlit web application for the Pharmaceuticals financial model."""
 from __future__ import annotations
 
 import csv
@@ -415,12 +415,12 @@ def main() -> None:
         )
 
     st.set_page_config(
-        page_title="Longevity Pharmaceuticals Financial Model",
+        page_title="Pharmaceuticals Financial Model",
         page_icon="💊",
         layout="wide",
     )
 
-    st.title("Longevity Pharmaceuticals Financial Model")
+    st.title("Pharmaceuticals Financial Model")
     st.caption(
         "Interactive financial modelling environment covering statements, "
         "scenario analysis, and Monte Carlo simulation."

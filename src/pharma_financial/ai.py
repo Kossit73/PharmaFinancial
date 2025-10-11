@@ -210,7 +210,7 @@ class GenerativeAdvisor:
                 )
 
         prompt_lines = [
-            "You are a financial analyst. Provide concise insights on the Longevity Pharmaceuticals model.",
+            "You are a financial analyst. Provide concise insights on the Pharmaceuticals model.",
             "Key investment metrics:",
             *metric_pairs,
             f"Latest year ({latest_year}) Net Revenue: {net_revenue:.2f}",

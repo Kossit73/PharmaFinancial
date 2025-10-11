@@ -360,7 +360,7 @@ def _collect_report_blocks(sections: Sequence[ReportSection]) -> List[Tuple[str,
     """Flatten sections into typed text blocks for downstream exporters."""
 
     blocks: List[Tuple[str, str]] = [
-        ("title", "Longevity Pharmaceuticals Financial Report"),
+        ("title", "Pharmaceuticals Financial Report"),
         ("subtitle", f"Generated on {datetime.now(UTC).isoformat()} UTC"),
     ]
 
@@ -617,8 +617,8 @@ def _excel_core_props() -> str:
         'xmlns:dc="http://purl.org/dc/elements/1.1/" '
         'xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" '
         'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
-        '<dc:title>Longevity Financial Report</dc:title>'
-        '<dc:creator>Longevity Financial Model</dc:creator>'
+        '<dc:title>Pharmaceuticals Financial Report</dc:title>'
+        '<dc:creator>Pharmaceuticals Financial Model</dc:creator>'
         f'<dcterms:created xsi:type="dcterms:W3CDTF">{generated}</dcterms:created>'
         f'<dcterms:modified xsi:type="dcterms:W3CDTF">{generated}</dcterms:modified>'
         '</cp:coreProperties>'
@@ -735,8 +735,8 @@ def _docx_core_props() -> str:
         'xmlns:dc="http://purl.org/dc/elements/1.1/" '
         'xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" '
         'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
-        '<dc:title>Longevity Financial Report</dc:title>'
-        '<dc:creator>Longevity Financial Model</dc:creator>'
+        '<dc:title>Pharmaceuticals Financial Report</dc:title>'
+        '<dc:creator>Pharmaceuticals Financial Model</dc:creator>'
         f'<dcterms:created xsi:type="dcterms:W3CDTF">{generated}</dcterms:created>'
         f'<dcterms:modified xsi:type="dcterms:W3CDTF">{generated}</dcterms:modified>'
         '</cp:coreProperties>'
@@ -748,7 +748,7 @@ def _docx_app_props() -> str:
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" '
         'xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
-        '<Application>Longevity Financial Model</Application>'
+        '<Application>Pharmaceuticals Financial Model</Application>'
         '</Properties>'
     )
 
@@ -756,7 +756,7 @@ def _docx_app_props() -> str:
 def _build_pdf_fallback(blocks: Sequence[Tuple[str, str]]) -> bytes:
     lines = _blocks_to_pdf_lines(blocks)
     if not lines:
-        lines = ["Longevity Pharmaceuticals Financial Report"]
+        lines = ["Pharmaceuticals Financial Report"]
 
     line_height = 14
     page_height = 842

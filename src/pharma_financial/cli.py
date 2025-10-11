@@ -1,4 +1,4 @@
-"""Command line entry point for running the Longevity Pharmaceuticals model."""
+"""Command line entry point for running the Pharmaceuticals model."""
 from __future__ import annotations
 
 import argparse
@@ -44,7 +44,7 @@ def run_model(input_path: Path | None = None, output: Path | None = None) -> Non
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the Longevity Pharmaceuticals financial model")
+    parser = argparse.ArgumentParser(description="Run the Pharmaceuticals financial model")
     parser.add_argument("--inputs", type=Path, default=None, help="Path to an inputs JSON file")
     parser.add_argument(
         "--output",

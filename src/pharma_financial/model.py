@@ -89,7 +89,7 @@ def _value_for_year(table: Table, column: str, year: Optional[int]) -> float:
 
 
 class FinancialModel:
-    """Implements the Longevity Pharmaceuticals financial engine."""
+    """Implements the Pharmaceuticals financial engine."""
 
     def __init__(self, inputs: ModelInputs):
         self.inputs = inputs
