@@ -1427,14 +1427,21 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
     _render_ai_dashboard(outputs.ai_insights)
 
 
-def _render_statement_tab(title: str, df: pd.DataFrame) -> None:
+def _render_statement_tab(title: str, table) -> None:
     st.subheader(title)
-    st.dataframe(_with_year(df), use_container_width=True)
+    if isinstance(table, Table):
+        display = table.rounded(0)
+    elif pd is not None and isinstance(table, pd.DataFrame):
+        display = table.round(0)
+    else:
+        display = table
+    st.dataframe(_with_year(display), use_container_width=True)
 
 
 def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -> None:
     st.subheader("Statement of Financial Performance")
-    income_frame = _with_year(outputs.income_statement)
+    rounded_income = outputs.income_statement.rounded(0, exclude_keywords=("Margin", "Return"))
+    income_frame = _with_year(rounded_income)
     if pd is not None and isinstance(income_frame, pd.DataFrame):
         display_frame = income_frame.drop(columns=["Depreciation"], errors="ignore")
     elif isinstance(income_frame, list):

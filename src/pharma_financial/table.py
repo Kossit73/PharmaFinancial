@@ -90,6 +90,29 @@ class Table:
         selected = {name: self.data[name] for name in names}
         return Table(list(self.index), {k: list(v) for k, v in selected.items()}, self.index_name)
 
+    def rounded(
+        self,
+        decimals: int,
+        *,
+        exclude_keywords: Iterable[str] = (),
+    ) -> "Table":
+        """Return a new table with numeric values rounded to ``decimals`` places."""
+
+        exclude = tuple(exclude_keywords)
+
+        def _should_round(name: Any) -> bool:
+            if not isinstance(name, str):
+                return True
+            return not any(keyword in name for keyword in exclude)
+
+        rounded_data: Dict[str, List[float]] = {}
+        for name, values in self.data.items():
+            if _should_round(name):
+                rounded_data[name] = [round(float(value), decimals) for value in values]
+            else:
+                rounded_data[name] = list(values)
+        return Table(list(self.index), rounded_data, self.index_name)
+
 
 def build_table(
     index: Iterable[Any],

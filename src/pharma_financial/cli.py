@@ -23,9 +23,12 @@ def run_model(input_path: Path | None = None, output: Path | None = None) -> Non
         except Exception:
             table.to_csv(path)
 
-    _write_table("income_statement", results.income_statement)
-    _write_table("balance_sheet", results.balance_sheet)
-    _write_table("cash_flow", results.cash_flow)
+    _write_table(
+        "income_statement",
+        results.income_statement.rounded(0, exclude_keywords=("Margin", "Return")),
+    )
+    _write_table("balance_sheet", results.balance_sheet.rounded(0))
+    _write_table("cash_flow", results.cash_flow.rounded(0))
     _write_table("summary_metrics", results.summary_metrics)
     _write_table("break_even", results.break_even)
     _write_table("payback", results.payback)

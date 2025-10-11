@@ -102,7 +102,10 @@ def collect_report_sections(model: FinancialModel, outputs: FinancialOutputs) ->
     sections.append(ReportSection("Key Metrics Dashboard", key_tables, notes=ai_notes or None))
 
     perf_tables: List[ReportTable] = [
-        ReportTable("Statement of Financial Performance", outputs.income_statement),
+        ReportTable(
+            "Statement of Financial Performance",
+            outputs.income_statement.rounded(0, exclude_keywords=("Margin", "Return")),
+        ),
     ]
     try:
         perf_tables.append(ReportTable("Gross Revenue Schedule", model.revenue_schedule()))
@@ -124,11 +127,27 @@ def collect_report_sections(model: FinancialModel, outputs: FinancialOutputs) ->
     sections.append(ReportSection("Break-even & Payback", break_even_tables))
 
     sections.append(
-        ReportSection("Financial Position", [ReportTable("Statement of Financial Position", outputs.balance_sheet)])
+        ReportSection(
+            "Financial Position",
+            [
+                ReportTable(
+                    "Statement of Financial Position",
+                    outputs.balance_sheet.rounded(0),
+                )
+            ],
+        )
     )
 
     sections.append(
-        ReportSection("Cash Flow Statement", [ReportTable("Statement of Cash Flows", outputs.cash_flow)])
+        ReportSection(
+            "Cash Flow Statement",
+            [
+                ReportTable(
+                    "Statement of Cash Flows",
+                    outputs.cash_flow.rounded(0),
+                )
+            ],
+        )
     )
 
     sensitivity_tables: List[ReportTable] = []
