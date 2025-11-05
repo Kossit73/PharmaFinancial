@@ -1843,7 +1843,11 @@ def _render_break_even(outputs: FinancialOutputs) -> None:
                 y=y_column,
                 title="Break-even Units by Product",
             )
-            st.plotly_chart(fig_break_even, use_container_width=True)
+            st.plotly_chart(
+                fig_break_even,
+                use_container_width=True,
+                key="break_even_units_chart",
+            )
 
     st.markdown("### Payback Schedule")
     payback_df = _with_year(outputs.payback)
@@ -1862,7 +1866,11 @@ def _render_break_even(outputs: FinancialOutputs) -> None:
                 markers=True,
                 title="Cumulative Payback",
             )
-            st.plotly_chart(fig_payback, use_container_width=True)
+            st.plotly_chart(
+                fig_payback,
+                use_container_width=True,
+                key="cumulative_payback_chart",
+            )
 
     st.markdown("### Discounted Payback Schedule")
     discounted_df = _with_year(outputs.discounted_payback)
@@ -1881,7 +1889,11 @@ def _render_break_even(outputs: FinancialOutputs) -> None:
                 markers=True,
                 title="Discounted Cumulative Payback",
             )
-            st.plotly_chart(fig_discounted, use_container_width=True)
+            st.plotly_chart(
+                fig_discounted,
+                use_container_width=True,
+                key="discounted_payback_chart",
+            )
 
 
 
