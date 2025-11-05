@@ -345,6 +345,42 @@ class RerunHelperTest(unittest.TestCase):
         self.assertIn("risk_review", updated["generative_features"])
         self.assertEqual(updated["api_key"], "test-key")
 
+    def test_scenario_payload_uses_configured_adjustments(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+        )
+        inputs, digest = self.app._cached_parse_inputs(payload)
+        base_model, base_outputs = self.app._cached_model_run(inputs, digest)
+
+        snapshot = self.app._clone_payload(payload)
+        scenario_model, scenario_outputs = self.app._ensure_scenario_payload(
+            "best", snapshot, base_model, base_outputs
+        )
+
+        self.assertIsNot(scenario_model, base_model)
+        best_config = payload["scenarios"]["best"]
+        self.assertAlmostEqual(
+            scenario_model.inputs.financing.discount_rate, best_config["interest"][0]
+        )
+        self.assertIsNotNone(scenario_outputs)
+
+        same_model, same_outputs = self.app._ensure_scenario_payload(
+            "unknown", snapshot, base_model, base_outputs
+        )
+        self.assertIs(same_model, base_model)
+        self.assertIs(same_outputs, base_outputs)
+
+    def test_generate_excel_bytes_returns_workbook(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+        )
+        inputs, digest = self.app._cached_parse_inputs(payload)
+        model, outputs = self.app._cached_model_run(inputs, digest)
+
+        workbook = self.app._generate_excel_bytes(model, outputs, "Base")
+        self.assertIsInstance(workbook, (bytes, bytearray))
+        self.assertGreater(len(workbook), 0)
+
 
 class UploadLoaderTests(unittest.TestCase):
     def setUp(self):

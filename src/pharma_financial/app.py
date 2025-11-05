@@ -1,6 +1,7 @@
 """Streamlit web application for the Pharmaceuticals financial model."""
 from __future__ import annotations
 
+import copy
 import csv
 import hashlib
 import io
@@ -44,12 +45,7 @@ from .model import (
     FinancialModel,
     FinancialOutputs,
 )
-from .report import (
-    REPORT_FORMATS,
-    ReportGenerationError,
-    collect_report_sections,
-    generate_report,
-)
+from .report import collect_report_sections, generate_report
 from .table import Table
 
 try:  # pragma: no cover - executed in environments with pandas available
@@ -256,6 +252,93 @@ def _cached_model_run(inputs: ModelInputs, digest: str) -> tuple[FinancialModel,
     return model, outputs
 
 
+def _scenario_options(payload: Mapping[str, object]) -> List[str]:
+    """Return the available scenario labels including the base case."""
+
+    options: List[str] = ["Base"]
+    scenarios = payload.get("scenarios")
+    if not isinstance(scenarios, Mapping):
+        return options
+
+    for name in scenarios.keys():
+        label = str(name).strip()
+        if not label:
+            continue
+        if label.lower() == "base":
+            options[0] = label
+        elif label not in options:
+            options.append(label)
+
+    return options
+
+
+def _scenario_slug(name: str) -> str:
+    """Return a URL-safe slug for ``name`` used in widget keys and filenames."""
+
+    slug = re.sub(r"[^0-9a-z]+", "_", name.strip().lower())
+    slug = re.sub(r"_+", "_", slug).strip("_")
+    return slug or "base"
+
+
+def _ensure_scenario_payload(
+    selected_scenario: str,
+    snapshot: Mapping[str, object],
+    base_model: FinancialModel,
+    base_outputs: FinancialOutputs,
+) -> tuple[FinancialModel, FinancialOutputs]:
+    """Return model results for ``selected_scenario`` built from ``snapshot`` payload."""
+
+    scenario_name = (selected_scenario or "Base").strip()
+    if not scenario_name:
+        scenario_name = "Base"
+
+    if scenario_name.lower() == "base":
+        return base_model, base_outputs
+
+    scenarios = snapshot.get("scenarios", {})
+    matched: Mapping[str, object] | None = None
+    if isinstance(scenarios, Mapping):
+        for name, values in scenarios.items():
+            if str(name).strip().lower() == scenario_name.lower():
+                if isinstance(values, Mapping):
+                    matched = values
+                break
+
+    if matched is None:
+        return base_model, base_outputs
+
+    payload = _clone_payload(snapshot)
+
+    inflation = matched.get("inflation")
+    if isinstance(inflation, Iterable) and not isinstance(inflation, (str, bytes)):
+        payload["inflation_series"] = [float(value) for value in inflation]
+
+    interest = matched.get("interest")
+    if isinstance(interest, Iterable) and not isinstance(interest, (str, bytes)):
+        interest_values = [float(value) for value in interest if value is not None]
+        if interest_values:
+            financing = dict(payload.get("financing", {}))
+            financing["discount_rate"] = float(interest_values[0])
+            payload["financing"] = financing
+
+    inputs, digest = _cached_parse_inputs(payload)
+    return _cached_model_run(inputs, digest)
+
+
+def _generate_excel_bytes(
+    model: FinancialModel, outputs: FinancialOutputs, scenario_name: str
+) -> bytes:
+    """Return an Excel workbook representing the model results."""
+
+    sections = collect_report_sections(model, outputs)
+    report_name = "pharma_financial_model"
+    slug = _scenario_slug(scenario_name)
+    if slug and slug != "base":
+        report_name = f"{report_name}_{slug}"
+    data, _mime, _filename = generate_report(sections, "Excel", report_name=report_name)
+    return data
+
+
 def _render_projection_horizon(payload: dict) -> None:
     """Allow users to adjust the model start and end years via dropdowns."""
 
@@ -426,10 +509,13 @@ def main() -> None:
         "scenario analysis, and Monte Carlo simulation."
     )
 
-    inputs, digest = _resolve_inputs()
+    config_container = st.container()
+    download_container = st.container()
+
+    inputs, digest = _resolve_inputs(config_container)
     model, outputs = _cached_model_run(inputs, digest)
 
-    _render_report_download(model, outputs)
+    _render_excel_model_download(download_container, model, outputs)
 
     tabs = st.tabs(
         [
@@ -446,7 +532,7 @@ def main() -> None:
     )
 
     with tabs[0]:
-        _render_inputs_tab(inputs)
+        _render_inputs_tab(inputs, model, outputs)
     with tabs[1]:
         _render_dashboard_tab(model, outputs)
     with tabs[2]:
@@ -465,113 +551,13 @@ def main() -> None:
         _render_break_even(outputs)
 
 
-def _resolve_inputs() -> tuple[ModelInputs, str]:
-    st.sidebar.header("Model Configuration")
-    st.sidebar.write(
-        "Upload a customised assumptions file (JSON, CSV, Excel, Word, or PDF) or use the bundled defaults."
-    )
+def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:
+    with container:
+        if "input_payload" not in st.session_state:
+            _initialise_session_payload(json.loads(DEFAULT_INPUT_JSON))
 
-    uploaded = st.sidebar.file_uploader(
-        "Custom assumptions",
-        type=["json", "csv", "xlsx", "xls", "pdf", "docx"],
-        accept_multiple_files=False,
-        help="Provide assumptions as JSON or a document containing JSON text.",
-    )
-    if uploaded is not None:
-        file_bytes = uploaded.getvalue()
-        name = getattr(uploaded, "name", "upload")
-        suffix = Path(name).suffix.lower()
-        signature = f"{name}:{hashlib.md5(file_bytes).hexdigest()}"
-        if st.session_state.get("uploaded_signature") != signature:
-            try:
-                raw = _load_payload_from_bytes(file_bytes, suffix)
-                _initialise_session_payload(raw)
-                parse_inputs(raw)
-                st.session_state["uploaded_signature"] = signature
-                st.sidebar.success("Loaded custom assumptions.")
-            except Exception as exc:  # pragma: no cover - user supplied input
-                st.sidebar.error(f"Unable to parse uploaded file: {exc}")
+        payload = st.session_state["input_payload"]
 
-    if st.session_state.get("uploaded_signature"):
-        st.sidebar.caption(
-            "Using uploaded assumptions. Adjust the tables below to update the model."
-        )
-    else:
-        st.sidebar.caption("Using default assumptions bundled with the project.")
-
-    if "input_payload" not in st.session_state:
-        _initialise_session_payload(json.loads(DEFAULT_INPUT_JSON))
-
-    payload = st.session_state["input_payload"]
-
-    saved_workspaces = st.session_state.setdefault("saved_workspaces", {})
-    if not isinstance(saved_workspaces, dict):  # pragma: no cover - defensive guard
-        saved_workspaces = {}
-        st.session_state["saved_workspaces"] = saved_workspaces
-
-    if "active_workspace_name" not in st.session_state:
-        st.session_state["active_workspace_name"] = _generate_workspace_label(
-            saved_workspaces
-        )
-
-    st.session_state.setdefault("workspace_label", st.session_state["active_workspace_name"])
-
-    st.sidebar.markdown("### Workspace Controls")
-    workspace_input = st.sidebar.text_input(
-        "Workspace name",
-        key="workspace_label",
-        help="Label used when saving, loading, or creating model workspaces.",
-    )
-
-    workspace_name = (workspace_input or "").strip()
-    if not workspace_name:
-        workspace_name = st.session_state.get("active_workspace_name", "Workspace 1")
-        st.session_state["workspace_label"] = workspace_name
-    st.session_state["active_workspace_name"] = workspace_name
-
-    if st.sidebar.button("Save", key="workspace_save"):
-        saved_workspaces[workspace_name] = _clone_payload(payload)
-        st.sidebar.success(f"Workspace '{workspace_name}' saved.")
-
-    if st.sidebar.button("Reset", key="workspace_reset"):
-        st.session_state.pop("uploaded_signature", None)
-        _initialise_session_payload(json.loads(DEFAULT_INPUT_JSON))
-        st.sidebar.info("Model reset to bundled defaults.")
-        st.session_state["workspace_label"] = st.session_state.get(
-            "active_workspace_name", workspace_name
-        )
-        _rerun()
-
-    if st.sidebar.button("New", key="workspace_new"):
-        saved_workspaces[workspace_name] = _clone_payload(payload)
-        new_label = _generate_workspace_label(saved_workspaces)
-        st.session_state["workspace_label"] = new_label
-        st.session_state["active_workspace_name"] = new_label
-        st.session_state.pop("uploaded_signature", None)
-        _initialise_session_payload(json.loads(DEFAULT_INPUT_JSON))
-        st.sidebar.success(
-            f"Created new workspace '{new_label}'. Previous workspace saved as '{workspace_name}'."
-        )
-        _rerun()
-
-    if saved_workspaces:
-        st.sidebar.markdown("#### Saved Workspaces")
-        options = sorted(str(name) for name in saved_workspaces.keys())
-        selection = st.sidebar.selectbox(
-            "Load workspace",
-            options,
-            key="workspace_load_selection",
-        )
-        if selection and st.sidebar.button("Load Selected", key="workspace_load_button"):
-            restored = _clone_payload(saved_workspaces.get(selection, {}))
-            _initialise_session_payload(restored)
-            st.session_state["workspace_label"] = selection
-            st.session_state["active_workspace_name"] = selection
-            st.sidebar.success(f"Loaded workspace '{selection}'.")
-            _rerun()
-
-    st.sidebar.markdown("### AI & Machine Learning Configuration")
-    _render_ai_settings(payload, container=st.sidebar)
     _ai_settings_to_payload(st.session_state.get("ai_settings", {}), payload)
     rows = st.session_state.setdefault(
         "core_assumption_rows", _payload_to_core_rows(payload)
@@ -866,45 +852,81 @@ def _load_payload_from_pdf(data: bytes) -> Mapping[str, object]:
     return _load_payload_from_text(combined)
 
 
-def _render_report_download(model: FinancialModel, outputs: FinancialOutputs) -> None:
-    st.sidebar.markdown("### Report Download")
+def _render_excel_model_download(
+    container: DeltaGenerator, base_model: FinancialModel, base_outputs: FinancialOutputs
+) -> None:
+    with container:
+        st.markdown("### Excel Model Download")
 
-    stored_format = st.session_state.get("report_download_format", REPORT_FORMATS[0])
-    if stored_format not in REPORT_FORMATS:
-        stored_format = REPORT_FORMATS[0]
+        payload = st.session_state.get("input_payload") or {}
+        scenario_options = _scenario_options(payload)
+        stored_selection = st.session_state.get("excel_scenario_selection")
+        default_index = 0
+        if isinstance(stored_selection, str) and stored_selection in scenario_options:
+            default_index = scenario_options.index(stored_selection)
 
-    selection = st.sidebar.selectbox(
-        "Select report format",
-        REPORT_FORMATS,
-        index=REPORT_FORMATS.index(stored_format),
-        key="report_download_format",
-    )
+        selected_scenario = st.selectbox(
+            "Select scenario for Excel export",
+            scenario_options,
+            index=default_index,
+            key="excel_scenario_selection",
+        )
 
-    try:
-        sections = collect_report_sections(model, outputs)
-    except Exception as exc:  # pragma: no cover - defensive user feedback
-        st.sidebar.error(f"Unable to assemble report content: {exc}")
-        return
+        snapshot = st.session_state.get("input_snapshot")
+        if snapshot is None:
+            snapshot = copy.deepcopy(payload)
+            st.session_state["input_snapshot"] = snapshot
 
-    try:
-        data, mime, filename = generate_report(sections, selection)
-    except ReportGenerationError as exc:
-        st.sidebar.info(str(exc))
-        return
-    except Exception as exc:  # pragma: no cover - unexpected failure surfaced to user
-        st.sidebar.error(f"Report generation failed: {exc}")
-        return
+        model, results = _ensure_scenario_payload(
+            selected_scenario, snapshot, base_model, base_outputs
+        )
+        st.session_state["model_results"] = (model, results)
 
-    st.sidebar.download_button(
-        label=f"Download {selection} report",
-        data=data,
-        file_name=filename,
-        mime=mime,
-    )
+        excel_map: dict[str, bytes] = st.session_state.setdefault("excel_bytes_map", {})
+        scenario_label = (selected_scenario or "Base").strip() or "Base"
+        excel_bytes = excel_map.get(scenario_label)
+
+        setattr(model, "scenario", scenario_label)
+
+        key_suffix = re.sub(r"[^0-9a-z]+", "_", scenario_label.lower()).strip("_") or "base"
+        prepare_key = f"prepare_excel_{key_suffix}"
+        download_key = f"download_excel_{key_suffix}"
+        clear_key = f"clear_excel_{key_suffix}"
+
+        download_container = st.container()
+        with download_container:
+            if not excel_bytes:
+                if st.button("Prepare Excel Model", key=prepare_key):
+                    with st.spinner("Preparing Excel workbook..."):
+                        excel_bytes = _generate_excel_bytes(
+                            model, results, scenario_label
+                        )
+                    excel_map[scenario_label] = excel_bytes
+                    st.session_state.excel_bytes_map = excel_map
+            if excel_bytes:
+                st.download_button(
+                    "Download Excel Model",
+                    data=excel_bytes,
+                    file_name="Ecommerce_Financial_Model.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=download_key,
+                )
+                if st.button("Clear Prepared Excel", key=clear_key):
+                    excel_map.pop(scenario_label, None)
+                    st.session_state.excel_bytes_map = excel_map
+                    excel_bytes = None
+            if not excel_bytes:
+                st.info("Click 'Prepare Excel Model' to generate the workbook for download.")
 
 
-def _render_inputs_tab(inputs: ModelInputs) -> None:
+def _render_inputs_tab(
+    inputs: ModelInputs, base_model: FinancialModel, base_outputs: FinancialOutputs
+) -> None:
     payload = st.session_state["input_payload"]
+
+    st.markdown("### AI & Machine Learning Configuration")
+    _render_ai_settings(payload)
+    _ai_settings_to_payload(st.session_state.get("ai_settings", {}), payload)
 
     st.markdown("### Projection Horizon")
     _render_projection_horizon(payload)
@@ -1172,7 +1194,7 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     st.markdown("### Risk Schedule")
     _render_risk_schedule(payload)
 
-    st.markdown("### AI & Machine Learning Configuration")
+    st.markdown("### AI & Machine Learning Summary")
     _render_ai_summary(payload)
 
     _core_rows_to_payload(st.session_state.get("core_assumption_rows", []), payload)
@@ -1435,7 +1457,54 @@ def _render_statement_tab(title: str, table) -> None:
         display = table.round(0)
     else:
         display = table
-    st.dataframe(_with_year(display), use_container_width=True)
+
+    display_with_year = _with_year(display)
+    st.dataframe(display_with_year, use_container_width=True)
+
+    if px is None or pd is None:
+        st.caption("Install pandas and plotly to unlock interactive analytics for this statement.")
+        return
+
+    if isinstance(display_with_year, pd.DataFrame):
+        frame = display_with_year
+    else:
+        frame = pd.DataFrame(display_with_year)
+
+    numeric_columns = [
+        column
+        for column in frame.columns
+        if column != "Year" and pd.api.types.is_numeric_dtype(frame[column])
+    ]
+    if not numeric_columns:
+        return
+
+    headline_columns = numeric_columns[:4]
+    if headline_columns:
+        st.markdown("#### Analytical Trends")
+        columns = st.columns(min(len(headline_columns), 2))
+        for idx, column in enumerate(headline_columns):
+            with columns[idx % len(columns)]:
+                fig = px.line(
+                    frame,
+                    x="Year",
+                    y=column,
+                    markers=True,
+                    title=f"{column} Trend",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+    if len(numeric_columns) > len(headline_columns):
+        remaining = numeric_columns[len(headline_columns) :]
+        melt_frame = frame.melt(id_vars=["Year"], value_vars=remaining, var_name="Metric", value_name="Value")
+        fig = px.line(
+            melt_frame,
+            x="Year",
+            y="Value",
+            color="Metric",
+            markers=True,
+            title="Additional Statement Metrics",
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
 
 def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -> None:
@@ -1453,17 +1522,93 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
         display_frame = income_frame
     st.dataframe(display_frame, use_container_width=True)
 
+    if px is not None and pd is not None:
+        if isinstance(display_frame, pd.DataFrame):
+            frame = display_frame
+        else:
+            frame = pd.DataFrame(display_frame)
+        if "Year" in frame.columns:
+            line_metrics = [
+                column
+                for column in ["Net Revenue", "Gross Profit", "EBITDA", "Net Income"]
+                if column in frame.columns
+            ]
+            if line_metrics:
+                st.markdown("#### Profit & Loss Trends")
+                trend_data = frame[["Year", *line_metrics]]
+                trend_frame = trend_data.melt(id_vars=["Year"], var_name="Metric", value_name="Value")
+                fig_income = px.line(
+                    trend_frame,
+                    x="Year",
+                    y="Value",
+                    color="Metric",
+                    markers=True,
+                    title="Income Statement Highlights",
+                )
+                st.plotly_chart(fig_income, use_container_width=True)
+
+            if "EBITDA Margin" in frame.columns:
+                fig_margin = px.line(
+                    frame,
+                    x="Year",
+                    y="EBITDA Margin",
+                    markers=True,
+                    title="EBITDA Margin",
+                )
+                st.plotly_chart(fig_margin, use_container_width=True)
+
     st.markdown("#### Gross Revenue Schedule")
     try:
         revenue_schedule = model.revenue_schedule()
     except Exception as exc:  # pragma: no cover - defensive guard for runtime issues
         st.warning(f"Unable to calculate gross revenue schedule: {exc}")
     else:
-        st.dataframe(_with_year(revenue_schedule), use_container_width=True)
+        revenue_frame = _with_year(revenue_schedule)
+        st.dataframe(revenue_frame, use_container_width=True)
         st.caption(
             "Gross Revenue is decomposed into product-level sales, distributor commissions, "
             "and resulting net revenue."
         )
+        if px is not None and pd is not None:
+            if isinstance(revenue_frame, pd.DataFrame):
+                frame = revenue_frame
+            else:
+                frame = pd.DataFrame(revenue_frame)
+            numeric_columns = [
+                column
+                for column in frame.columns
+                if column not in {"Year", "Product"} and pd.api.types.is_numeric_dtype(frame[column])
+            ]
+            if "Product" in frame.columns and numeric_columns:
+                st.markdown("##### Revenue by Product")
+                product_frame = frame.melt(
+                    id_vars=["Year", "Product"],
+                    value_vars=numeric_columns,
+                    var_name="Metric",
+                    value_name="Value",
+                )
+                fig_product = px.bar(
+                    product_frame,
+                    x="Year",
+                    y="Value",
+                    color="Product",
+                    facet_row="Metric",
+                    barmode="stack",
+                    title="Revenue Composition",
+                )
+                st.plotly_chart(fig_product, use_container_width=True)
+            elif numeric_columns:
+                st.markdown("##### Revenue Drivers")
+                melt_frame = frame.melt(id_vars=["Year"], value_vars=numeric_columns, var_name="Metric", value_name="Value")
+                fig_revenue = px.line(
+                    melt_frame,
+                    x="Year",
+                    y="Value",
+                    color="Metric",
+                    markers=True,
+                    title="Revenue Schedule",
+                )
+                st.plotly_chart(fig_revenue, use_container_width=True)
 
     st.markdown("#### Total Expenses Schedule")
     try:
@@ -1472,11 +1617,33 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
         st.warning(f"Unable to calculate total expenses schedule: {exc}")
         return
 
-    st.dataframe(_with_year(expense_schedule), use_container_width=True)
+    expense_frame = _with_year(expense_schedule)
+    st.dataframe(expense_frame, use_container_width=True)
     st.caption(
         "Total Expenses comprise raw materials, utilities, direct labour, cost of sales, "
         "and general & administrative costs."
     )
+    if px is not None and pd is not None:
+        if isinstance(expense_frame, pd.DataFrame):
+            frame = expense_frame
+        else:
+            frame = pd.DataFrame(expense_frame)
+        numeric_columns = [
+            column
+            for column in frame.columns
+            if column != "Year" and pd.api.types.is_numeric_dtype(frame[column])
+        ]
+        if numeric_columns:
+            trend_frame = frame.melt(id_vars=["Year"], value_vars=numeric_columns, var_name="Expense", value_name="Value")
+            fig_expense = px.area(
+                trend_frame,
+                x="Year",
+                y="Value",
+                color="Expense",
+                groupnorm="fraction",
+                title="Expense Mix Over Time",
+            )
+            st.plotly_chart(fig_expense, use_container_width=True)
 
 
 def _render_ai_dashboard(ai_insights: Optional[AIInsights]) -> None:
@@ -1520,9 +1687,43 @@ def _render_sensitivity(outputs: FinancialOutputs) -> None:
         st.info("No sensitivity configurations provided in the assumptions file.")
         return
 
+    supports_plotly = px is not None and pd is not None
+
     for variable, df in outputs.sensitivity_results.items():
         st.markdown(f"#### {variable}")
-        st.dataframe(_with_year(df), use_container_width=True)
+        frame = _with_year(df)
+        st.dataframe(frame, use_container_width=True)
+
+        if supports_plotly:
+            if isinstance(frame, pd.DataFrame):
+                plot_frame = frame
+            else:
+                plot_frame = pd.DataFrame(frame)
+            numeric_columns = [
+                column
+                for column in plot_frame.columns
+                if column not in {"Year", "Scenario"} and pd.api.types.is_numeric_dtype(plot_frame[column])
+            ]
+            if numeric_columns:
+                if "Year" in plot_frame.columns:
+                    long_frame = plot_frame.melt(id_vars=["Year"], value_vars=numeric_columns, var_name="Metric", value_name="Value")
+                    fig = px.line(
+                        long_frame,
+                        x="Year",
+                        y="Value",
+                        color="Metric",
+                        markers=True,
+                        title=f"{variable} Sensitivity Trend",
+                    )
+                else:
+                    long_frame = plot_frame.melt(value_vars=numeric_columns, var_name="Metric", value_name="Value")
+                    fig = px.bar(
+                        long_frame,
+                        x="Metric",
+                        y="Value",
+                        title=f"{variable} Sensitivity Comparison",
+                    )
+                st.plotly_chart(fig, use_container_width=True)
 
 
 def _render_scenarios(outputs: FinancialOutputs) -> None:
@@ -1539,12 +1740,46 @@ def _render_scenarios(outputs: FinancialOutputs) -> None:
     _render_scenario_tool_inputs(payload)
     st.session_state["input_payload"] = payload
 
+    supports_plotly = px is not None and pd is not None
+
     if not outputs.scenario_results:
         st.info("No scenario configurations provided in the assumptions file.")
     else:
         for name, df in outputs.scenario_results.items():
             st.markdown(f"#### {name}")
-            st.dataframe(_with_year(df), use_container_width=True)
+            frame = _with_year(df)
+            st.dataframe(frame, use_container_width=True)
+
+            if supports_plotly:
+                if isinstance(frame, pd.DataFrame):
+                    plot_frame = frame
+                else:
+                    plot_frame = pd.DataFrame(frame)
+                numeric_columns = [
+                    column
+                    for column in plot_frame.columns
+                    if column not in {"Year", "Scenario"} and pd.api.types.is_numeric_dtype(plot_frame[column])
+                ]
+                if numeric_columns:
+                    if "Year" in plot_frame.columns:
+                        long_frame = plot_frame.melt(id_vars=["Year"], value_vars=numeric_columns, var_name="Metric", value_name="Value")
+                        fig = px.line(
+                            long_frame,
+                            x="Year",
+                            y="Value",
+                            color="Metric",
+                            markers=True,
+                            title=f"{name} Scenario Results",
+                        )
+                    else:
+                        long_frame = plot_frame.melt(value_vars=numeric_columns, var_name="Metric", value_name="Value")
+                        fig = px.bar(
+                            long_frame,
+                            x="Metric",
+                            y="Value",
+                            title=f"{name} Scenario Comparison",
+                        )
+                    st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("### Scenario Tool Insights")
     if outputs.scenario_tool_results:
@@ -1589,15 +1824,64 @@ def _render_break_even(outputs: FinancialOutputs) -> None:
     st.session_state["input_payload"] = payload
 
     break_even_df = _ensure_dataframe(outputs.break_even)
-    if pd is not None:
-        break_even_df = break_even_df.reset_index().rename(columns={"index": "Product"})
-    st.dataframe(break_even_df, use_container_width=True)
+    if pd is not None and isinstance(break_even_df, pd.DataFrame):
+        break_even_frame = break_even_df.reset_index().rename(columns={"index": "Product"})
+    else:
+        break_even_frame = pd.DataFrame(break_even_df)
+    st.dataframe(break_even_frame, use_container_width=True)
+
+    if px is not None and pd is not None and not break_even_frame.empty:
+        y_column = (
+            "Break-even Units"
+            if "Break-even Units" in break_even_frame.columns
+            else break_even_frame.columns[-1]
+        )
+        if y_column in break_even_frame.columns and "Product" in break_even_frame.columns:
+            fig_break_even = px.bar(
+                break_even_frame,
+                x="Product",
+                y=y_column,
+                title="Break-even Units by Product",
+            )
+            st.plotly_chart(fig_break_even, use_container_width=True)
 
     st.markdown("### Payback Schedule")
-    st.dataframe(_with_year(outputs.payback), use_container_width=True)
+    payback_df = _with_year(outputs.payback)
+    st.dataframe(payback_df, use_container_width=True)
+
+    if px is not None and pd is not None:
+        if isinstance(payback_df, pd.DataFrame):
+            payback_frame = payback_df
+        else:
+            payback_frame = pd.DataFrame(payback_df)
+        if {"Year", "Cumulative"}.issubset(payback_frame.columns):
+            fig_payback = px.line(
+                payback_frame,
+                x="Year",
+                y="Cumulative",
+                markers=True,
+                title="Cumulative Payback",
+            )
+            st.plotly_chart(fig_payback, use_container_width=True)
 
     st.markdown("### Discounted Payback Schedule")
-    st.dataframe(_with_year(outputs.discounted_payback), use_container_width=True)
+    discounted_df = _with_year(outputs.discounted_payback)
+    st.dataframe(discounted_df, use_container_width=True)
+
+    if px is not None and pd is not None:
+        if isinstance(discounted_df, pd.DataFrame):
+            discounted_frame = discounted_df
+        else:
+            discounted_frame = pd.DataFrame(discounted_df)
+        if {"Year", "Cumulative"}.issubset(discounted_frame.columns):
+            fig_discounted = px.line(
+                discounted_frame,
+                x="Year",
+                y="Cumulative",
+                markers=True,
+                title="Discounted Cumulative Payback",
+            )
+            st.plotly_chart(fig_discounted, use_container_width=True)
 
 
 
@@ -6612,7 +6896,9 @@ def _render_ai_settings(payload: dict, container: Optional[DeltaGenerator] = Non
 
 def _render_ai_summary(payload: Mapping) -> None:
     settings = _payload_to_ai_settings(payload)
-    st.caption("Adjust these settings from the sidebar's AI configuration form.")
+    st.caption(
+        "Adjust these settings from the Input Landing Page above the projection horizon controls."
+    )
 
     rows = [
         {"Setting": "Enabled", "Value": "Yes" if settings.get("enabled") else "No"},
