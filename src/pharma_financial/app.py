@@ -1,6 +1,7 @@
 """Streamlit web application for the Pharmaceuticals financial model."""
 from __future__ import annotations
 
+import copy
 import csv
 import hashlib
 import io
@@ -44,12 +45,7 @@ from .model import (
     FinancialModel,
     FinancialOutputs,
 )
-from .report import (
-    REPORT_FORMATS,
-    ReportGenerationError,
-    collect_report_sections,
-    generate_report,
-)
+from .report import collect_report_sections, generate_report
 from .table import Table
 
 try:  # pragma: no cover - executed in environments with pandas available
@@ -514,12 +510,12 @@ def main() -> None:
     )
 
     config_container = st.container()
-    report_container = st.container()
+    download_container = st.container()
 
     inputs, digest = _resolve_inputs(config_container)
     model, outputs = _cached_model_run(inputs, digest)
 
-    _render_report_download(report_container, model, outputs)
+    _render_excel_model_download(download_container, model, outputs)
 
     tabs = st.tabs(
         [
@@ -557,112 +553,10 @@ def main() -> None:
 
 def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:
     with container:
-        st.markdown("### Model Configuration")
-        st.write(
-            "Upload a customised assumptions file (JSON, CSV, Excel, Word, or PDF) or use the bundled defaults."
-        )
-
-        uploaded = st.file_uploader(
-            "Custom assumptions",
-            type=["json", "csv", "xlsx", "xls", "pdf", "docx"],
-            accept_multiple_files=False,
-            help="Provide assumptions as JSON or a document containing JSON text.",
-        )
-        if uploaded is not None:
-            file_bytes = uploaded.getvalue()
-            name = getattr(uploaded, "name", "upload")
-            suffix = Path(name).suffix.lower()
-            signature = f"{name}:{hashlib.md5(file_bytes).hexdigest()}"
-            if st.session_state.get("uploaded_signature") != signature:
-                try:
-                    raw = _load_payload_from_bytes(file_bytes, suffix)
-                    _initialise_session_payload(raw)
-                    parse_inputs(raw)
-                    st.session_state["uploaded_signature"] = signature
-                    st.success("Loaded custom assumptions.")
-                except Exception as exc:  # pragma: no cover - user supplied input
-                    st.error(f"Unable to parse uploaded file: {exc}")
-
-        if st.session_state.get("uploaded_signature"):
-            st.caption(
-                "Using uploaded assumptions. Adjust the tables below to update the model."
-            )
-        else:
-            st.caption("Using default assumptions bundled with the project.")
-
         if "input_payload" not in st.session_state:
             _initialise_session_payload(json.loads(DEFAULT_INPUT_JSON))
 
         payload = st.session_state["input_payload"]
-
-        saved_workspaces = st.session_state.setdefault("saved_workspaces", {})
-        if not isinstance(saved_workspaces, dict):  # pragma: no cover - defensive guard
-            saved_workspaces = {}
-            st.session_state["saved_workspaces"] = saved_workspaces
-
-        if "active_workspace_name" not in st.session_state:
-            st.session_state["active_workspace_name"] = _generate_workspace_label(
-                saved_workspaces
-            )
-
-        st.session_state.setdefault(
-            "workspace_label", st.session_state["active_workspace_name"]
-        )
-
-        st.markdown("### Workspace Controls")
-        workspace_input = st.text_input(
-            "Workspace name",
-            key="workspace_label",
-            help="Label used when saving, loading, or creating model workspaces.",
-        )
-
-        workspace_name = (workspace_input or "").strip()
-        if not workspace_name:
-            workspace_name = st.session_state.get("active_workspace_name", "Workspace 1")
-            st.session_state["workspace_label"] = workspace_name
-        st.session_state["active_workspace_name"] = workspace_name
-
-        control_columns = st.columns(3)
-        if control_columns[0].button("Save", key="workspace_save"):
-            saved_workspaces[workspace_name] = _clone_payload(payload)
-            control_columns[0].success(f"Workspace '{workspace_name}' saved.")
-
-        if control_columns[1].button("Reset", key="workspace_reset"):
-            st.session_state.pop("uploaded_signature", None)
-            _initialise_session_payload(json.loads(DEFAULT_INPUT_JSON))
-            control_columns[1].info("Model reset to bundled defaults.")
-            st.session_state["workspace_label"] = st.session_state.get(
-                "active_workspace_name", workspace_name
-            )
-            _rerun()
-
-        if control_columns[2].button("New", key="workspace_new"):
-            saved_workspaces[workspace_name] = _clone_payload(payload)
-            new_label = _generate_workspace_label(saved_workspaces)
-            st.session_state["workspace_label"] = new_label
-            st.session_state["active_workspace_name"] = new_label
-            st.session_state.pop("uploaded_signature", None)
-            _initialise_session_payload(json.loads(DEFAULT_INPUT_JSON))
-            control_columns[2].success(
-                f"Created new workspace '{new_label}'. Previous workspace saved as '{workspace_name}'."
-            )
-            _rerun()
-
-        if saved_workspaces:
-            st.markdown("#### Saved Workspaces")
-            options = sorted(str(name) for name in saved_workspaces.keys())
-            selection = st.selectbox(
-                "Load workspace",
-                options,
-                key="workspace_load_selection",
-            )
-            if selection and st.button("Load Selected", key="workspace_load_button"):
-                restored = _clone_payload(saved_workspaces.get(selection, {}))
-                _initialise_session_payload(restored)
-                st.session_state["workspace_label"] = selection
-                st.session_state["active_workspace_name"] = selection
-                st.success(f"Loaded workspace '{selection}'.")
-                _rerun()
 
     _ai_settings_to_payload(st.session_state.get("ai_settings", {}), payload)
     rows = st.session_state.setdefault(
@@ -958,44 +852,71 @@ def _load_payload_from_pdf(data: bytes) -> Mapping[str, object]:
     return _load_payload_from_text(combined)
 
 
-def _render_report_download(
-    container: DeltaGenerator, model: FinancialModel, outputs: FinancialOutputs
+def _render_excel_model_download(
+    container: DeltaGenerator, base_model: FinancialModel, base_outputs: FinancialOutputs
 ) -> None:
     with container:
-        st.markdown("### Report Download")
+        st.markdown("### Excel Model Download")
 
-        stored_format = st.session_state.get("report_download_format", REPORT_FORMATS[0])
-        if stored_format not in REPORT_FORMATS:
-            stored_format = REPORT_FORMATS[0]
+        payload = st.session_state.get("input_payload") or {}
+        scenario_options = _scenario_options(payload)
+        stored_selection = st.session_state.get("excel_scenario_selection")
+        default_index = 0
+        if isinstance(stored_selection, str) and stored_selection in scenario_options:
+            default_index = scenario_options.index(stored_selection)
 
-        selection = st.selectbox(
-            "Select report format",
-            REPORT_FORMATS,
-            index=REPORT_FORMATS.index(stored_format),
-            key="report_download_format",
+        selected_scenario = st.selectbox(
+            "Select scenario for Excel export",
+            scenario_options,
+            index=default_index,
+            key="excel_scenario_selection",
         )
 
-        try:
-            sections = collect_report_sections(model, outputs)
-        except Exception as exc:  # pragma: no cover - defensive user feedback
-            st.error(f"Unable to assemble report content: {exc}")
-            return
+        snapshot = st.session_state.get("input_snapshot")
+        if snapshot is None:
+            snapshot = copy.deepcopy(payload)
+            st.session_state["input_snapshot"] = snapshot
 
-        try:
-            data, mime, filename = generate_report(sections, selection)
-        except ReportGenerationError as exc:
-            st.info(str(exc))
-            return
-        except Exception as exc:  # pragma: no cover - unexpected failure surfaced to user
-            st.error(f"Report generation failed: {exc}")
-            return
-
-        st.download_button(
-            label=f"Download {selection} report",
-            data=data,
-            file_name=filename,
-            mime=mime,
+        model, results = _ensure_scenario_payload(
+            selected_scenario, snapshot, base_model, base_outputs
         )
+        st.session_state["model_results"] = (model, results)
+
+        excel_map: dict[str, bytes] = st.session_state.setdefault("excel_bytes_map", {})
+        scenario_label = (selected_scenario or "Base").strip() or "Base"
+        excel_bytes = excel_map.get(scenario_label)
+
+        setattr(model, "scenario", scenario_label)
+
+        key_suffix = re.sub(r"[^0-9a-z]+", "_", scenario_label.lower()).strip("_") or "base"
+        prepare_key = f"prepare_excel_{key_suffix}"
+        download_key = f"download_excel_{key_suffix}"
+        clear_key = f"clear_excel_{key_suffix}"
+
+        download_container = st.container()
+        with download_container:
+            if not excel_bytes:
+                if st.button("Prepare Excel Model", key=prepare_key):
+                    with st.spinner("Preparing Excel workbook..."):
+                        excel_bytes = _generate_excel_bytes(
+                            model, results, scenario_label
+                        )
+                    excel_map[scenario_label] = excel_bytes
+                    st.session_state.excel_bytes_map = excel_map
+            if excel_bytes:
+                st.download_button(
+                    "Download Excel Model",
+                    data=excel_bytes,
+                    file_name="Ecommerce_Financial_Model.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=download_key,
+                )
+                if st.button("Clear Prepared Excel", key=clear_key):
+                    excel_map.pop(scenario_label, None)
+                    st.session_state.excel_bytes_map = excel_map
+                    excel_bytes = None
+            if not excel_bytes:
+                st.info("Click 'Prepare Excel Model' to generate the workbook for download.")
 
 
 def _render_inputs_tab(
@@ -1009,67 +930,6 @@ def _render_inputs_tab(
 
     st.markdown("### Projection Horizon")
     _render_projection_horizon(payload)
-
-    st.markdown("### Excel Model Export")
-    scenario_options = _scenario_options(payload)
-    stored_selection = st.session_state.get("excel_scenario_selection")
-    default_index = 0
-    if isinstance(stored_selection, str) and stored_selection in scenario_options:
-        default_index = scenario_options.index(stored_selection)
-
-    selected_scenario = st.selectbox(
-        "Select scenario for Excel export",
-        scenario_options,
-        index=default_index,
-        key="excel_scenario_selection",
-    )
-
-    snapshot = _clone_payload(payload)
-    st.session_state["input_snapshot"] = snapshot
-
-    export_model, export_outputs = _ensure_scenario_payload(
-        selected_scenario, snapshot, base_model, base_outputs
-    )
-
-    excel_map: dict[str, bytes] = st.session_state.setdefault("excel_bytes_map", {})
-    scenario_key = selected_scenario or "Base"
-    slug = _scenario_slug(scenario_key)
-    excel_bytes = excel_map.get(scenario_key)
-
-    download_container = st.container()
-    with download_container:
-        if not excel_bytes:
-            if st.button("Prepare Excel Model", key=f"prepare_excel_{slug}"):
-                with st.spinner("Preparing Excel workbook..."):
-                    try:
-                        excel_bytes = _generate_excel_bytes(
-                            export_model, export_outputs, scenario_key
-                        )
-                    except Exception as exc:  # pragma: no cover - user facing feedback
-                        st.error(f"Unable to generate Excel workbook: {exc}")
-                        excel_bytes = None
-                    else:
-                        excel_map[scenario_key] = excel_bytes
-                        st.session_state["excel_bytes_map"] = excel_map
-
-        if excel_bytes:
-            filename = "Pharma_Financial_Model.xlsx"
-            if slug != "base":
-                filename = f"Pharma_Financial_Model_{slug}.xlsx"
-            st.download_button(
-                "Download Excel Model",
-                data=excel_bytes,
-                file_name=filename,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key=f"download_excel_{slug}",
-            )
-            if st.button("Clear Prepared Excel", key=f"clear_excel_{slug}"):
-                excel_map.pop(scenario_key, None)
-                st.session_state["excel_bytes_map"] = excel_map
-                excel_bytes = None
-
-        if not excel_bytes:
-            st.info("Click 'Prepare Excel Model' to generate the workbook for download.")
 
     st.subheader("Core Assumptions")
     rows: List[dict] = st.session_state.get("core_assumption_rows", [])
