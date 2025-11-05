@@ -570,8 +570,6 @@ def _resolve_inputs() -> tuple[ModelInputs, str]:
             st.sidebar.success(f"Loaded workspace '{selection}'.")
             _rerun()
 
-    st.sidebar.markdown("### AI & Machine Learning Configuration")
-    _render_ai_settings(payload, container=st.sidebar)
     _ai_settings_to_payload(st.session_state.get("ai_settings", {}), payload)
     rows = st.session_state.setdefault(
         "core_assumption_rows", _payload_to_core_rows(payload)
@@ -906,6 +904,10 @@ def _render_report_download(model: FinancialModel, outputs: FinancialOutputs) ->
 def _render_inputs_tab(inputs: ModelInputs) -> None:
     payload = st.session_state["input_payload"]
 
+    st.markdown("### AI & Machine Learning Configuration")
+    _render_ai_settings(payload)
+    _ai_settings_to_payload(st.session_state.get("ai_settings", {}), payload)
+
     st.markdown("### Projection Horizon")
     _render_projection_horizon(payload)
 
@@ -1172,7 +1174,7 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
     st.markdown("### Risk Schedule")
     _render_risk_schedule(payload)
 
-    st.markdown("### AI & Machine Learning Configuration")
+    st.markdown("### AI & Machine Learning Summary")
     _render_ai_summary(payload)
 
     _core_rows_to_payload(st.session_state.get("core_assumption_rows", []), payload)
@@ -6612,7 +6614,9 @@ def _render_ai_settings(payload: dict, container: Optional[DeltaGenerator] = Non
 
 def _render_ai_summary(payload: Mapping) -> None:
     settings = _payload_to_ai_settings(payload)
-    st.caption("Adjust these settings from the sidebar's AI configuration form.")
+    st.caption(
+        "Adjust these settings from the Input Landing Page above the projection horizon controls."
+    )
 
     rows = [
         {"Setting": "Enabled", "Value": "Yes" if settings.get("enabled") else "No"},

@@ -105,6 +105,7 @@ class FinancialModel:
         self._overdraft_interest_cache: List[float] | None = None
         self._overdraft_outstanding_cache: List[float] | None = None
         self._commission_cache: dict[int, dict[str, tuple[float, float, int]]] | None = None
+        self._distributor_receivable_cache: List[float] | None = None
 
     # ------------------------------------------------------------------ core
     def _build_inflation_factors(self, series: Iterable[Number]) -> List[float]:
@@ -168,30 +169,17 @@ class FinancialModel:
 
     # -------------------------------------------------------------- schedules
     def revenue_schedule(self) -> Table:
-        """Build the revenue schedule from total lifetime units.
+        """Build the revenue schedule using the production ramp."""
 
-        Each product's ``Total Production Units`` figure from the core assumptions
-        is treated as the full-horizon volume.  The model multiplies those totals
-        by the configured selling prices and then scales the result for each year
-        using the cumulative inflation factor and combined risk factor.  This
-        ensures the gross revenue figures shown on the Statement of Financial
-        Performance reflect the exact core-assumption totals while still
-        incorporating the year-specific macro adjustments.
-        """
         prices = self._unit_prices()
+        production = self._production()
         commission_params = self._commission_parameters()
         risk_factors = self._risk_factors()
-        total_units = self._total_units()
-
-        base_revenue: Dict[str, float] = {}
-        for product in self.products:
-            units = float(total_units.get(product, 0.0))
-            price = float(prices.get(product, 0.0))
-            base_revenue[product] = units * price
 
         gross_totals: List[float] = []
         commission: List[float] = []
         net_revenue: List[float] = []
+        distributor_receivable_weighted: List[float] = [0.0 for _ in self.years]
 
         columns: MutableMapping[str, List[float]] = {product: [] for product in self.products}
 
@@ -207,15 +195,29 @@ class FinancialModel:
                 inflation_factor = self._inflation[-1] if self._inflation else 1.0
             year_rates = commission_params.get(int(year), {})
             for product in self.products:
-                gross_value = base_revenue.get(product, 0.0) * inflation_factor * risk
+                product_units = 0.0
+                if product in production:
+                    values = production[product]
+                    if idx < len(values):
+                        product_units = values[idx]
+                    elif values:
+                        product_units = values[-1]
+                price = float(prices.get(product, 0.0))
+                gross_value = product_units * price * inflation_factor * risk
                 columns[product].append(gross_value)
                 gross_year += gross_value
-                rate, share, _ = year_rates.get(product, (0.0, 1.0, 0))
-                commission_amount = gross_value * max(share, 0.0) * max(rate, 0.0)
+                rate, share, payment_days = year_rates.get(product, (0.0, 1.0, 0))
+                effective_share = max(share, 0.0)
+                commission_rate = max(rate, 0.0)
+                commission_amount = gross_value * effective_share * commission_rate
+                distributor_portion = gross_value * effective_share - commission_amount
+                distributor_receivable_weighted[idx] += distributor_portion * max(payment_days, 0)
                 commission_year += commission_amount
             gross_totals.append(gross_year)
             commission.append(commission_year)
             net_revenue.append(gross_year - commission_year)
+
+        self._distributor_receivable_cache = distributor_receivable_weighted
 
         columns["Gross Revenue"] = gross_totals
         columns["Distributors Commission"] = commission
@@ -633,19 +635,13 @@ class FinancialModel:
             )
         ]
 
-        financing = self.inputs.financing
-        dividends_paid = [
-            -ni * financing.dividend_payout
-            for ni in net_income
-        ]
         interest_paid = [-value for value in interest_expense]
         taxes_paid = [-value for value in tax_expense]
 
         net_cash_from_operations = [
-            cfo + div + interest + tax
-            for cfo, div, interest, tax in zip(
+            cfo + interest + tax
+            for cfo, interest, tax in zip(
                 cash_flow_from_operations,
-                dividends_paid,
                 interest_paid,
                 taxes_paid,
                 strict=False,
@@ -808,6 +804,20 @@ class FinancialModel:
 
         return [float(value) for value in days[: len(self.years)]]
 
+    def _distributor_receivable_balances(self) -> List[float]:
+        if self._distributor_receivable_cache is None:
+            self.revenue_schedule()
+
+        weighted = self._distributor_receivable_cache or [0.0 for _ in self.years]
+        days_in_year = self._calendar_days()
+        balances: List[float] = []
+        for weighted_value, day_count in zip(weighted, days_in_year):
+            if day_count:
+                balances.append(weighted_value / day_count)
+            else:
+                balances.append(0.0)
+        return balances
+
     def _working_capital_balances(self) -> Table:
         revenue = self.revenue_schedule().column("Net Revenue")
         cost_of_sales = self.cost_structure().column("Cost of Sales")
@@ -841,7 +851,9 @@ class FinancialModel:
         ap_days = _expand(days.accounts_payable)
         other_liability_days = _expand(days.other_liabilities)
 
-        ar = _calc(ar_days, revenue)
+        ar_base = _calc(ar_days, revenue)
+        distributor_receivables = self._distributor_receivable_balances()
+        ar = [base + dist for base, dist in zip(ar_base, distributor_receivables)]
         inventory = _calc(inventory_days, cost_of_sales)
         prepaid = _calc(prepaid_days, cost_of_sales)
         other_assets = _calc(other_asset_days, cost_of_sales)
@@ -858,6 +870,8 @@ class FinancialModel:
             {
                 "Days in Year": days_in_year,
                 "Accounts Receivable Days": ar_days,
+                "Accounts Receivable (Base)": ar_base,
+                "Distributor Receivables": distributor_receivables,
                 "Accounts Receivable": ar,
                 "Inventory Days": inventory_days,
                 "Inventory": inventory,
@@ -964,6 +978,11 @@ class FinancialModel:
         _, overdraft = self._overdraft_schedules()
         return [senior[idx] + revolver[idx] + overdraft[idx] for idx in range(len(self.years))]
 
+    def _dividend_payments(self) -> List[float]:
+        net_income = self.income_statement().column("Net Income")
+        payout = self.inputs.financing.dividend_payout
+        return [-max(ni, 0.0) * payout for ni in net_income]
+
     def _financing_cash_flow_components(self) -> Dict[str, List[float]]:
         financing = self.inputs.financing
         _, senior_outstanding = self._senior_debt_schedules()
@@ -986,16 +1005,19 @@ class FinancialModel:
         if financing.initial_investment:
             initial_investment[0] = -float(financing.initial_investment)
 
+        dividends_paid = self._dividend_payments()
+
         return {
             "Debt Drawdown/(Repayment)": debt_movements,
             "Share Capital Raised": share_issuance,
             "Initial Investment": initial_investment,
+            "Dividends Paid": dividends_paid,
         }
 
     def _equity_schedule(self, cash_flow: Table, income: Table) -> List[float]:
         financing = self.inputs.financing
         net_income = income.column("Net Income")
-        dividends = [ni * financing.dividend_payout for ni in net_income]
+        dividends = [max(ni, 0.0) * financing.dividend_payout for ni in net_income]
         retained = _cumulative([ni - div for ni, div in zip(net_income, dividends)])
         return [financing.share_capital + value for value in retained]
 

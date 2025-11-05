@@ -112,15 +112,13 @@ class FinancialModelTest(unittest.TestCase):
         for actual, expected in zip(cfo_column, expected_cfo):
             self.assertAlmostEqual(actual, expected, places=6)
 
-        payout = inputs.financing.dividend_payout
-        dividends_paid = [-ni * payout for ni in net_income]
         interest_paid = [-value for value in interest]
         taxes_paid = [-value for value in taxes]
 
         expected_net_ops = [
-            cfo + div + interest_val + tax_val
-            for cfo, div, interest_val, tax_val in zip(
-                expected_cfo, dividends_paid, interest_paid, taxes_paid
+            cfo + interest_val + tax_val
+            for cfo, interest_val, tax_val in zip(
+                expected_cfo, interest_paid, taxes_paid
             )
         ]
         net_ops_column = cash_flow.column("Net Cash Generated from Operating Activities")
@@ -333,7 +331,7 @@ class FinancialModelTest(unittest.TestCase):
             running *= 1.0 + float(rate)
             cumulative_inflation.append(running)
 
-        total_units = self.inputs.total_production_units
+        production = self.inputs.production_estimate
 
         for idx, year in enumerate(self.inputs.years):
             inflation_factor = cumulative_inflation[idx] if idx < len(cumulative_inflation) else cumulative_inflation[-1]
@@ -346,9 +344,15 @@ class FinancialModelTest(unittest.TestCase):
 
             total = 0.0
             for product in self.inputs.products:
-                base_units = float(total_units.get(product, 0.0))
+                units = 0.0
+                if product in production:
+                    schedule = production[product]
+                    if idx < len(schedule):
+                        units = float(schedule[idx])
+                    elif schedule:
+                        units = float(schedule[-1])
                 price = float(self.inputs.unit_costs[product].selling_price)
-                total += base_units * price * inflation_factor * risk_factor
+                total += units * price * inflation_factor * risk_factor
             expected.append(total)
 
         self.assertEqual(len(expected), len(gross))
@@ -363,17 +367,23 @@ class FinancialModelTest(unittest.TestCase):
         risk = self.model._risk_factors()
 
         expected: list[float] = []
-        total_units = self.inputs.total_production_units
+        production = self.inputs.production_estimate
 
         for idx, year in enumerate(self.inputs.years):
             year_params = parameters.get(int(year), {})
             total = 0.0
             for product in self.inputs.products:
-                base_units = float(total_units.get(product, 0.0))
+                units = 0.0
+                if product in production:
+                    schedule = production[product]
+                    if idx < len(schedule):
+                        units = float(schedule[idx])
+                    elif schedule:
+                        units = float(schedule[-1])
                 price = self.inputs.unit_costs[product].selling_price
                 factor = risk[idx] if idx < len(risk) else (risk[-1] if risk else 1.0)
                 inflation_factor = inflation[idx] if idx < len(inflation) else inflation[-1]
-                gross_value = base_units * price * inflation_factor * factor
+                gross_value = units * price * inflation_factor * factor
                 rate, share, _ = year_params.get(product, (0.0, 1.0, 0))
                 total += gross_value * rate * share
             expected.append(total)
