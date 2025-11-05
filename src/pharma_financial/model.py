@@ -39,6 +39,7 @@ class FinancialModel:
         self.years = inputs.years
         self.products = inputs.products
         self._inflation = np.cumprod(_inflation_multiplier(inputs.inflation_series))
+        self.scenario = "Base Case"
 
     # ---------------------------- Helper sections ---------------------------- #
     def _production_df(self) -> pd.DataFrame:
