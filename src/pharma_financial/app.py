@@ -88,6 +88,8 @@ def _render_inputs_tab() -> tuple[ModelInputs, FinancialOutputs]:
     base_model = FinancialModel(copy.deepcopy(inputs))
     base_model.scenario = "Base Case"
     base_outputs = base_model.run()
+    st.session_state["base_model"] = base_model
+    st.session_state["base_outputs"] = base_outputs
 
     st.subheader("Core Assumptions")
     assumption_rows = [
@@ -169,11 +171,22 @@ def _render_inputs_tab() -> tuple[ModelInputs, FinancialOutputs]:
 
 
 def _render_excel_download_section(
-    inputs: ModelInputs,
-    base_model: FinancialModel,
-    base_outputs: FinancialOutputs,
+    inputs: Optional[ModelInputs] = None,
+    base_model: Optional[FinancialModel] = None,
+    base_outputs: Optional[FinancialOutputs] = None,
 ) -> None:
     st.markdown("### Excel Model Export")
+
+    if inputs is None:
+        inputs = st.session_state.get(_SESSION_INPUTS_KEY)
+    if base_model is None:
+        base_model = st.session_state.get("base_model")
+    if base_outputs is None:
+        base_outputs = st.session_state.get("base_outputs")
+
+    if inputs is None or base_model is None or base_outputs is None:
+        st.info("Excel export controls will appear after assumptions load.")
+        return
 
     scenario_map = _scenario_label_map(inputs)
     scenario_labels = list(scenario_map.keys())
@@ -400,6 +413,8 @@ def _load_custom_inputs() -> None:
         )
         st.session_state["input_snapshot"] = copy.deepcopy(inputs)
         st.session_state["excel_bytes_map"] = {}
+        st.session_state.pop("base_model", None)
+        st.session_state.pop("base_outputs", None)
     finally:
         st.session_state.pop(_UPLOAD_WIDGET_KEY, None)
 
@@ -415,6 +430,8 @@ def _reset_inputs_to_default() -> None:
         st.session_state[_SESSION_INPUTS_KEY]
     )
     st.session_state["excel_bytes_map"] = {}
+    st.session_state.pop("base_model", None)
+    st.session_state.pop("base_outputs", None)
     st.session_state.pop(_UPLOAD_WIDGET_KEY, None)
 
 
@@ -436,6 +453,8 @@ def _render_dashboard_tab(outputs: FinancialOutputs) -> None:
         with col:
             formatted = _format_number(value)
             st.metric(label=name, value=formatted)
+
+    _render_excel_download_section()
 
 
 def _render_statement_tab(title: str, df: pd.DataFrame) -> None:
