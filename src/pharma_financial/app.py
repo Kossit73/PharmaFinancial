@@ -164,25 +164,34 @@ def _load_custom_inputs() -> None:
         return
 
     try:
-        raw = json.loads(uploaded.getvalue().decode("utf-8"))
-    except json.JSONDecodeError as exc:
-        st.session_state[_SESSION_FEEDBACK_KEY] = ("error", f"Invalid JSON file: {exc}")
-        st.session_state[_UPLOAD_WIDGET_KEY] = None
-        return
+        try:
+            raw = json.loads(uploaded.getvalue().decode("utf-8"))
+        except json.JSONDecodeError as exc:
+            st.session_state[_SESSION_FEEDBACK_KEY] = (
+                "error",
+                f"Invalid JSON file: {exc}",
+            )
+            return
 
-    try:
-        inputs = parse_inputs(raw)
-    except Exception as exc:  # pragma: no cover - user supplied input
-        st.session_state[_SESSION_FEEDBACK_KEY] = (
-            "error",
-            f"Unable to parse inputs: {exc}",
+        try:
+            inputs = parse_inputs(raw)
+        except Exception as exc:  # pragma: no cover - user supplied input
+            st.session_state[_SESSION_FEEDBACK_KEY] = (
+                "error",
+                f"Unable to parse inputs: {exc}",
+            )
+            return
+
+        st.session_state[_SESSION_INPUTS_KEY] = inputs
+        st.session_state[_SESSION_INPUT_SOURCE_KEY] = getattr(
+            uploaded, "name", "uploaded file"
         )
-        st.session_state[_UPLOAD_WIDGET_KEY] = None
-        return
-
-    st.session_state[_SESSION_INPUTS_KEY] = inputs
-    st.session_state[_SESSION_INPUT_SOURCE_KEY] = getattr(uploaded, "name", "uploaded file")
-    st.session_state[_SESSION_FEEDBACK_KEY] = ("success", "Loaded custom assumptions.")
+        st.session_state[_SESSION_FEEDBACK_KEY] = (
+            "success",
+            "Loaded custom assumptions.",
+        )
+    finally:
+        st.session_state.pop(_UPLOAD_WIDGET_KEY, None)
 
 
 def _reset_inputs_to_default() -> None:
@@ -192,7 +201,7 @@ def _reset_inputs_to_default() -> None:
         "success",
         "Reverted to default assumptions.",
     )
-    st.session_state[_UPLOAD_WIDGET_KEY] = None
+    st.session_state.pop(_UPLOAD_WIDGET_KEY, None)
 
 
 def _render_dashboard_tab(outputs: FinancialOutputs) -> None:
