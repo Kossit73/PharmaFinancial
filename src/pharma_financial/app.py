@@ -15,6 +15,11 @@ from .model import FinancialModel, FinancialOutputs
 DEFAULT_INPUT_PATH = Path(__file__).resolve().parent / "data" / "default_inputs.json"
 DEFAULT_INPUT_JSON = DEFAULT_INPUT_PATH.read_text(encoding="utf-8")
 
+_SESSION_INPUTS_KEY = "model_inputs"
+_SESSION_INPUT_SOURCE_KEY = "model_inputs_source"
+_SESSION_FEEDBACK_KEY = "model_inputs_feedback"
+_UPLOAD_WIDGET_KEY = "custom_assumptions_file"
+
 
 def main() -> None:
     st.set_page_config(
@@ -28,9 +33,6 @@ def main() -> None:
         "Interactive financial modelling environment covering statements, "
         "scenario analysis, and Monte Carlo simulation."
     )
-
-    inputs = _resolve_inputs()
-    outputs = FinancialModel(inputs).run()
 
     tabs = st.tabs(
         [
@@ -47,7 +49,10 @@ def main() -> None:
     )
 
     with tabs[0]:
-        _render_inputs_tab(inputs)
+        inputs = _render_inputs_tab()
+
+    outputs = FinancialModel(inputs).run()
+
     with tabs[1]:
         _render_dashboard_tab(outputs)
     with tabs[2]:
@@ -66,37 +71,16 @@ def main() -> None:
         _render_break_even(outputs)
 
 
-def _resolve_inputs() -> ModelInputs:
-    st.sidebar.header("Model Configuration")
-    st.sidebar.write(
-        "Upload a customised JSON assumptions file or use the bundled defaults."
-    )
-
-    uploaded = st.sidebar.file_uploader(
-        "Custom assumptions (JSON)", type="json", accept_multiple_files=False
-    )
-    if uploaded is not None:
-        try:
-            raw = json.loads(uploaded.getvalue().decode("utf-8"))
-            inputs = parse_inputs(raw)
-            st.sidebar.success("Loaded custom assumptions.")
-            return inputs
-        except json.JSONDecodeError as exc:
-            st.sidebar.error(f"Invalid JSON file: {exc}")
-        except Exception as exc:  # pragma: no cover - user supplied input
-            st.sidebar.error(f"Unable to parse inputs: {exc}")
-
-    st.sidebar.caption("Using default assumptions bundled with the project.")
-    st.sidebar.download_button(
-        label="Download default JSON",
-        data=DEFAULT_INPUT_JSON,
-        file_name="default_inputs.json",
-        mime="application/json",
-    )
-    return load_inputs(DEFAULT_INPUT_PATH)
+def _ensure_inputs_initialized() -> None:
+    if _SESSION_INPUTS_KEY not in st.session_state:
+        st.session_state[_SESSION_INPUTS_KEY] = load_inputs(DEFAULT_INPUT_PATH)
+        st.session_state[_SESSION_INPUT_SOURCE_KEY] = "default"
 
 
-def _render_inputs_tab(inputs: ModelInputs) -> None:
+def _render_inputs_tab() -> ModelInputs:
+    _ensure_inputs_initialized()
+    inputs: ModelInputs = st.session_state[_SESSION_INPUTS_KEY]
+
     st.subheader("Core Assumptions")
     assumption_rows = [
         {
@@ -133,6 +117,82 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
         }
     )
     st.dataframe(utility_df, use_container_width=True)
+
+    st.markdown("### Model Configuration")
+    st.write("Upload a customised JSON assumptions file or use the bundled defaults.")
+
+    feedback = st.session_state.pop(_SESSION_FEEDBACK_KEY, None)
+    if feedback is not None:
+        level, message = feedback
+        if level == "success":
+            st.success(message)
+        else:
+            st.error(message)
+
+    uploaded = st.file_uploader(
+        "Custom assumptions (JSON)",
+        type="json",
+        accept_multiple_files=False,
+        key=_UPLOAD_WIDGET_KEY,
+        on_change=_load_custom_inputs,
+    )
+
+    current_source = st.session_state.get(_SESSION_INPUT_SOURCE_KEY, "default")
+    if current_source == "default":
+        st.caption("Using default assumptions bundled with the project.")
+    else:
+        st.caption(f"Using assumptions from {current_source}.")
+
+    st.download_button(
+        label="Download default JSON",
+        data=DEFAULT_INPUT_JSON,
+        file_name="default_inputs.json",
+        mime="application/json",
+    )
+
+    st.button(
+        "Use bundled default assumptions",
+        on_click=_reset_inputs_to_default,
+    )
+
+    return st.session_state[_SESSION_INPUTS_KEY]
+
+
+def _load_custom_inputs() -> None:
+    uploaded = st.session_state.get(_UPLOAD_WIDGET_KEY)
+    if uploaded is None:
+        return
+
+    try:
+        raw = json.loads(uploaded.getvalue().decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        st.session_state[_SESSION_FEEDBACK_KEY] = ("error", f"Invalid JSON file: {exc}")
+        st.session_state[_UPLOAD_WIDGET_KEY] = None
+        return
+
+    try:
+        inputs = parse_inputs(raw)
+    except Exception as exc:  # pragma: no cover - user supplied input
+        st.session_state[_SESSION_FEEDBACK_KEY] = (
+            "error",
+            f"Unable to parse inputs: {exc}",
+        )
+        st.session_state[_UPLOAD_WIDGET_KEY] = None
+        return
+
+    st.session_state[_SESSION_INPUTS_KEY] = inputs
+    st.session_state[_SESSION_INPUT_SOURCE_KEY] = getattr(uploaded, "name", "uploaded file")
+    st.session_state[_SESSION_FEEDBACK_KEY] = ("success", "Loaded custom assumptions.")
+
+
+def _reset_inputs_to_default() -> None:
+    st.session_state[_SESSION_INPUTS_KEY] = load_inputs(DEFAULT_INPUT_PATH)
+    st.session_state[_SESSION_INPUT_SOURCE_KEY] = "default"
+    st.session_state[_SESSION_FEEDBACK_KEY] = (
+        "success",
+        "Reverted to default assumptions.",
+    )
+    st.session_state[_UPLOAD_WIDGET_KEY] = None
 
 
 def _render_dashboard_tab(outputs: FinancialOutputs) -> None:
