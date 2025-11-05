@@ -256,6 +256,93 @@ def _cached_model_run(inputs: ModelInputs, digest: str) -> tuple[FinancialModel,
     return model, outputs
 
 
+def _scenario_options(payload: Mapping[str, object]) -> List[str]:
+    """Return the available scenario labels including the base case."""
+
+    options: List[str] = ["Base"]
+    scenarios = payload.get("scenarios")
+    if not isinstance(scenarios, Mapping):
+        return options
+
+    for name in scenarios.keys():
+        label = str(name).strip()
+        if not label:
+            continue
+        if label.lower() == "base":
+            options[0] = label
+        elif label not in options:
+            options.append(label)
+
+    return options
+
+
+def _scenario_slug(name: str) -> str:
+    """Return a URL-safe slug for ``name`` used in widget keys and filenames."""
+
+    slug = re.sub(r"[^0-9a-z]+", "_", name.strip().lower())
+    slug = re.sub(r"_+", "_", slug).strip("_")
+    return slug or "base"
+
+
+def _ensure_scenario_payload(
+    selected_scenario: str,
+    snapshot: Mapping[str, object],
+    base_model: FinancialModel,
+    base_outputs: FinancialOutputs,
+) -> tuple[FinancialModel, FinancialOutputs]:
+    """Return model results for ``selected_scenario`` built from ``snapshot`` payload."""
+
+    scenario_name = (selected_scenario or "Base").strip()
+    if not scenario_name:
+        scenario_name = "Base"
+
+    if scenario_name.lower() == "base":
+        return base_model, base_outputs
+
+    scenarios = snapshot.get("scenarios", {})
+    matched: Mapping[str, object] | None = None
+    if isinstance(scenarios, Mapping):
+        for name, values in scenarios.items():
+            if str(name).strip().lower() == scenario_name.lower():
+                if isinstance(values, Mapping):
+                    matched = values
+                break
+
+    if matched is None:
+        return base_model, base_outputs
+
+    payload = _clone_payload(snapshot)
+
+    inflation = matched.get("inflation")
+    if isinstance(inflation, Iterable) and not isinstance(inflation, (str, bytes)):
+        payload["inflation_series"] = [float(value) for value in inflation]
+
+    interest = matched.get("interest")
+    if isinstance(interest, Iterable) and not isinstance(interest, (str, bytes)):
+        interest_values = [float(value) for value in interest if value is not None]
+        if interest_values:
+            financing = dict(payload.get("financing", {}))
+            financing["discount_rate"] = float(interest_values[0])
+            payload["financing"] = financing
+
+    inputs, digest = _cached_parse_inputs(payload)
+    return _cached_model_run(inputs, digest)
+
+
+def _generate_excel_bytes(
+    model: FinancialModel, outputs: FinancialOutputs, scenario_name: str
+) -> bytes:
+    """Return an Excel workbook representing the model results."""
+
+    sections = collect_report_sections(model, outputs)
+    report_name = "pharma_financial_model"
+    slug = _scenario_slug(scenario_name)
+    if slug and slug != "base":
+        report_name = f"{report_name}_{slug}"
+    data, _mime, _filename = generate_report(sections, "Excel", report_name=report_name)
+    return data
+
+
 def _render_projection_horizon(payload: dict) -> None:
     """Allow users to adjust the model start and end years via dropdowns."""
 
@@ -449,7 +536,7 @@ def main() -> None:
     )
 
     with tabs[0]:
-        _render_inputs_tab(inputs)
+        _render_inputs_tab(inputs, model, outputs)
     with tabs[1]:
         _render_dashboard_tab(model, outputs)
     with tabs[2]:
@@ -911,7 +998,9 @@ def _render_report_download(
         )
 
 
-def _render_inputs_tab(inputs: ModelInputs) -> None:
+def _render_inputs_tab(
+    inputs: ModelInputs, base_model: FinancialModel, base_outputs: FinancialOutputs
+) -> None:
     payload = st.session_state["input_payload"]
 
     st.markdown("### AI & Machine Learning Configuration")
@@ -920,6 +1009,67 @@ def _render_inputs_tab(inputs: ModelInputs) -> None:
 
     st.markdown("### Projection Horizon")
     _render_projection_horizon(payload)
+
+    st.markdown("### Excel Model Export")
+    scenario_options = _scenario_options(payload)
+    stored_selection = st.session_state.get("excel_scenario_selection")
+    default_index = 0
+    if isinstance(stored_selection, str) and stored_selection in scenario_options:
+        default_index = scenario_options.index(stored_selection)
+
+    selected_scenario = st.selectbox(
+        "Select scenario for Excel export",
+        scenario_options,
+        index=default_index,
+        key="excel_scenario_selection",
+    )
+
+    snapshot = _clone_payload(payload)
+    st.session_state["input_snapshot"] = snapshot
+
+    export_model, export_outputs = _ensure_scenario_payload(
+        selected_scenario, snapshot, base_model, base_outputs
+    )
+
+    excel_map: dict[str, bytes] = st.session_state.setdefault("excel_bytes_map", {})
+    scenario_key = selected_scenario or "Base"
+    slug = _scenario_slug(scenario_key)
+    excel_bytes = excel_map.get(scenario_key)
+
+    download_container = st.container()
+    with download_container:
+        if not excel_bytes:
+            if st.button("Prepare Excel Model", key=f"prepare_excel_{slug}"):
+                with st.spinner("Preparing Excel workbook..."):
+                    try:
+                        excel_bytes = _generate_excel_bytes(
+                            export_model, export_outputs, scenario_key
+                        )
+                    except Exception as exc:  # pragma: no cover - user facing feedback
+                        st.error(f"Unable to generate Excel workbook: {exc}")
+                        excel_bytes = None
+                    else:
+                        excel_map[scenario_key] = excel_bytes
+                        st.session_state["excel_bytes_map"] = excel_map
+
+        if excel_bytes:
+            filename = "Pharma_Financial_Model.xlsx"
+            if slug != "base":
+                filename = f"Pharma_Financial_Model_{slug}.xlsx"
+            st.download_button(
+                "Download Excel Model",
+                data=excel_bytes,
+                file_name=filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"download_excel_{slug}",
+            )
+            if st.button("Clear Prepared Excel", key=f"clear_excel_{slug}"):
+                excel_map.pop(scenario_key, None)
+                st.session_state["excel_bytes_map"] = excel_map
+                excel_bytes = None
+
+        if not excel_bytes:
+            st.info("Click 'Prepare Excel Model' to generate the workbook for download.")
 
     st.subheader("Core Assumptions")
     rows: List[dict] = st.session_state.get("core_assumption_rows", [])
