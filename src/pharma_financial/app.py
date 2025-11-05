@@ -1457,7 +1457,54 @@ def _render_statement_tab(title: str, table) -> None:
         display = table.round(0)
     else:
         display = table
-    st.dataframe(_with_year(display), use_container_width=True)
+
+    display_with_year = _with_year(display)
+    st.dataframe(display_with_year, use_container_width=True)
+
+    if px is None or pd is None:
+        st.caption("Install pandas and plotly to unlock interactive analytics for this statement.")
+        return
+
+    if isinstance(display_with_year, pd.DataFrame):
+        frame = display_with_year
+    else:
+        frame = pd.DataFrame(display_with_year)
+
+    numeric_columns = [
+        column
+        for column in frame.columns
+        if column != "Year" and pd.api.types.is_numeric_dtype(frame[column])
+    ]
+    if not numeric_columns:
+        return
+
+    headline_columns = numeric_columns[:4]
+    if headline_columns:
+        st.markdown("#### Analytical Trends")
+        columns = st.columns(min(len(headline_columns), 2))
+        for idx, column in enumerate(headline_columns):
+            with columns[idx % len(columns)]:
+                fig = px.line(
+                    frame,
+                    x="Year",
+                    y=column,
+                    markers=True,
+                    title=f"{column} Trend",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+    if len(numeric_columns) > len(headline_columns):
+        remaining = numeric_columns[len(headline_columns) :]
+        melt_frame = frame.melt(id_vars=["Year"], value_vars=remaining, var_name="Metric", value_name="Value")
+        fig = px.line(
+            melt_frame,
+            x="Year",
+            y="Value",
+            color="Metric",
+            markers=True,
+            title="Additional Statement Metrics",
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
 
 def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -> None:
@@ -1475,17 +1522,93 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
         display_frame = income_frame
     st.dataframe(display_frame, use_container_width=True)
 
+    if px is not None and pd is not None:
+        if isinstance(display_frame, pd.DataFrame):
+            frame = display_frame
+        else:
+            frame = pd.DataFrame(display_frame)
+        if "Year" in frame.columns:
+            line_metrics = [
+                column
+                for column in ["Net Revenue", "Gross Profit", "EBITDA", "Net Income"]
+                if column in frame.columns
+            ]
+            if line_metrics:
+                st.markdown("#### Profit & Loss Trends")
+                trend_data = frame[["Year", *line_metrics]]
+                trend_frame = trend_data.melt(id_vars=["Year"], var_name="Metric", value_name="Value")
+                fig_income = px.line(
+                    trend_frame,
+                    x="Year",
+                    y="Value",
+                    color="Metric",
+                    markers=True,
+                    title="Income Statement Highlights",
+                )
+                st.plotly_chart(fig_income, use_container_width=True)
+
+            if "EBITDA Margin" in frame.columns:
+                fig_margin = px.line(
+                    frame,
+                    x="Year",
+                    y="EBITDA Margin",
+                    markers=True,
+                    title="EBITDA Margin",
+                )
+                st.plotly_chart(fig_margin, use_container_width=True)
+
     st.markdown("#### Gross Revenue Schedule")
     try:
         revenue_schedule = model.revenue_schedule()
     except Exception as exc:  # pragma: no cover - defensive guard for runtime issues
         st.warning(f"Unable to calculate gross revenue schedule: {exc}")
     else:
-        st.dataframe(_with_year(revenue_schedule), use_container_width=True)
+        revenue_frame = _with_year(revenue_schedule)
+        st.dataframe(revenue_frame, use_container_width=True)
         st.caption(
             "Gross Revenue is decomposed into product-level sales, distributor commissions, "
             "and resulting net revenue."
         )
+        if px is not None and pd is not None:
+            if isinstance(revenue_frame, pd.DataFrame):
+                frame = revenue_frame
+            else:
+                frame = pd.DataFrame(revenue_frame)
+            numeric_columns = [
+                column
+                for column in frame.columns
+                if column not in {"Year", "Product"} and pd.api.types.is_numeric_dtype(frame[column])
+            ]
+            if "Product" in frame.columns and numeric_columns:
+                st.markdown("##### Revenue by Product")
+                product_frame = frame.melt(
+                    id_vars=["Year", "Product"],
+                    value_vars=numeric_columns,
+                    var_name="Metric",
+                    value_name="Value",
+                )
+                fig_product = px.bar(
+                    product_frame,
+                    x="Year",
+                    y="Value",
+                    color="Product",
+                    facet_row="Metric",
+                    barmode="stack",
+                    title="Revenue Composition",
+                )
+                st.plotly_chart(fig_product, use_container_width=True)
+            elif numeric_columns:
+                st.markdown("##### Revenue Drivers")
+                melt_frame = frame.melt(id_vars=["Year"], value_vars=numeric_columns, var_name="Metric", value_name="Value")
+                fig_revenue = px.line(
+                    melt_frame,
+                    x="Year",
+                    y="Value",
+                    color="Metric",
+                    markers=True,
+                    title="Revenue Schedule",
+                )
+                st.plotly_chart(fig_revenue, use_container_width=True)
 
     st.markdown("#### Total Expenses Schedule")
     try:
@@ -1494,11 +1617,33 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
         st.warning(f"Unable to calculate total expenses schedule: {exc}")
         return
 
-    st.dataframe(_with_year(expense_schedule), use_container_width=True)
+    expense_frame = _with_year(expense_schedule)
+    st.dataframe(expense_frame, use_container_width=True)
     st.caption(
         "Total Expenses comprise raw materials, utilities, direct labour, cost of sales, "
         "and general & administrative costs."
     )
+    if px is not None and pd is not None:
+        if isinstance(expense_frame, pd.DataFrame):
+            frame = expense_frame
+        else:
+            frame = pd.DataFrame(expense_frame)
+        numeric_columns = [
+            column
+            for column in frame.columns
+            if column != "Year" and pd.api.types.is_numeric_dtype(frame[column])
+        ]
+        if numeric_columns:
+            trend_frame = frame.melt(id_vars=["Year"], value_vars=numeric_columns, var_name="Expense", value_name="Value")
+            fig_expense = px.area(
+                trend_frame,
+                x="Year",
+                y="Value",
+                color="Expense",
+                groupnorm="fraction",
+                title="Expense Mix Over Time",
+            )
+            st.plotly_chart(fig_expense, use_container_width=True)
 
 
 def _render_ai_dashboard(ai_insights: Optional[AIInsights]) -> None:
@@ -1542,9 +1687,43 @@ def _render_sensitivity(outputs: FinancialOutputs) -> None:
         st.info("No sensitivity configurations provided in the assumptions file.")
         return
 
+    supports_plotly = px is not None and pd is not None
+
     for variable, df in outputs.sensitivity_results.items():
         st.markdown(f"#### {variable}")
-        st.dataframe(_with_year(df), use_container_width=True)
+        frame = _with_year(df)
+        st.dataframe(frame, use_container_width=True)
+
+        if supports_plotly:
+            if isinstance(frame, pd.DataFrame):
+                plot_frame = frame
+            else:
+                plot_frame = pd.DataFrame(frame)
+            numeric_columns = [
+                column
+                for column in plot_frame.columns
+                if column not in {"Year", "Scenario"} and pd.api.types.is_numeric_dtype(plot_frame[column])
+            ]
+            if numeric_columns:
+                if "Year" in plot_frame.columns:
+                    long_frame = plot_frame.melt(id_vars=["Year"], value_vars=numeric_columns, var_name="Metric", value_name="Value")
+                    fig = px.line(
+                        long_frame,
+                        x="Year",
+                        y="Value",
+                        color="Metric",
+                        markers=True,
+                        title=f"{variable} Sensitivity Trend",
+                    )
+                else:
+                    long_frame = plot_frame.melt(value_vars=numeric_columns, var_name="Metric", value_name="Value")
+                    fig = px.bar(
+                        long_frame,
+                        x="Metric",
+                        y="Value",
+                        title=f"{variable} Sensitivity Comparison",
+                    )
+                st.plotly_chart(fig, use_container_width=True)
 
 
 def _render_scenarios(outputs: FinancialOutputs) -> None:
@@ -1561,12 +1740,46 @@ def _render_scenarios(outputs: FinancialOutputs) -> None:
     _render_scenario_tool_inputs(payload)
     st.session_state["input_payload"] = payload
 
+    supports_plotly = px is not None and pd is not None
+
     if not outputs.scenario_results:
         st.info("No scenario configurations provided in the assumptions file.")
     else:
         for name, df in outputs.scenario_results.items():
             st.markdown(f"#### {name}")
-            st.dataframe(_with_year(df), use_container_width=True)
+            frame = _with_year(df)
+            st.dataframe(frame, use_container_width=True)
+
+            if supports_plotly:
+                if isinstance(frame, pd.DataFrame):
+                    plot_frame = frame
+                else:
+                    plot_frame = pd.DataFrame(frame)
+                numeric_columns = [
+                    column
+                    for column in plot_frame.columns
+                    if column not in {"Year", "Scenario"} and pd.api.types.is_numeric_dtype(plot_frame[column])
+                ]
+                if numeric_columns:
+                    if "Year" in plot_frame.columns:
+                        long_frame = plot_frame.melt(id_vars=["Year"], value_vars=numeric_columns, var_name="Metric", value_name="Value")
+                        fig = px.line(
+                            long_frame,
+                            x="Year",
+                            y="Value",
+                            color="Metric",
+                            markers=True,
+                            title=f"{name} Scenario Results",
+                        )
+                    else:
+                        long_frame = plot_frame.melt(value_vars=numeric_columns, var_name="Metric", value_name="Value")
+                        fig = px.bar(
+                            long_frame,
+                            x="Metric",
+                            y="Value",
+                            title=f"{name} Scenario Comparison",
+                        )
+                    st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("### Scenario Tool Insights")
     if outputs.scenario_tool_results:
@@ -1611,15 +1824,64 @@ def _render_break_even(outputs: FinancialOutputs) -> None:
     st.session_state["input_payload"] = payload
 
     break_even_df = _ensure_dataframe(outputs.break_even)
-    if pd is not None:
-        break_even_df = break_even_df.reset_index().rename(columns={"index": "Product"})
-    st.dataframe(break_even_df, use_container_width=True)
+    if pd is not None and isinstance(break_even_df, pd.DataFrame):
+        break_even_frame = break_even_df.reset_index().rename(columns={"index": "Product"})
+    else:
+        break_even_frame = pd.DataFrame(break_even_df)
+    st.dataframe(break_even_frame, use_container_width=True)
+
+    if px is not None and pd is not None and not break_even_frame.empty:
+        y_column = (
+            "Break-even Units"
+            if "Break-even Units" in break_even_frame.columns
+            else break_even_frame.columns[-1]
+        )
+        if y_column in break_even_frame.columns and "Product" in break_even_frame.columns:
+            fig_break_even = px.bar(
+                break_even_frame,
+                x="Product",
+                y=y_column,
+                title="Break-even Units by Product",
+            )
+            st.plotly_chart(fig_break_even, use_container_width=True)
 
     st.markdown("### Payback Schedule")
-    st.dataframe(_with_year(outputs.payback), use_container_width=True)
+    payback_df = _with_year(outputs.payback)
+    st.dataframe(payback_df, use_container_width=True)
+
+    if px is not None and pd is not None:
+        if isinstance(payback_df, pd.DataFrame):
+            payback_frame = payback_df
+        else:
+            payback_frame = pd.DataFrame(payback_df)
+        if {"Year", "Cumulative"}.issubset(payback_frame.columns):
+            fig_payback = px.line(
+                payback_frame,
+                x="Year",
+                y="Cumulative",
+                markers=True,
+                title="Cumulative Payback",
+            )
+            st.plotly_chart(fig_payback, use_container_width=True)
 
     st.markdown("### Discounted Payback Schedule")
-    st.dataframe(_with_year(outputs.discounted_payback), use_container_width=True)
+    discounted_df = _with_year(outputs.discounted_payback)
+    st.dataframe(discounted_df, use_container_width=True)
+
+    if px is not None and pd is not None:
+        if isinstance(discounted_df, pd.DataFrame):
+            discounted_frame = discounted_df
+        else:
+            discounted_frame = pd.DataFrame(discounted_df)
+        if {"Year", "Cumulative"}.issubset(discounted_frame.columns):
+            fig_discounted = px.line(
+                discounted_frame,
+                x="Year",
+                y="Cumulative",
+                markers=True,
+                title="Discounted Cumulative Payback",
+            )
+            st.plotly_chart(fig_discounted, use_container_width=True)
 
 
 
