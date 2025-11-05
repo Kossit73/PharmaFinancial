@@ -167,7 +167,12 @@ def _render_inputs_tab() -> tuple[ModelInputs, FinancialOutputs]:
         on_click=_reset_inputs_to_default,
     )
 
-    _render_excel_download_section(inputs, base_model, base_outputs)
+    _render_excel_download_section(
+        inputs,
+        base_model,
+        base_outputs,
+        widget_prefix="landing_excel",
+    )
 
     return inputs, base_outputs
 
@@ -176,6 +181,8 @@ def _render_excel_download_section(
     inputs: Optional[ModelInputs] = None,
     base_model: Optional[FinancialModel] = None,
     base_outputs: Optional[FinancialOutputs] = None,
+    *,
+    widget_prefix: str = "excel",
 ) -> None:
     st.markdown("### Excel Model Export")
 
@@ -197,10 +204,14 @@ def _render_excel_download_section(
     )
     if default_label not in scenario_labels:
         default_label = scenario_labels[0]
+    selectbox_key = f"{widget_prefix}_scenario_select"
+    if selectbox_key in st.session_state and st.session_state[selectbox_key] not in scenario_labels:
+        st.session_state.pop(selectbox_key, None)
     selected_label = st.selectbox(
         "Select scenario for Excel export",
         scenario_labels,
         index=scenario_labels.index(default_label),
+        key=selectbox_key,
     )
     st.session_state[_SESSION_SELECTED_SCENARIO_KEY] = selected_label
     scenario_key = scenario_map[selected_label]
@@ -221,13 +232,14 @@ def _render_excel_download_section(
     excel_map: Dict[str, bytes] = st.session_state.setdefault("excel_bytes_map", {})
     excel_bytes = excel_map.get(selected_label)
     widget_suffix = _scenario_widget_key(selected_label)
+    button_prefix = f"{widget_prefix}_{widget_suffix}"
 
     download_container = st.container()
     with download_container:
         if not excel_bytes:
             if st.button(
                 "Prepare Excel Model",
-                key=f"prepare_excel_{widget_suffix}",
+                key=f"prepare_{button_prefix}",
             ):
                 with st.spinner("Preparing Excel workbook..."):
                     excel_bytes = _generate_excel_bytes(model, results, selected_label)
@@ -239,11 +251,11 @@ def _render_excel_download_section(
                 data=excel_bytes,
                 file_name="Ecommerce_Financial_Model.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key=f"download_excel_{widget_suffix}",
+                key=f"download_{button_prefix}",
             )
             if st.button(
                 "Clear Prepared Excel",
-                key=f"clear_excel_{widget_suffix}",
+                key=f"clear_{button_prefix}",
             ):
                 excel_map.pop(selected_label, None)
                 st.session_state.excel_bytes_map = excel_map
@@ -425,6 +437,8 @@ def _load_custom_inputs() -> None:
         st.session_state.pop("base_outputs", None)
         st.session_state.pop(_SESSION_MODEL_RESULTS_KEY, None)
         st.session_state.pop(_SESSION_SELECTED_SCENARIO_KEY, None)
+        st.session_state.pop("landing_excel_scenario_select", None)
+        st.session_state.pop("dashboard_excel_scenario_select", None)
     finally:
         st.session_state.pop(_UPLOAD_WIDGET_KEY, None)
 
@@ -445,6 +459,8 @@ def _reset_inputs_to_default() -> None:
     st.session_state.pop(_SESSION_MODEL_RESULTS_KEY, None)
     st.session_state.pop(_SESSION_SELECTED_SCENARIO_KEY, None)
     st.session_state.pop(_UPLOAD_WIDGET_KEY, None)
+    st.session_state.pop("landing_excel_scenario_select", None)
+    st.session_state.pop("dashboard_excel_scenario_select", None)
 
 
 def _render_dashboard_tab(outputs: FinancialOutputs) -> None:
@@ -481,7 +497,7 @@ def _render_dashboard_tab(outputs: FinancialOutputs) -> None:
 
     st.caption(f"Metrics reflect the **{scenario_label}** scenario.")
 
-    _render_excel_download_section()
+    _render_excel_download_section(widget_prefix="dashboard_excel")
 
 
 def _render_statement_tab(title: str, df: pd.DataFrame) -> None:
