@@ -20,6 +20,8 @@ DEFAULT_INPUT_JSON = DEFAULT_INPUT_PATH.read_text(encoding="utf-8")
 _SESSION_INPUTS_KEY = "model_inputs"
 _SESSION_INPUT_SOURCE_KEY = "model_inputs_source"
 _SESSION_FEEDBACK_KEY = "model_inputs_feedback"
+_SESSION_MODEL_RESULTS_KEY = "model_results"
+_SESSION_SELECTED_SCENARIO_KEY = "selected_scenario_label"
 _UPLOAD_WIDGET_KEY = "custom_assumptions_file"
 
 
@@ -190,11 +192,17 @@ def _render_excel_download_section(
 
     scenario_map = _scenario_label_map(inputs)
     scenario_labels = list(scenario_map.keys())
+    default_label = st.session_state.get(
+        _SESSION_SELECTED_SCENARIO_KEY, scenario_labels[0]
+    )
+    if default_label not in scenario_labels:
+        default_label = scenario_labels[0]
     selected_label = st.selectbox(
         "Select scenario for Excel export",
         scenario_labels,
-        key="excel_selected_scenario",
+        index=scenario_labels.index(default_label),
     )
+    st.session_state[_SESSION_SELECTED_SCENARIO_KEY] = selected_label
     scenario_key = scenario_map[selected_label]
 
     snapshot = st.session_state.get("input_snapshot")
@@ -208,7 +216,7 @@ def _render_excel_download_section(
     else:
         model, results = _ensure_scenario_payload(selected_label, scenario_key, snapshot)
 
-    st.session_state.model_results = (model, results)
+    st.session_state[_SESSION_MODEL_RESULTS_KEY] = (model, results)
 
     excel_map: Dict[str, bytes] = st.session_state.setdefault("excel_bytes_map", {})
     excel_bytes = excel_map.get(selected_label)
@@ -415,6 +423,8 @@ def _load_custom_inputs() -> None:
         st.session_state["excel_bytes_map"] = {}
         st.session_state.pop("base_model", None)
         st.session_state.pop("base_outputs", None)
+        st.session_state.pop(_SESSION_MODEL_RESULTS_KEY, None)
+        st.session_state.pop(_SESSION_SELECTED_SCENARIO_KEY, None)
     finally:
         st.session_state.pop(_UPLOAD_WIDGET_KEY, None)
 
@@ -432,11 +442,26 @@ def _reset_inputs_to_default() -> None:
     st.session_state["excel_bytes_map"] = {}
     st.session_state.pop("base_model", None)
     st.session_state.pop("base_outputs", None)
+    st.session_state.pop(_SESSION_MODEL_RESULTS_KEY, None)
+    st.session_state.pop(_SESSION_SELECTED_SCENARIO_KEY, None)
     st.session_state.pop(_UPLOAD_WIDGET_KEY, None)
 
 
 def _render_dashboard_tab(outputs: FinancialOutputs) -> None:
-    income = _with_year(outputs.income_statement)
+    model_results = st.session_state.get(_SESSION_MODEL_RESULTS_KEY)
+    active_outputs = outputs
+    scenario_label = "Base Case"
+
+    if model_results is not None:
+        model, stored_outputs = model_results
+        active_outputs = stored_outputs
+        scenario_label = getattr(model, "scenario", scenario_label)
+    else:
+        base_model = st.session_state.get("base_model")
+        if base_model is not None:
+            scenario_label = getattr(base_model, "scenario", scenario_label)
+
+    income = _with_year(active_outputs.income_statement)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -447,12 +472,14 @@ def _render_dashboard_tab(outputs: FinancialOutputs) -> None:
         st.plotly_chart(fig_ebitda, use_container_width=True)
 
     st.markdown("### Investment Metrics")
-    metrics = outputs.summary_metrics["Value"]
+    metrics = active_outputs.summary_metrics["Value"]
     metric_cols = st.columns(len(metrics))
     for col, (name, value) in zip(metric_cols, metrics.items()):
         with col:
             formatted = _format_number(value)
             st.metric(label=name, value=formatted)
+
+    st.caption(f"Metrics reflect the **{scenario_label}** scenario.")
 
     _render_excel_download_section()
 
