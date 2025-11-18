@@ -7,3 +7,4 @@ openpyxl
 python-docx
 fpdf
 PyPDF2
+requests

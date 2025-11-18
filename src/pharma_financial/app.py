@@ -1,12 +1,16 @@
 """Streamlit web application for the Pharmaceuticals financial model."""
 from __future__ import annotations
 
+import base64
 import copy
 import csv
 import hashlib
 import io
 import json
+import logging
+import os
 import re
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
@@ -15,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Callable, List, Optional, Tuple, cast
 
 try:  # pragma: no cover - allow importing helper functions without Streamlit installed
     import streamlit as st
+    logging.basicConfig(level=logging.DEBUG)
 except Exception:  # pragma: no cover - lightweight stub for non-Streamlit environments
     class _StreamlitStub:
         session_state: dict = {}
@@ -47,6 +52,7 @@ from .model import (
 )
 from .report import collect_report_sections, generate_report
 from .table import Table
+from .paystack import PaystackClient, PaystackError, SubscriptionStatus
 
 try:  # pragma: no cover - executed in environments with pandas available
     import pandas as pd
@@ -80,6 +86,7 @@ except Exception:  # pragma: no cover - import guard when package missing
 DEFAULT_INPUT_PATH = Path(__file__).resolve().parent / "data" / "default_inputs.json"
 DEFAULT_INPUT_JSON = DEFAULT_INPUT_PATH.read_text(encoding="utf-8")
 DEFAULT_RISK_CATEGORIES = ["inherent", "climate", "political"]
+EXCEL_EXPORT_FILE_NAME = "Ecommerce_Financial_Model.xlsx"
 DEPRECIATION_METHOD_LABELS = {
     "straight_line": "Straight Line",
     "reducing_balance": "Reducing Balance",
@@ -127,6 +134,44 @@ GEN_AI_LABEL_TO_CODE = {label: code for code, label in GEN_AI_FEATURE_LABELS.ite
 
 _INPUT_CACHE: dict[str, ModelInputs] = {}
 _MODEL_CACHE: dict[str, tuple["FinancialModel", "FinancialOutputs"]] = {}
+LOGGER = logging.getLogger(__name__)
+_PAYSTACK_CLIENT: PaystackClient | None = None
+_ENV_FILE_LOADED = False
+
+
+def _load_local_env() -> None:
+    """Load environment variables from a `.env` file when available."""
+
+    global _ENV_FILE_LOADED
+    if _ENV_FILE_LOADED:
+        return
+
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    if not env_path.exists():
+        _ENV_FILE_LOADED = True
+        return
+
+    # NOTE: This is a lightweight replacement for python-dotenv/direnv during local
+    # development. Remove once a dedicated environment loader is introduced.
+    try:
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if "=" not in stripped:
+                continue
+            key, value = stripped.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+    except Exception as exc:  # pragma: no cover - defensive logging
+        LOGGER.warning("Unable to load environment file %s: %s", env_path, exc)
+    finally:
+        _ENV_FILE_LOADED = True
+
+
+_load_local_env()  # Temporary helper; remove when a proper .env loader is configured.
 
 
 def _rerun() -> None:
@@ -857,6 +902,18 @@ def _render_excel_model_download(
 ) -> None:
     with container:
         st.markdown("### Excel Model Download")
+        _render_subscription_modal()
+
+        status = _subscription_status()
+        if status and status.is_active:
+            st.caption(
+                f"Subscription verified for **{status.email}**. Downloads remain unlocked while this session is active."
+            )
+        else:
+            st.caption(
+                "An active subscription is required to export the Excel workbook. "
+                "Click 'Download Excel Model' to verify or purchase access."
+            )
 
         payload = st.session_state.get("input_payload") or {}
         scenario_options = _scenario_options(payload)
@@ -888,9 +945,18 @@ def _render_excel_model_download(
 
         setattr(model, "scenario", scenario_label)
 
+        pending_meta = st.session_state.get("subscription_pending_download")
+        if isinstance(pending_meta, Mapping) and pending_meta.get("scenario") != scenario_label:
+            st.session_state.pop("subscription_pending_download", None)
+        auto_meta_state = st.session_state.get("subscription_auto_download")
+        if isinstance(auto_meta_state, Mapping) and auto_meta_state.get("scenario") != scenario_label:
+            st.session_state.pop("subscription_auto_download", None)
+
         key_suffix = re.sub(r"[^0-9a-z]+", "_", scenario_label.lower()).strip("_") or "base"
         prepare_key = f"prepare_excel_{key_suffix}"
+        refresh_key = f"refresh_excel_{key_suffix}"
         download_key = f"download_excel_{key_suffix}"
+        download_prompt_key = f"download_prompt_{key_suffix}"
         clear_key = f"clear_excel_{key_suffix}"
 
         download_container = st.container()
@@ -898,25 +964,331 @@ def _render_excel_model_download(
             if not excel_bytes:
                 if st.button("Prepare Excel Model", key=prepare_key):
                     with st.spinner("Preparing Excel workbook..."):
-                        excel_bytes = _generate_excel_bytes(
-                            model, results, scenario_label
-                        )
+                        excel_bytes = _generate_excel_bytes(model, results, scenario_label)
                     excel_map[scenario_label] = excel_bytes
                     st.session_state.excel_bytes_map = excel_map
             if excel_bytes:
-                st.download_button(
-                    "Download Excel Model",
-                    data=excel_bytes,
-                    file_name="Ecommerce_Financial_Model.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key=download_key,
+                st.success("Workbook ready. Download or refresh using the options below.")
+                if st.button("Refresh Excel Model", key=refresh_key):
+                    with st.spinner("Refreshing Excel workbook..."):
+                        excel_bytes = _generate_excel_bytes(model, results, scenario_label)
+                    excel_map[scenario_label] = excel_bytes
+                    st.session_state.excel_bytes_map = excel_map
+                auto_meta = st.session_state.get("subscription_auto_download")
+                should_auto_download = (
+                    isinstance(auto_meta, Mapping)
+                    and auto_meta.get("scenario") == scenario_label
+                    and _subscription_verified()
                 )
+                if should_auto_download:
+                    _auto_trigger_download(
+                        excel_bytes,
+                        EXCEL_EXPORT_FILE_NAME,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                    st.session_state.pop("subscription_auto_download", None)
+                    st.info(
+                        "Your download should start automatically. If it does not, use the button below."
+                    )
+                if _subscription_verified():
+                    st.download_button(
+                        "Download Excel Model",
+                        data=excel_bytes,
+                        file_name=EXCEL_EXPORT_FILE_NAME,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=download_key,
+                        help="Save the prepared workbook to your device.",
+                        width="stretch",
+                    )
+                    st.caption("Click the button above to save the prepared Excel workbook.")
+                else:
+                    if st.button("Download Excel Model", key=download_prompt_key):
+                        st.session_state["subscription_pending_download"] = {
+                            "scenario": scenario_label,
+                            "file_name": EXCEL_EXPORT_FILE_NAME,
+                        }
+                        _open_subscription_modal()
                 if st.button("Clear Prepared Excel", key=clear_key):
                     excel_map.pop(scenario_label, None)
                     st.session_state.excel_bytes_map = excel_map
                     excel_bytes = None
             if not excel_bytes:
                 st.info("Click 'Prepare Excel Model' to generate the workbook for download.")
+
+
+def _get_paystack_client() -> PaystackClient | None:
+    """Return a cached Paystack client instance."""
+
+    global _PAYSTACK_CLIENT
+    if _PAYSTACK_CLIENT is None:
+        try:
+            _PAYSTACK_CLIENT = PaystackClient()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.warning("Failed to create Paystack client: %s", exc)
+            return None
+    return _PAYSTACK_CLIENT
+
+
+def _auto_trigger_download(data: bytes, file_name: str, mime: str = "application/octet-stream") -> None:
+    """Automatically trigger a file download via an HTML data URI."""
+
+    if not data:
+        return
+
+    encoded = base64.b64encode(data).decode("ascii")
+    safe_name = file_name.replace('"', "").replace("'", "")
+    script = f"""
+        <script>
+        (function() {{
+            const bytes = "{encoded}";
+            const link = document.createElement('a');
+            link.href = "data:{mime};base64," + bytes;
+            link.download = "{safe_name}";
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }})();
+        </script>
+    """
+    st.markdown(script, unsafe_allow_html=True)
+
+
+def _subscription_status() -> SubscriptionStatus | None:
+    """Return the cached subscription status for the current session."""
+
+    status = st.session_state.get("subscription_status")
+    if isinstance(status, SubscriptionStatus):
+        return status
+    return None
+
+
+def _subscription_verified() -> bool:
+    """Return ``True`` if the current session has an active subscription."""
+
+    status = _subscription_status()
+    return bool(status and status.is_active)
+
+
+def _subscription_email_hint() -> str:
+    """Return the best-known email hint to pre-fill modal inputs."""
+
+    status = _subscription_status()
+    if status and status.email:
+        return status.email
+    stored = st.session_state.get("subscription_modal_email")
+    if isinstance(stored, str) and stored:
+        return stored
+    return ""
+
+
+def _open_subscription_modal(email_hint: str | None = None) -> None:
+    """Trigger the subscription modal and optionally seed the email field."""
+
+    hint = email_hint or _subscription_email_hint()
+    if hint:
+        st.session_state["subscription_modal_email"] = hint
+    st.session_state.pop("subscription_modal_status", None)
+    st.session_state.pop("subscription_modal_checked_email", None)
+    st.session_state["subscription_modal_open"] = True
+    _render_subscription_modal()
+
+
+def _render_subscription_modal() -> None:
+    """Render the modal dialog used to verify or purchase subscriptions."""
+
+    if not bool(st.session_state.get("subscription_modal_open")):
+        return
+
+    email_hint = _subscription_email_hint()
+    if email_hint and not st.session_state.get("subscription_modal_email"):
+        st.session_state["subscription_modal_email"] = email_hint
+
+    _subscription_dialog()
+
+
+def _subscription_dialog_body() -> None:
+    """Shared UI body for the subscription dialog."""
+
+    st.write(
+        "Enter the email address associated with your subscription. Once verified, your download will begin "
+        "automatically whenever a prepared workbook is available."
+    )
+
+    email_key = "subscription_modal_email"
+    st.session_state.setdefault(email_key, _subscription_email_hint())
+
+    alert_slot = st.empty()
+
+    with st.form("subscription_modal_form", clear_on_submit=False):
+        st.text_input(
+            "Subscription email address",
+            key=email_key,
+            placeholder="you@example.com",
+        )
+        submitted = st.form_submit_button("Verify Subscription & Continue")
+
+    status: SubscriptionStatus | None = None
+    normalized_email = _normalize_email(st.session_state.get(email_key, ""))
+    existing_status = _subscription_status()
+    last_checked_email = st.session_state.get("subscription_modal_checked_email")
+
+    if submitted:
+        if not normalized_email:
+            st.warning("Please enter your email before continuing.")
+            status = None
+        else:
+            email_value = st.session_state.get(email_key, "")
+            with st.spinner("Checking Paystack subscription status..."):
+                status = _verify_subscription_email(email_value)
+            st.session_state["subscription_modal_checked_email"] = normalized_email
+            st.session_state["subscription_modal_status"] = status
+    else:
+        if (
+            isinstance(existing_status, SubscriptionStatus)
+            and normalized_email
+            and existing_status.email == normalized_email
+            and existing_status.is_active
+        ):
+            status = existing_status
+        else:
+            stored = st.session_state.get("subscription_modal_status")
+            if isinstance(stored, SubscriptionStatus) and last_checked_email == normalized_email:
+                status = stored
+
+    if status and status.is_active:
+        alert_slot.success("Subscription verified. Preparing your download…")
+        pending_download = st.session_state.pop("subscription_pending_download", None)
+        if isinstance(pending_download, Mapping):
+            st.session_state["subscription_auto_download"] = pending_download
+        st.session_state["subscription_modal_open"] = False
+        _rerun()
+        return
+
+    if status and not status.is_active:
+        alert_slot.warning(status.message or "No active subscription detected for this email.")
+    elif normalized_email:
+        alert_slot.info("Enter your subscription email and click 'Verify Subscription & Continue'.")
+    else:
+        alert_slot.info("Please provide your email to continue.")
+
+    checkout_url: str | None = None
+    if status and not status.is_active:
+        checkout_clicked = st.button("Subscribe via Paystack", key="subscription_modal_checkout")
+        if checkout_clicked:
+            email_value = st.session_state.get(email_key, "")
+            with st.spinner("Preparing Paystack checkout link..."):
+                checkout_url = _create_subscription_checkout(email_value)
+            if checkout_url:
+                alert_slot.success("Checkout link created. Use the button below to complete your subscription.")
+        else:
+            checkout_url = _checkout_url_for_email(st.session_state.get(email_key, ""))
+
+        if checkout_url:
+            st.markdown(f"[Open Paystack Checkout]({checkout_url})")
+
+
+
+# ---------------------------------------------------------------------------
+# Streamlit dialog registration
+# ---------------------------------------------------------------------------
+if hasattr(st, "dialog"):
+
+    @st.dialog("Subscription Required")  # type: ignore[misc]
+    def _subscription_dialog() -> None:
+        _subscription_dialog_body()
+
+else:
+
+    def _subscription_dialog() -> None:
+        with st.container():
+            _subscription_dialog_body()
+
+
+def _normalize_email(value: str | None) -> str:
+    """Return a normalised email string."""
+
+    return (value or "").strip().lower()
+
+
+def _verify_subscription_email(email: str) -> SubscriptionStatus | None:
+    """Verify the subscription status for ``email`` with caching."""
+
+    normalized = _normalize_email(email)
+    if not normalized:
+        st.warning("Please provide a valid email address.")
+        return None
+
+    cache: dict[str, SubscriptionStatus] = st.session_state.setdefault("subscription_cache", {})
+    cached = cache.get(normalized)
+    if cached and cached.is_active:
+        st.session_state["subscription_status"] = cached
+        st.session_state["subscription_modal_open"] = False
+        return cached
+
+    client = _get_paystack_client()
+    if not client:
+        st.error("Paystack client could not be initialised. Please contact support.")
+        return None
+
+    try:
+        status = client.has_active_subscription(normalized)
+    except PaystackError as exc:
+        st.error(f"Unable to verify subscription: {exc}")
+        return None
+
+    cache[normalized] = status
+    st.session_state["subscription_cache"] = cache
+    st.session_state["subscription_status"] = status
+    if status.is_active:
+        st.session_state["subscription_modal_open"] = False
+    return status
+
+
+def _create_subscription_checkout(email: str) -> str | None:
+    """Return (and cache) a Paystack checkout link for ``email``."""
+
+    normalized = _normalize_email(email)
+    if not normalized:
+        st.warning("Please enter a valid email to receive a checkout link.")
+        return None
+
+    links: dict[str, str] = st.session_state.setdefault("subscription_checkout_links", {})
+    existing = links.get(normalized)
+    if existing:
+        return existing
+
+    client = _get_paystack_client()
+    if not client:
+        st.error("Paystack client could not be initialised. Please contact support.")
+        return None
+
+    try:
+        url = client.create_subscription_checkout(
+            normalized,
+            metadata={"source": "pharma_financial_app"},
+        )
+    except PaystackError as exc:
+        st.error(f"Unable to generate checkout link: {exc}")
+        return None
+
+    links[normalized] = url
+    st.session_state["subscription_checkout_links"] = links
+    return url
+
+
+def _checkout_url_for_email(email: str) -> str | None:
+    """Return the cached checkout link for ``email`` if present."""
+
+    normalized = _normalize_email(email)
+    if not normalized:
+        return None
+
+    links = st.session_state.get("subscription_checkout_links")
+    if isinstance(links, Mapping):
+        url = links.get(normalized)
+        if isinstance(url, str) and url:
+            return url
+    return None
 
 
 def _render_inputs_tab(
@@ -1219,15 +1591,15 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
         st.warning(
             "Plotly visualisations unavailable. Displaying financial metrics as tables instead."
         )
-        st.dataframe(income, use_container_width=True)
+        st.dataframe(income, width='stretch')
     else:
         col1, col2 = st.columns(2)
         with col1:
             fig_revenue = px.line(income, x="Year", y="Net Revenue", title="Net Revenue")
-            st.plotly_chart(fig_revenue, use_container_width=True)
+            st.plotly_chart(fig_revenue, width='stretch')
         with col2:
             fig_ebitda = px.line(income, x="Year", y="EBITDA", title="EBITDA")
-            st.plotly_chart(fig_ebitda, use_container_width=True)
+            st.plotly_chart(fig_ebitda, width='stretch')
 
     st.markdown("### Investment Metrics")
     metric_pairs = _extract_metric_pairs(outputs.summary_metrics)
@@ -1246,7 +1618,7 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
         if not goal_data:
             st.caption("No goal seek configuration provided in the assumptions.")
         else:
-            st.dataframe(goal_data, use_container_width=True)
+            st.dataframe(goal_data, width='stretch')
     else:
         if hasattr(goal_data, "empty") and getattr(goal_data, "empty"):
             st.caption("No goal seek configuration provided in the assumptions.")
@@ -1266,14 +1638,14 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
                         value=_format_number(actual_value),
                         delta=_format_number(delta_value),
                     )
-            st.dataframe(display, use_container_width=True)
+            st.dataframe(display, width='stretch')
         else:
-            st.dataframe(goal_data, use_container_width=True)
+            st.dataframe(goal_data, width='stretch')
 
     st.markdown("### Working Capital Schedule")
     try:
         working_capital = model.working_capital_schedule()
-        st.dataframe(_with_year(working_capital), use_container_width=True)
+        st.dataframe(_with_year(working_capital), width='stretch')
         st.caption(
             "Working capital balances reconcile receivables, inventory, and payables "
             "with the statement of financial position while showing year-over-year "
@@ -1285,7 +1657,7 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
     st.markdown("### Inventory Schedule")
     try:
         inventory_table = model.inventory_schedule()
-        st.dataframe(_with_year(inventory_table), use_container_width=True)
+        st.dataframe(_with_year(inventory_table), width='stretch')
         st.caption(
             "Inventory is derived as cost of sales divided by calendar days and "
             "multiplied by the configured inventory days, matching the balance "
@@ -1304,7 +1676,7 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
         if outputs.sensitivity_results:
             for variable, table in outputs.sensitivity_results.items():
                 st.markdown(f"- **{variable}**")
-                st.dataframe(_ensure_dataframe(table), use_container_width=True)
+                st.dataframe(_ensure_dataframe(table), width='stretch')
         else:
             st.caption("No sensitivity configurations provided.")
 
@@ -1312,18 +1684,18 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
         if outputs.scenario_results:
             for name, table in outputs.scenario_results.items():
                 st.markdown(f"- **{name}**")
-                st.dataframe(_with_year(table), use_container_width=True)
+                st.dataframe(_with_year(table), width='stretch')
         else:
             st.caption("No scenarios configured in the assumptions.")
 
         st.markdown("#### Break-even Analysis")
-        st.dataframe(_ensure_dataframe(outputs.break_even), use_container_width=True)
+        st.dataframe(_ensure_dataframe(outputs.break_even), width='stretch')
 
         st.markdown("#### Payback Schedule")
-        st.dataframe(_with_year(outputs.payback), use_container_width=True)
+        st.dataframe(_with_year(outputs.payback), width='stretch')
 
         st.markdown("#### Discounted Payback Schedule")
-        st.dataframe(_with_year(outputs.discounted_payback), use_container_width=True)
+        st.dataframe(_with_year(outputs.discounted_payback), width='stretch')
 
         st.markdown("#### AI & Machine Learning Insights")
         _render_ai_dashboard(outputs.ai_insights)
@@ -1355,7 +1727,7 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
                 markers=True,
                 title=title,
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
     else:
         st.caption("No sensitivity configurations provided.")
 
@@ -1384,7 +1756,7 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
                     color="Scenario",
                     title="Scenario Net Revenue",
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
             if "Net Income" in combined.columns:
                 fig_income = px.line(
                     combined,
@@ -1393,7 +1765,7 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
                     color="Scenario",
                     title="Scenario Net Income",
                 )
-                st.plotly_chart(fig_income, use_container_width=True)
+                st.plotly_chart(fig_income, width='stretch')
         else:
             st.caption("No scenarios configured in the assumptions.")
     else:
@@ -1413,7 +1785,7 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
         y=y_column,
         title="Break-even Units by Product",
     )
-    st.plotly_chart(fig_break_even, use_container_width=True)
+    st.plotly_chart(fig_break_even, width='stretch')
 
     # Payback charts
     st.markdown("#### Payback Schedule")
@@ -1429,7 +1801,7 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
         title="Cumulative Payback",
         markers=True,
     )
-    st.plotly_chart(fig_payback, use_container_width=True)
+    st.plotly_chart(fig_payback, width='stretch')
 
     discounted_df = _with_year(outputs.discounted_payback)
     if isinstance(discounted_df, pd.DataFrame):
@@ -1443,7 +1815,7 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
         title="Discounted Cumulative Payback",
         markers=True,
     )
-    st.plotly_chart(fig_discounted, use_container_width=True)
+    st.plotly_chart(fig_discounted, width='stretch')
 
     st.markdown("#### AI & Machine Learning Insights")
     _render_ai_dashboard(outputs.ai_insights)
@@ -1459,7 +1831,7 @@ def _render_statement_tab(title: str, table) -> None:
         display = table
 
     display_with_year = _with_year(display)
-    st.dataframe(display_with_year, use_container_width=True)
+    st.dataframe(display_with_year, width='stretch')
 
     if px is None or pd is None:
         st.caption("Install pandas and plotly to unlock interactive analytics for this statement.")
@@ -1491,7 +1863,7 @@ def _render_statement_tab(title: str, table) -> None:
                     markers=True,
                     title=f"{column} Trend",
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
 
     if len(numeric_columns) > len(headline_columns):
         remaining = numeric_columns[len(headline_columns) :]
@@ -1504,7 +1876,7 @@ def _render_statement_tab(title: str, table) -> None:
             markers=True,
             title="Additional Statement Metrics",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
 
 def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -> None:
@@ -1520,7 +1892,7 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
         ]
     else:
         display_frame = income_frame
-    st.dataframe(display_frame, use_container_width=True)
+    st.dataframe(display_frame, width='stretch')
 
     if px is not None and pd is not None:
         if isinstance(display_frame, pd.DataFrame):
@@ -1545,7 +1917,7 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
                     markers=True,
                     title="Income Statement Highlights",
                 )
-                st.plotly_chart(fig_income, use_container_width=True)
+                st.plotly_chart(fig_income, width='stretch')
 
             if "EBITDA Margin" in frame.columns:
                 fig_margin = px.line(
@@ -1555,7 +1927,7 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
                     markers=True,
                     title="EBITDA Margin",
                 )
-                st.plotly_chart(fig_margin, use_container_width=True)
+                st.plotly_chart(fig_margin, width='stretch')
 
     st.markdown("#### Gross Revenue Schedule")
     try:
@@ -1564,7 +1936,7 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
         st.warning(f"Unable to calculate gross revenue schedule: {exc}")
     else:
         revenue_frame = _with_year(revenue_schedule)
-        st.dataframe(revenue_frame, use_container_width=True)
+        st.dataframe(revenue_frame, width='stretch')
         st.caption(
             "Gross Revenue is decomposed into product-level sales, distributor commissions, "
             "and resulting net revenue."
@@ -1596,7 +1968,7 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
                     barmode="stack",
                     title="Revenue Composition",
                 )
-                st.plotly_chart(fig_product, use_container_width=True)
+                st.plotly_chart(fig_product, width='stretch')
             elif numeric_columns:
                 st.markdown("##### Revenue Drivers")
                 melt_frame = frame.melt(id_vars=["Year"], value_vars=numeric_columns, var_name="Metric", value_name="Value")
@@ -1608,7 +1980,7 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
                     markers=True,
                     title="Revenue Schedule",
                 )
-                st.plotly_chart(fig_revenue, use_container_width=True)
+                st.plotly_chart(fig_revenue, width='stretch')
 
     st.markdown("#### Total Expenses Schedule")
     try:
@@ -1618,7 +1990,7 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
         return
 
     expense_frame = _with_year(expense_schedule)
-    st.dataframe(expense_frame, use_container_width=True)
+    st.dataframe(expense_frame, width='stretch')
     st.caption(
         "Total Expenses comprise raw materials, utilities, direct labour, cost of sales, "
         "and general & administrative costs."
@@ -1643,7 +2015,7 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
                 groupnorm="fraction",
                 title="Expense Mix Over Time",
             )
-            st.plotly_chart(fig_expense, use_container_width=True)
+            st.plotly_chart(fig_expense, width='stretch')
 
 
 def _render_ai_dashboard(ai_insights: Optional[AIInsights]) -> None:
@@ -1655,7 +2027,7 @@ def _render_ai_dashboard(ai_insights: Optional[AIInsights]) -> None:
         return
 
     if ai_insights.ml_forecast is not None:
-        st.dataframe(_with_year(ai_insights.ml_forecast), use_container_width=True)
+        st.dataframe(_with_year(ai_insights.ml_forecast), width='stretch')
     else:
         st.caption(
             "Machine-learning forecasts are unavailable. Adjust the forecast horizon or ensure "
@@ -1692,7 +2064,7 @@ def _render_sensitivity(outputs: FinancialOutputs) -> None:
     for variable, df in outputs.sensitivity_results.items():
         st.markdown(f"#### {variable}")
         frame = _with_year(df)
-        st.dataframe(frame, use_container_width=True)
+        st.dataframe(frame, width='stretch')
 
         if supports_plotly:
             if isinstance(frame, pd.DataFrame):
@@ -1723,7 +2095,7 @@ def _render_sensitivity(outputs: FinancialOutputs) -> None:
                         y="Value",
                         title=f"{variable} Sensitivity Comparison",
                     )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
 
 
 def _render_scenarios(outputs: FinancialOutputs) -> None:
@@ -1748,7 +2120,7 @@ def _render_scenarios(outputs: FinancialOutputs) -> None:
         for name, df in outputs.scenario_results.items():
             st.markdown(f"#### {name}")
             frame = _with_year(df)
-            st.dataframe(frame, use_container_width=True)
+            st.dataframe(frame, width='stretch')
 
             if supports_plotly:
                 if isinstance(frame, pd.DataFrame):
@@ -1779,14 +2151,14 @@ def _render_scenarios(outputs: FinancialOutputs) -> None:
                             y="Value",
                             title=f"{name} Scenario Comparison",
                         )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
 
     st.markdown("### Scenario Tool Insights")
     if outputs.scenario_tool_results:
         for key, result in outputs.scenario_tool_results.items():
             label = SCENARIO_TOOL_LABELS.get(key, key.replace("_", " ").title())
             st.markdown(f"#### {label}")
-            st.dataframe(_ensure_dataframe(result.rows), use_container_width=True)
+            st.dataframe(_ensure_dataframe(result.rows), width='stretch')
             st.caption(result.interpretation)
     else:
         st.caption("No scenario tools have been configured.")
@@ -1805,11 +2177,11 @@ def _render_monte_carlo(outputs: FinancialOutputs) -> None:
     monte_carlo_df = _ensure_dataframe(outputs.monte_carlo)
     if px is None or pd is None:
         st.warning("Plotly unavailable. Displaying Monte Carlo results in tabular form.")
-        st.dataframe(monte_carlo_df, use_container_width=True)
+        st.dataframe(monte_carlo_df, width='stretch')
     else:
         fig = px.histogram(monte_carlo_df, x="NPV", nbins=40, title="NPV Distribution")
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(monte_carlo_df.describe().T, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
+        st.dataframe(monte_carlo_df.describe().T, width='stretch')
 
 
 def _render_break_even(outputs: FinancialOutputs) -> None:
@@ -1828,7 +2200,7 @@ def _render_break_even(outputs: FinancialOutputs) -> None:
         break_even_frame = break_even_df.reset_index().rename(columns={"index": "Product"})
     else:
         break_even_frame = pd.DataFrame(break_even_df)
-    st.dataframe(break_even_frame, use_container_width=True)
+    st.dataframe(break_even_frame, width='stretch')
 
     if px is not None and pd is not None and not break_even_frame.empty:
         y_column = (
@@ -1845,13 +2217,13 @@ def _render_break_even(outputs: FinancialOutputs) -> None:
             )
             st.plotly_chart(
                 fig_break_even,
-                use_container_width=True,
+                width='stretch',
                 key="break_even_units_chart",
             )
 
     st.markdown("### Payback Schedule")
     payback_df = _with_year(outputs.payback)
-    st.dataframe(payback_df, use_container_width=True)
+    st.dataframe(payback_df, width='stretch')
 
     if px is not None and pd is not None:
         if isinstance(payback_df, pd.DataFrame):
@@ -1868,13 +2240,13 @@ def _render_break_even(outputs: FinancialOutputs) -> None:
             )
             st.plotly_chart(
                 fig_payback,
-                use_container_width=True,
+                width='stretch',
                 key="cumulative_payback_chart",
             )
 
     st.markdown("### Discounted Payback Schedule")
     discounted_df = _with_year(outputs.discounted_payback)
-    st.dataframe(discounted_df, use_container_width=True)
+    st.dataframe(discounted_df, width='stretch')
 
     if px is not None and pd is not None:
         if isinstance(discounted_df, pd.DataFrame):
@@ -1891,7 +2263,7 @@ def _render_break_even(outputs: FinancialOutputs) -> None:
             )
             st.plotly_chart(
                 fig_discounted,
-                use_container_width=True,
+                width='stretch',
                 key="discounted_payback_chart",
             )
 
@@ -4167,7 +4539,7 @@ def _render_debt_section(
             st.markdown(f"**{title} Amortisation Schedule**")
             st.dataframe(
                 _ensure_dataframe(schedule_rows),
-                use_container_width=True,
+                width='stretch',
             )
 
     next_year = (

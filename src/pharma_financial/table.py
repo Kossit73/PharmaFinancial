@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping
+from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Union
 
 
 try:  # pragma: no cover - executed when pandas is available
@@ -12,7 +12,7 @@ except Exception:  # pragma: no cover - pandas may not be installed in tests
     _pd = None  # type: ignore
 
 
-Number = float | int
+Number = Union[float, int]
 
 
 def _ensure_length(name: str, values: Iterable[Number], expected: int) -> List[float]:
@@ -120,4 +120,3 @@ def build_table(
     index_name: str = "Year",
 ) -> Table:
     return Table(list(index), {k: list(map(float, v)) for k, v in columns.items()}, index_name)
-
