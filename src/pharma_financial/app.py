@@ -5,11 +5,13 @@ import base64
 import copy
 import csv
 import hashlib
+import html
 import io
 import json
 import logging
 import os
 import re
+import time
 from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
@@ -53,6 +55,7 @@ from .model import (
 from .report import collect_report_sections, generate_report
 from .table import Table
 from .paystack import PaystackClient, PaystackError, SubscriptionStatus
+from .subscription_store import StoredSubscriptionRecord, get_subscription_store
 
 try:  # pragma: no cover - executed in environments with pandas available
     import pandas as pd
@@ -63,6 +66,11 @@ try:  # pragma: no cover - optional dependency for charting
     import plotly.express as px
 except Exception:  # pragma: no cover - gracefully degrade when Plotly missing
     px = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency for custom HTML
+    import streamlit.components.v1 as components
+except Exception:  # pragma: no cover - compatibility with environments lacking components
+    components = None  # type: ignore
 
 try:  # pragma: no cover - optional dependency for Excel ingestion
     from openpyxl import load_workbook
@@ -137,6 +145,9 @@ _MODEL_CACHE: dict[str, tuple["FinancialModel", "FinancialOutputs"]] = {}
 LOGGER = logging.getLogger(__name__)
 _PAYSTACK_CLIENT: PaystackClient | None = None
 _ENV_FILE_LOADED = False
+_SUBSCRIPTION_CACHE_TTL_SECONDS = 10 * 60
+_CHECKOUT_LINK_TTL_SECONDS = 30 * 60
+_AUTO_DOWNLOAD_MAX_BYTES = 5 * 1024 * 1024
 
 
 def _load_local_env() -> None:
@@ -179,21 +190,19 @@ def _rerun() -> None:
 
     Streamlit has exposed multiple rerun helpers across releases. Newer
     versions ship :func:`st.rerun` while older builds provide
-    :func:`st.experimental_rerun`.  When the dashboard runs outside of the
+    :func:`st.experimental_rerun`. When the dashboard runs outside of the
     Streamlit runtime (for example during unit tests or direct script
     execution) calling either helper raises ``StreamlitAPIException``.  The
     function therefore attempts each available helper and swallows runtime
     errors so the rest of the UI logic can continue gracefully.
     """
 
-    candidates = []
-    rerun = getattr(st, "rerun", None)
-    if callable(rerun):  # pragma: no cover - depends on Streamlit version
-        candidates.append(rerun)
-
-    legacy = getattr(st, "experimental_rerun", None)
-    if callable(legacy):  # pragma: no cover - depends on Streamlit version
-        candidates.append(legacy)
+    candidates: list[Callable[[], None]] = []
+    for attr in ("experimental_rerun", "rerun"):
+        helper = getattr(st, attr, None)
+        if callable(helper):  # pragma: no cover - depends on Streamlit version
+            if helper not in candidates:
+                candidates.append(helper)
 
     for trigger in candidates:
         try:
@@ -547,6 +556,8 @@ def main() -> None:
         page_icon="💊",
         layout="wide",
     )
+
+    _maybe_handle_paystack_redirect()
 
     st.title("Pharmaceuticals Financial Model")
     st.caption(
@@ -905,9 +916,14 @@ def _render_excel_model_download(
         _render_subscription_modal()
 
         status = _subscription_status()
-        if status and status.is_active:
+        verified = _subscription_verified()
+        if status and verified:
             st.caption(
                 f"Subscription verified for **{status.email}**. Downloads remain unlocked while this session is active."
+            )
+        elif status and status.is_active and not verified:
+            st.warning(
+                "Your subscription is no longer active for downloads. Use the button below to refresh the status."
             )
         else:
             st.caption(
@@ -959,21 +975,42 @@ def _render_excel_model_download(
         download_prompt_key = f"download_prompt_{key_suffix}"
         clear_key = f"clear_excel_{key_suffix}"
 
+        lock_key = f"excel_generating_{key_suffix}"
+        st.session_state.setdefault(lock_key, False)
+
         download_container = st.container()
         with download_container:
-            if not excel_bytes:
-                if st.button("Prepare Excel Model", key=prepare_key):
-                    with st.spinner("Preparing Excel workbook..."):
-                        excel_bytes = _generate_excel_bytes(model, results, scenario_label)
-                    excel_map[scenario_label] = excel_bytes
-                    st.session_state.excel_bytes_map = excel_map
+            prepare_needed = excel_bytes is None
+            if prepare_needed:
+                info_slot = st.empty()
+            else:
+                info_slot = None
+            if prepare_needed:
+                if st.button("Prepare Excel Model", key=prepare_key) and not st.session_state.get(lock_key):
+                    try:
+                        st.session_state[lock_key] = True
+                        with st.spinner("Preparing Excel workbook..."):
+                            excel_bytes = _generate_excel_bytes(model, results, scenario_label)
+                        excel_map[scenario_label] = excel_bytes
+                        st.session_state.excel_bytes_map = excel_map
+                    finally:
+                        st.session_state[lock_key] = False
+                    prepare_needed = excel_bytes is None
+            if prepare_needed and info_slot:
+                info_slot.info("Click 'Prepare Excel Model' to generate the workbook for download.")
             if excel_bytes:
                 st.success("Workbook ready. Download or refresh using the options below.")
-                if st.button("Refresh Excel Model", key=refresh_key):
-                    with st.spinner("Refreshing Excel workbook..."):
-                        excel_bytes = _generate_excel_bytes(model, results, scenario_label)
-                    excel_map[scenario_label] = excel_bytes
-                    st.session_state.excel_bytes_map = excel_map
+                button_cols = st.columns([1, 1, 1])
+                with button_cols[0]:
+                    if st.button("Refresh Excel Model", key=refresh_key, use_container_width=True) and not st.session_state.get(lock_key):
+                        try:
+                            st.session_state[lock_key] = True
+                            with st.spinner("Refreshing Excel workbook..."):
+                                excel_bytes = _generate_excel_bytes(model, results, scenario_label)
+                            excel_map[scenario_label] = excel_bytes
+                            st.session_state.excel_bytes_map = excel_map
+                        finally:
+                            st.session_state[lock_key] = False
                 auto_meta = st.session_state.get("subscription_auto_download")
                 should_auto_download = (
                     isinstance(auto_meta, Mapping)
@@ -981,39 +1018,46 @@ def _render_excel_model_download(
                     and _subscription_verified()
                 )
                 if should_auto_download:
-                    _auto_trigger_download(
-                        excel_bytes,
-                        EXCEL_EXPORT_FILE_NAME,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    )
+                    if len(excel_bytes) <= _AUTO_DOWNLOAD_MAX_BYTES:
+                        _auto_trigger_download(
+                            excel_bytes,
+                            EXCEL_EXPORT_FILE_NAME,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        )
+                        st.info(
+                            "Your download should start automatically. If it does not, use the button below."
+                        )
+                    else:
+                        st.warning(
+                            "The workbook is too large for automatic delivery. Please use the download button below."
+                        )
                     st.session_state.pop("subscription_auto_download", None)
-                    st.info(
-                        "Your download should start automatically. If it does not, use the button below."
-                    )
+                with button_cols[1]:
+                    if _subscription_verified():
+                        st.download_button(
+                            "Download Excel Model",
+                            data=excel_bytes,
+                            file_name=EXCEL_EXPORT_FILE_NAME,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=download_key,
+                            help="Save the prepared workbook to your device.",
+                            use_container_width=True,
+                        )
+                    else:
+                        if st.button("Download Excel Model", key=download_prompt_key, use_container_width=True):
+                            st.session_state["subscription_pending_download"] = {
+                                "scenario": scenario_label,
+                                "file_name": EXCEL_EXPORT_FILE_NAME,
+                            }
+                            _open_subscription_modal()
+                with button_cols[2]:
+                    if st.button("Clear Prepared Excel", key=clear_key, use_container_width=True):
+                        excel_map.pop(scenario_label, None)
+                        st.session_state.excel_bytes_map = excel_map
+                        excel_bytes = None
+                        _rerun()
                 if _subscription_verified():
-                    st.download_button(
-                        "Download Excel Model",
-                        data=excel_bytes,
-                        file_name=EXCEL_EXPORT_FILE_NAME,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key=download_key,
-                        help="Save the prepared workbook to your device.",
-                        width="stretch",
-                    )
-                    st.caption("Click the button above to save the prepared Excel workbook.")
-                else:
-                    if st.button("Download Excel Model", key=download_prompt_key):
-                        st.session_state["subscription_pending_download"] = {
-                            "scenario": scenario_label,
-                            "file_name": EXCEL_EXPORT_FILE_NAME,
-                        }
-                        _open_subscription_modal()
-                if st.button("Clear Prepared Excel", key=clear_key):
-                    excel_map.pop(scenario_label, None)
-                    st.session_state.excel_bytes_map = excel_map
-                    excel_bytes = None
-            if not excel_bytes:
-                st.info("Click 'Prepare Excel Model' to generate the workbook for download.")
+                    st.caption("Use the buttons above to refresh, download, or clear the prepared workbook.")
 
 
 def _get_paystack_client() -> PaystackClient | None:
@@ -1034,23 +1078,80 @@ def _auto_trigger_download(data: bytes, file_name: str, mime: str = "application
 
     if not data:
         return
+    if not components:
+        return
 
+    safe_name = str(file_name).replace('"', "").replace("'", "")
+    safe_name_escaped = html.escape(safe_name)
     encoded = base64.b64encode(data).decode("ascii")
-    safe_name = file_name.replace('"', "").replace("'", "")
-    script = f"""
-        <script>
-        (function() {{
-            const bytes = "{encoded}";
-            const link = document.createElement('a');
-            link.href = "data:{mime};base64," + bytes;
-            link.download = "{safe_name}";
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-        }})();
-        </script>
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head></head>
+    <body>
+    <script>
+    (function() {{
+      try {{
+        const b64 = "{encoded}";
+        const contentType = "{mime}";
+        const fileName = "{safe_name_escaped}";
+        const byteCharacters = atob(b64);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {{
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }}
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], {{ type: contentType }});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function() {{
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }}, 1000);
+      }} catch (err) {{
+        console.error("Auto-download failed:", err);
+      }}
+    }})();
+    </script>
+    </body>
+    </html>
     """
-    st.markdown(script, unsafe_allow_html=True)
+
+    try:
+        components.html(html_content, height=0, width=0)
+    except Exception as exc:  # pragma: no cover - render fallback
+        LOGGER.exception("Auto-download via components.html failed: %s", exc)
+        href = f"data:{mime};base64,{encoded}"
+        st.markdown(f'[Click here to download the file]({href})', unsafe_allow_html=True)
+
+def _render_checkout_link_button(
+    url: str, label: str = "Open Paystack Checkout", container: DeltaGenerator | None = None
+) -> None:
+    """Render a client-side button that opens ``url`` in a new tab."""
+
+    if not url:
+        return
+
+    target = container or st
+    button_html = f"""
+    <a href="{url}" target="_blank" rel="noopener noreferrer">
+      <button style="
+        background-color: #0e69c5;
+        color: white;
+        border: none;
+        padding: 0.5rem 1rem;
+        border-radius: 6px;
+        cursor: pointer;
+      ">{label}</button>
+    </a>
+    """
+    st.markdown(button_html, unsafe_allow_html=True)
 
 
 def _subscription_status() -> SubscriptionStatus | None:
@@ -1066,7 +1167,15 @@ def _subscription_verified() -> bool:
     """Return ``True`` if the current session has an active subscription."""
 
     status = _subscription_status()
-    return bool(status and status.is_active)
+    if not isinstance(status, SubscriptionStatus) or not status.is_active:
+        return False
+
+    record = _subscription_store_record(status.email)
+    if record and (record.is_expired() or not record.is_active):
+        _drop_session_subscription(status.email)
+        return False
+
+    return True
 
 
 def _subscription_email_hint() -> str:
@@ -1172,19 +1281,42 @@ def _subscription_dialog_body() -> None:
         alert_slot.info("Please provide your email to continue.")
 
     checkout_url: str | None = None
+    checkout_just_created = False
     if status and not status.is_active:
-        checkout_clicked = st.button("Subscribe via Paystack", key="subscription_modal_checkout")
+        creating_checkout_key = "subscription_modal_creating_checkout"
+        st.session_state.setdefault(creating_checkout_key, False)
+        checkout_button_disabled = bool(st.session_state.get(creating_checkout_key))
+        button_col, link_col = st.columns([1, 1])
+        with button_col:
+            checkout_clicked = st.button(
+                "Subscribe via Paystack",
+                key="subscription_modal_checkout",
+                disabled=checkout_button_disabled,
+            )
         if checkout_clicked:
             email_value = st.session_state.get(email_key, "")
-            with st.spinner("Preparing Paystack checkout link..."):
-                checkout_url = _create_subscription_checkout(email_value)
-            if checkout_url:
-                alert_slot.success("Checkout link created. Use the button below to complete your subscription.")
+            try:
+                st.session_state[creating_checkout_key] = True
+                with st.spinner("Preparing Paystack checkout link..."):
+                    checkout_url = _create_subscription_checkout(email_value)
+                if checkout_url:
+                    alert_slot.success("Checkout link ready. Use the button below to open Paystack in a new tab.")
+                    checkout_just_created = True
+            finally:
+                st.session_state[creating_checkout_key] = False
         else:
+            checkout_url = None
+
+        if not checkout_url:
             checkout_url = _checkout_url_for_email(st.session_state.get(email_key, ""))
 
         if checkout_url:
-            st.markdown(f"[Open Paystack Checkout]({checkout_url})")
+            if checkout_just_created:
+                with link_col:
+                    _render_checkout_link_button(checkout_url)
+            else:
+                with link_col:
+                    st.markdown(f"[Open Paystack Checkout]({checkout_url})")
 
 
 
@@ -1210,6 +1342,140 @@ def _normalize_email(value: str | None) -> str:
     return (value or "").strip().lower()
 
 
+def _subscription_store_record(email: str | None) -> StoredSubscriptionRecord | None:
+    """Fetch the persisted subscription status for ``email`` when available."""
+
+    normalized = _normalize_email(email)
+    if not normalized:
+        return None
+    store = get_subscription_store()
+    if not store:
+        return None
+    try:
+        return store.get_status(normalized)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        LOGGER.debug("Unable to read subscription store: %s", exc)
+        return None
+
+
+def _subscription_store_remove(email: str) -> None:
+    """Remove the persisted record for ``email``."""
+
+    normalized = _normalize_email(email)
+    if not normalized:
+        return
+    store = get_subscription_store()
+    if not store:
+        return
+    try:
+        store.remove_status(normalized)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        LOGGER.debug("Unable to remove subscription store entry: %s", exc)
+
+
+def _persist_subscription_status(status: SubscriptionStatus, *, source: str) -> None:
+    """Write ``status`` to the shared persistence layer when configured."""
+
+    if not status or not status.email:
+        return
+    store = get_subscription_store()
+    if not store:
+        return
+    ttl = _SUBSCRIPTION_CACHE_TTL_SECONDS if status.is_active else None
+    try:
+        store.write_status(status, source=source, ttl_seconds=ttl)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        LOGGER.debug("Unable to persist subscription status: %s", exc)
+
+
+def _subscription_status_from_record(record: StoredSubscriptionRecord) -> SubscriptionStatus:
+    """Convert a persisted record into a ``SubscriptionStatus`` instance."""
+
+    return SubscriptionStatus(
+        email=record.email,
+        is_active=record.is_active,
+        message=record.status_message,
+        payload=record.payload,
+    )
+
+
+def _subscription_cache_forget(email: str) -> None:
+    """Remove ``email`` from the in-session cache."""
+
+    normalized = _normalize_email(email)
+    if not normalized:
+        return
+    cache = st.session_state.get("subscription_cache")
+    if isinstance(cache, dict) and normalized in cache:
+        cache.pop(normalized, None)
+        st.session_state["subscription_cache"] = cache
+
+
+def _drop_session_subscription(email: str) -> None:
+    """Clear session-level subscription information for ``email``."""
+
+    normalized = _normalize_email(email)
+    if not normalized:
+        return
+    current = st.session_state.get("subscription_status")
+    if isinstance(current, SubscriptionStatus) and _normalize_email(current.email) == normalized:
+        st.session_state.pop("subscription_status", None)
+    _subscription_cache_forget(normalized)
+
+
+def _subscription_cache_get(email: str) -> SubscriptionStatus | None:
+    """Return a cached subscription status when still within the TTL."""
+
+    normalized = _normalize_email(email)
+    if not normalized:
+        return None
+
+    cache = st.session_state.get("subscription_cache")
+    if not isinstance(cache, dict):
+        cache = {}
+        st.session_state["subscription_cache"] = cache
+
+    # check persisted record for revocations or shared cache warmups
+    record = _subscription_store_record(normalized)
+    if record and record.is_expired():
+        _subscription_store_remove(normalized)
+        record = None
+
+    entry = cache.get(normalized)
+    if isinstance(entry, dict):
+        status = entry.get("status")
+        checked_at = entry.get("checked_at")
+        if isinstance(status, SubscriptionStatus) and isinstance(checked_at, (int, float)):
+            if record and not record.is_active:
+                cache.pop(normalized, None)
+                st.session_state["subscription_cache"] = cache
+            elif time.time() - float(checked_at) <= _SUBSCRIPTION_CACHE_TTL_SECONDS:
+                return status
+        if normalized in cache:
+            cache.pop(normalized, None)
+            st.session_state["subscription_cache"] = cache
+
+    if record:
+        status = _subscription_status_from_record(record)
+        cache[normalized] = {"status": status, "checked_at": time.time()}
+        st.session_state["subscription_cache"] = cache
+        return status
+    return None
+
+
+def _subscription_cache_set(email: str, status: SubscriptionStatus) -> None:
+    """Store ``status`` for ``email`` in the session cache with a timestamp."""
+
+    normalized = _normalize_email(email)
+    if not normalized:
+        return
+
+    cache: dict[str, dict[str, Any]] = st.session_state.setdefault("subscription_cache", {})
+    cache[normalized] = {"status": status, "checked_at": time.time()}
+    st.session_state["subscription_cache"] = cache
+    _persist_subscription_status(status, source="session_cache")
+
+
 def _verify_subscription_email(email: str) -> SubscriptionStatus | None:
     """Verify the subscription status for ``email`` with caching."""
 
@@ -1218,8 +1484,7 @@ def _verify_subscription_email(email: str) -> SubscriptionStatus | None:
         st.warning("Please provide a valid email address.")
         return None
 
-    cache: dict[str, SubscriptionStatus] = st.session_state.setdefault("subscription_cache", {})
-    cached = cache.get(normalized)
+    cached = _subscription_cache_get(normalized)
     if cached and cached.is_active:
         st.session_state["subscription_status"] = cached
         st.session_state["subscription_modal_open"] = False
@@ -1231,13 +1496,12 @@ def _verify_subscription_email(email: str) -> SubscriptionStatus | None:
         return None
 
     try:
-        status = client.has_active_subscription(normalized)
+        status = client.has_active_subscription_for_email(normalized)
     except PaystackError as exc:
         st.error(f"Unable to verify subscription: {exc}")
         return None
 
-    cache[normalized] = status
-    st.session_state["subscription_cache"] = cache
+    _subscription_cache_set(normalized, status)
     st.session_state["subscription_status"] = status
     if status.is_active:
         st.session_state["subscription_modal_open"] = False
@@ -1252,8 +1516,7 @@ def _create_subscription_checkout(email: str) -> str | None:
         st.warning("Please enter a valid email to receive a checkout link.")
         return None
 
-    links: dict[str, str] = st.session_state.setdefault("subscription_checkout_links", {})
-    existing = links.get(normalized)
+    existing = _checkout_url_for_email(normalized)
     if existing:
         return existing
 
@@ -1271,7 +1534,8 @@ def _create_subscription_checkout(email: str) -> str | None:
         st.error(f"Unable to generate checkout link: {exc}")
         return None
 
-    links[normalized] = url
+    links: dict[str, Any] = st.session_state.setdefault("subscription_checkout_links", {})
+    links[normalized] = {"url": url, "created": time.time()}
     st.session_state["subscription_checkout_links"] = links
     return url
 
@@ -1285,10 +1549,117 @@ def _checkout_url_for_email(email: str) -> str | None:
 
     links = st.session_state.get("subscription_checkout_links")
     if isinstance(links, Mapping):
-        url = links.get(normalized)
-        if isinstance(url, str) and url:
-            return url
+        entry = links.get(normalized)
+        if isinstance(entry, str) and entry:
+            return entry
+        if isinstance(entry, Mapping):
+            url = entry.get("url")
+            created = entry.get("created")
+            if isinstance(url, str) and url:
+                if not isinstance(created, (int, float)) or time.time() - float(created) <= _CHECKOUT_LINK_TTL_SECONDS:
+                    return url
+                links.pop(normalized, None)
+                st.session_state["subscription_checkout_links"] = links
     return None
+
+
+def _maybe_handle_paystack_redirect() -> None:
+    """Handle Paystack redirect query params (reference) to auto-verify payments."""
+
+    get_params = getattr(st, "query_params", None)
+    if not callable(get_params):
+        return
+
+    params = get_params() or {}
+    raw_reference = params.get("reference")
+    trx_reference = params.get("trxref")
+    raw_status = params.get("status")
+
+    def _first_value(value: object) -> str:
+        if isinstance(value, list):
+            value = value[0]
+        return (str(value or "")).strip()
+
+    reference = _first_value(raw_reference) or _first_value(trx_reference)
+    status_hint = _first_value(raw_status).lower()
+
+    if st.session_state.get("subscription_redirect_handled"):
+        return
+
+    if not reference:
+        if status_hint in {"failed", "cancelled", "canceled", "error"}:
+            st.warning(
+                "Paystack reported that the checkout was cancelled or declined. Please retry the subscription process."
+            )
+            st.session_state["subscription_redirect_handled"] = True
+            set_params = getattr(st, "experimental_set_query_params", None)
+            if callable(set_params):
+                try:
+                    set_params()
+                except Exception:  # pragma: no cover - Streamlit version dependent
+                    pass
+        return
+
+    client = _get_paystack_client()
+    if not client:
+        return
+
+    try:
+        with st.spinner("Verifying Paystack payment..."):
+            tx = client.verify_transaction(reference)
+    except PaystackError as exc:
+        st.warning(f"Unable to verify Paystack payment: {exc}")
+        return
+
+    if not isinstance(tx, Mapping):
+        st.info("We could not verify the Paystack payment automatically. Please retry verification manually.")
+        return
+
+    status_value = str(tx.get("status") or "").strip().lower()
+    if status_value != "success":
+        st.session_state["subscription_redirect_handled"] = True
+        if status_value in {"failed", "reversed"}:
+            st.error("Paystack reports that this payment failed. Please retry the checkout process.")
+        elif status_value in {"abandoned", "cancelled", "canceled"}:
+            st.warning("Paystack indicates the checkout was cancelled. You can restart the subscription below.")
+        else:
+            st.info("Paystack has not confirmed this payment as successful yet. Please retry shortly.")
+        set_params = getattr(st, "experimental_set_query_params", None)
+        if callable(set_params):
+            try:
+                set_params()
+            except Exception:  # pragma: no cover - Streamlit version dependent
+                pass
+        return
+
+    email = ""
+    customer = tx.get("customer")
+    if isinstance(customer, Mapping):
+        email = str(customer.get("email") or "")
+    metadata = tx.get("metadata")
+    if not email and isinstance(metadata, Mapping):
+        email = str(metadata.get("user_email") or metadata.get("email") or "")
+    normalized_email = _normalize_email(email)
+
+    if normalized_email:
+        try:
+            status = client.has_active_subscription_for_email(normalized_email)
+        except PaystackError as exc:
+            st.warning(f"Payment verified but subscription lookup failed: {exc}")
+            status = None
+        if status:
+            _subscription_cache_set(normalized_email, status)
+            st.session_state["subscription_status"] = status
+            if status.is_active:
+                st.session_state["subscription_modal_open"] = False
+
+    st.session_state["subscription_redirect_handled"] = True
+    set_params = getattr(st, "experimental_set_query_params", None)
+    if callable(set_params):
+        try:
+            set_params()
+        except Exception:  # pragma: no cover - Streamlit version dependent
+            pass
 
 
 def _render_inputs_tab(

@@ -1,10 +1,12 @@
 import importlib
 import json
 import sys
+import tempfile
 import types
 import unittest
 from io import BytesIO
 from pathlib import Path
+from unittest import mock
 
 try:  # pragma: no cover - optional dependency check
     from docx import Document
@@ -30,6 +32,10 @@ class _NoOp:
         return self
 
 
+from pharma_financial.paystack import SubscriptionStatus
+from pharma_financial.subscription_store import SubscriptionStore
+
+
 class DummyStreamlit(types.ModuleType):
     def __init__(self):
         super().__init__("streamlit")
@@ -49,7 +55,7 @@ class DummyStreamlit(types.ModuleType):
         return getattr(self._no_op, name, self._no_op)
 
 
-class RerunHelperTest(unittest.TestCase):
+class AppModuleTestCase(unittest.TestCase):
     def setUp(self):
         self.original_streamlit = sys.modules.get("streamlit")
         self.original_runtime = sys.modules.get("streamlit.runtime")
@@ -83,6 +89,9 @@ class RerunHelperTest(unittest.TestCase):
 
         if "pharma_financial.app" in sys.modules:
             del sys.modules["pharma_financial.app"]
+
+
+class RerunHelperTest(AppModuleTestCase):
 
     def test_rerun_helper_handles_missing_runtime(self):
         self.app._rerun()
@@ -382,6 +391,39 @@ class RerunHelperTest(unittest.TestCase):
         self.assertGreater(len(workbook), 0)
 
 
+class SubscriptionCacheTest(AppModuleTestCase):
+    def setUp(self):
+        super().setUp()
+        self.tempdir = tempfile.TemporaryDirectory()
+        db_path = Path(self.tempdir.name) / "subscriptions.db"
+        self.store = SubscriptionStore(db_path)
+        patcher = mock.patch("pharma_financial.app.get_subscription_store", return_value=self.store)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def tearDown(self):
+        self.store.close()
+        self.tempdir.cleanup()
+        super().tearDown()
+
+    def test_subscription_verified_revoked_by_store(self):
+        status = SubscriptionStatus(email="user@example.com", is_active=True, message="Active")
+        revoked = SubscriptionStatus(email="user@example.com", is_active=False, message="Revoked")
+        self.store.write_status(revoked, source="webhook", ttl_seconds=None)
+
+        self.app.st.session_state["subscription_status"] = status
+        self.assertFalse(self.app._subscription_verified())
+        self.assertIsNone(self.app.st.session_state.get("subscription_status"))
+
+    def test_subscription_cache_get_uses_persisted_entry(self):
+        active = SubscriptionStatus(email="user@example.com", is_active=True, message="Active")
+        self.store.write_status(active, source="manual", ttl_seconds=30.0)
+
+        cached = self.app._subscription_cache_get("user@example.com")
+        self.assertIsNotNone(cached)
+        self.assertTrue(cached.is_active)
+        cache = self.app.st.session_state.get("subscription_cache", {})
+        self.assertIn("user@example.com", cache)
 class UploadLoaderTests(unittest.TestCase):
     def setUp(self):
         if "pharma_financial.app" in sys.modules:
@@ -439,4 +481,3 @@ class UploadLoaderTests(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
-

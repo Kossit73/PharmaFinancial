@@ -32,7 +32,27 @@ class PaystackClientTest(unittest.TestCase):
             [
                 {
                     "status_code": 200,
-                    "payload": {"status": True, "message": "", "data": {"customer_code": "CUS_123"}},
+                    "payload": {
+                        "status": True,
+                        "message": "",
+                        "data": [{"email": "user@example.com", "customer_code": "CUS_123", "id": 42}],
+                    },
+                },
+                {
+                    "status_code": 200,
+                    "payload": {
+                        "status": True,
+                        "message": "",
+                        "data": {"subscriptions": []},
+                    },
+                },
+                {
+                    "status_code": 200,
+                    "payload": {
+                        "status": True,
+                        "message": "",
+                        "data": {"subscriptions": []},
+                    },
                 },
                 {
                     "status_code": 200,
@@ -50,6 +70,39 @@ class PaystackClientTest(unittest.TestCase):
 
         self.assertTrue(status.is_active)
         self.assertEqual(status.email, "user@example.com")
+        self.assertEqual(len(session.calls), 4)
+
+    def test_active_subscription_detected_inline_customer_detail(self):
+        session = DummySession(
+            [
+                {
+                    "status_code": 200,
+                    "payload": {
+                        "status": True,
+                        "message": "",
+                        "data": [{"email": "user@example.com", "customer_code": "CUS_789"}],
+                    },
+                },
+                {
+                    "status_code": 200,
+                    "payload": {
+                        "status": True,
+                        "message": "",
+                        "data": {
+                            "subscriptions": [
+                                {"status": "active", "subscription_code": "SUB_INLINE"},
+                            ]
+                        },
+                    },
+                },
+            ]
+        )
+        client = PaystackClient(secret_key="sk_test", session=session)
+
+        status = client.has_active_subscription("user@example.com")
+
+        self.assertTrue(status.is_active)
+        self.assertEqual(status.payload.get("subscription_code"), "SUB_INLINE")
         self.assertEqual(len(session.calls), 2)
 
     def test_inactive_when_customer_missing(self):
@@ -68,11 +121,114 @@ class PaystackClientTest(unittest.TestCase):
         self.assertFalse(status.is_active)
         self.assertEqual(len(session.calls), 1)
 
+    def test_successful_transaction_grants_access(self):
+        session = DummySession(
+            [
+                {
+                    "status_code": 200,
+                    "payload": {
+                        "status": True,
+                        "message": "",
+                        "data": [{"email": "user@example.com", "customer_code": "CUS_456", "id": 77}],
+                    },
+                },
+                {
+                    "status_code": 200,
+                    "payload": {"status": True, "message": "", "data": {"subscriptions": []}},
+                },
+                {
+                    "status_code": 200,
+                    "payload": {"status": True, "message": "", "data": {"subscriptions": []}},
+                },
+                {
+                    "status_code": 200,
+                    "payload": {
+                        "status": True,
+                        "message": "",
+                        "data": [],
+                    },
+                },
+                {
+                    "status_code": 200,
+                    "payload": {
+                        "status": True,
+                        "message": "",
+                        "data": [],
+                    },
+                },
+                {
+                    "status_code": 200,
+                    "payload": {
+                        "status": True,
+                        "message": "",
+                        "data": [],
+                    },
+                },
+                {
+                    "status_code": 200,
+                    "payload": {
+                        "status": True,
+                        "message": "",
+                        "data": [{"status": "success", "reference": "TRX_1"}],
+                    },
+                },
+            ]
+        )
+        client = PaystackClient(secret_key="sk_test", session=session)
+
+        status = client.has_active_subscription("user@example.com")
+
+        self.assertTrue(status.is_active)
+        self.assertIn("Successful transaction", status.message)
+        self.assertEqual(len(session.calls), 6)
+
     def test_checkout_requires_plan_or_amount(self):
         client = PaystackClient(secret_key="sk_test", session=DummySession([]))
 
         with self.assertRaises(PaystackError):
             client.create_subscription_checkout("user@example.com")
+
+    def test_get_subscriptions_handles_pagination(self):
+        first_batch = [{"status": "inactive", "subscription_code": f"SUB_{i}"} for i in range(50)]
+        session = DummySession(
+            [
+                {
+                    "status_code": 200,
+                    "payload": {"status": True, "message": "", "data": first_batch},
+                },
+                {
+                    "status_code": 200,
+                    "payload": {"status": True, "message": "", "data": [{"status": "active", "subscription_code": "SUB_LAST"}]},
+                },
+            ]
+        )
+        client = PaystackClient(secret_key="sk_test", session=session)
+
+        subs = client.get_subscriptions_for_customer("CUS_PAGE")
+
+        self.assertEqual(len(subs), 51)
+        self.assertEqual(session.calls[0]["kwargs"]["params"]["page"], 1)
+        self.assertEqual(session.calls[1]["kwargs"]["params"]["page"], 2)
+
+    def test_verify_transaction_returns_payload(self):
+        session = DummySession(
+            [
+                {
+                    "status_code": 200,
+                    "payload": {
+                        "status": True,
+                        "message": "",
+                        "data": {"status": "success", "reference": "TRX_123"},
+                    },
+                }
+            ]
+        )
+        client = PaystackClient(secret_key="sk_test", session=session)
+
+        tx = client.verify_transaction("TRX_123")
+
+        self.assertEqual(tx.get("reference"), "TRX_123")
+        self.assertTrue(session.calls[0]["url"].endswith("/transaction/verify/TRX_123"))
 
     def test_checkout_initialization_returns_link(self):
         session = DummySession(
@@ -95,3 +251,165 @@ class PaystackClientTest(unittest.TestCase):
         payload = session.calls[0]["kwargs"].get("json", {})
         self.assertEqual(payload.get("plan"), "PLAN_TEST")
         self.assertEqual(payload.get("email"), "user@example.com")
+
+    def test_checkout_includes_callback_when_configured(self):
+        session = DummySession(
+            [
+                {
+                    "status_code": 200,
+                    "payload": {
+                        "status": True,
+                        "message": "",
+                        "data": {"authorization_url": "https://checkout.paystack.com/callback"},
+                    },
+                }
+            ]
+        )
+        client = PaystackClient(
+            secret_key="sk_test",
+            session=session,
+            plan_code="PLAN_TEST",
+            callback_url="https://app.example.com/paystack/callback",
+        )
+
+        client.create_subscription_checkout("user@example.com")
+
+        payload = session.calls[0]["kwargs"].get("json", {})
+        self.assertEqual(payload.get("callback_url"), "https://app.example.com/paystack/callback")
+
+    def test_checkout_callback_can_be_overridden(self):
+        session = DummySession(
+            [
+                {
+                    "status_code": 200,
+                    "payload": {
+                        "status": True,
+                        "message": "",
+                        "data": {"authorization_url": "https://checkout.paystack.com/callback"},
+                    },
+                }
+            ]
+        )
+        client = PaystackClient(
+            secret_key="sk_test",
+            session=session,
+            plan_code="PLAN_TEST",
+            callback_url="https://app.example.com/paystack/callback",
+        )
+
+        client.create_subscription_checkout(
+            "user@example.com", callback_url="https://override.example.com/paystack"
+        )
+
+        payload = session.calls[0]["kwargs"].get("json", {})
+        self.assertEqual(payload.get("callback_url"), "https://override.example.com/paystack")
+        metadata = payload.get("metadata") or {}
+        self.assertEqual(metadata.get("cancel_action"), "https://override.example.com/paystack")
+
+    def test_checkout_metadata_includes_cancel_action(self):
+        session = DummySession(
+            [
+                {
+                    "status_code": 200,
+                    "payload": {
+                        "status": True,
+                        "message": "",
+                        "data": {"authorization_url": "https://checkout.paystack.com/abc"},
+                    },
+                }
+            ]
+        )
+        client = PaystackClient(
+            secret_key="sk_test",
+            session=session,
+            plan_code="PLAN_TEST",
+            callback_url="https://app.example.com/paystack/callback",
+        )
+
+        client.create_subscription_checkout("user@example.com", metadata={"source": "app"})
+
+        metadata = session.calls[0]["kwargs"]["json"].get("metadata") or {}
+        self.assertEqual(metadata.get("source"), "app")
+        self.assertEqual(metadata.get("cancel_action"), "https://app.example.com/paystack/callback")
+
+    def test_checkout_metadata_cancel_action_override(self):
+        session = DummySession(
+            [
+                {
+                    "status_code": 200,
+                    "payload": {
+                        "status": True,
+                        "message": "",
+                        "data": {"authorization_url": "https://checkout.paystack.com/abc"},
+                    },
+                }
+            ]
+        )
+        client = PaystackClient(
+            secret_key="sk_test",
+            session=session,
+            plan_code="PLAN_TEST",
+            callback_url="https://app.example.com/paystack/callback",
+        )
+
+        client.create_subscription_checkout(
+            "user@example.com",
+            metadata={"source": "app"},
+            cancel_action_url="https://app.example.com/paystack/cancelled",
+        )
+
+        metadata = session.calls[0]["kwargs"]["json"].get("metadata") or {}
+        self.assertEqual(metadata.get("source"), "app")
+        self.assertEqual(metadata.get("cancel_action"), "https://app.example.com/paystack/cancelled")
+
+    def test_checkout_uses_default_amount_when_configured(self):
+        session = DummySession(
+            [
+                {
+                    "status_code": 200,
+                    "payload": {
+                        "status": True,
+                        "message": "",
+                        "data": {"authorization_url": "https://checkout.paystack.com/abc"},
+                    },
+                }
+            ]
+        )
+        client = PaystackClient(
+            secret_key="sk_test", session=session, plan_code="PLAN_TEST", default_amount_kobo=50000
+        )
+
+        client.create_subscription_checkout("user@example.com")
+
+        payload = session.calls[0]["kwargs"].get("json", {})
+        self.assertEqual(payload.get("amount"), 50000)
+
+    def test_checkout_infers_amount_from_plan_lookup(self):
+        session = DummySession(
+            [
+                {
+                    "status_code": 200,
+                    "payload": {
+                        "status": True,
+                        "message": "",
+                        "data": {"amount": 75000},
+                    },
+                },
+                {
+                    "status_code": 200,
+                    "payload": {
+                        "status": True,
+                        "message": "",
+                        "data": {"authorization_url": "https://checkout.paystack.com/xyz"},
+                    },
+                },
+            ]
+        )
+        client = PaystackClient(secret_key="sk_test", session=session, plan_code="PLAN_PLAN")
+
+        client.create_subscription_checkout("user@example.com")
+
+        self.assertEqual(len(session.calls), 2)
+        self.assertTrue(session.calls[0]["url"].endswith("/plan/PLAN_PLAN"))
+        payload = session.calls[1]["kwargs"].get("json", {})
+        self.assertEqual(payload.get("amount"), 75000)

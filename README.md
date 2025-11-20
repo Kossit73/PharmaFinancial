@@ -56,6 +56,28 @@ This project provides a Python implementation of the Pharmaceuticals financial m
   Word, Excel, CSV, or JSON document. These formats rely on the `fpdf`, `python-docx`, and `openpyxl` packages, which are now
   included in `requirements.txt` so installing the project dependencies enables every export option out of the box.
 
+### Paystack Configuration
+
+Set the following environment variables (for example in `.env`) to enable the built-in subscription flow:
+
+- `PAYSTACK_SECRET_KEY` – Paystack secret key used to authenticate API calls.
+- `PAYSTACK_PLAN_CODE` – plan identifier returned by Paystack when you create the subscription plan.
+- `PAYSTACK_PLAN_AMOUNT_KOBO` *(optional)* – fallback amount (in Kobo) used when Paystack does not return the plan amount automatically.
+- `PAYSTACK_CALLBACK_URL` *(optional but recommended)* – URL Paystack redirects users to after they complete checkout. Point this at the Streamlit deployment so users return to the app automatically.
+- `PAYSTACK_CANCEL_ACTION_URL` *(optional)* – URL invoked when a user cancels or Paystack declines a payment, ensuring they are taken back to the Streamlit app even if the transaction fails.
+
+#### Cache invalidation & webhooks
+
+The Excel export tab now exposes a **Check subscription status** button which re-runs the Paystack lookup immediately instead of waiting for the 10‑minute session cache to expire.
+
+For server-driven invalidation, run the lightweight webhook receiver (set `PAYSTACK_WEBHOOK_SECRET` or reuse `PAYSTACK_SECRET_KEY`) and point your Paystack dashboard at it:
+
+```bash
+python -m pharma_financial.webhook --host 0.0.0.0 --port 8080
+```
+
+The server validates `X-Paystack-Signature`, records events in a SQLite database (`~/.pharma_financial/subscriptions.db` by default, override with `SUBSCRIPTION_STORE_PATH`), and marks subscriptions as revoked when Paystack emits cancellation or failed renewal events. Every Streamlit session consults the shared store before allowing downloads, so webhook updates cut off access immediately even if the UI cache is still valid.
+
 ## Customising Assumptions
 
 All modelling assumptions are defined in [`src/pharma_financial/data/default_inputs.json`](src/pharma_financial/data/default_inputs.json). Duplicate this file and pass the new path to the CLI using `--inputs` to evaluate alternative cases. The structure mirrors the specification shared in the project brief, covering production volumes, cost inflation, labour structures, financing, and working capital.
