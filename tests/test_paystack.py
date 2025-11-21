@@ -405,7 +405,12 @@ class PaystackClientTest(unittest.TestCase):
                 },
             ]
         )
-        client = PaystackClient(secret_key="sk_test", session=session, plan_code="PLAN_PLAN")
+        client = PaystackClient(
+            secret_key="sk_test",
+            session=session,
+            plan_code="PLAN_PLAN",
+            fetch_plan_amount=True,
+        )
 
         client.create_subscription_checkout("user@example.com")
 

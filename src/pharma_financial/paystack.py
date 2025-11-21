@@ -51,21 +51,25 @@ class PaystackClient:
         callback_url: str | None = None,
         cancel_action_url: str | None = None,
         default_metadata: Mapping[str, Any] | None = None,
+        fetch_plan_amount: bool | None = None,
         session: Session | None = None,
         timeout: float = 10.0,
     ) -> None:
-        self.base_url = (base_url or os.getenv("PAYSTACK_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
-        self.secret_key = secret_key or os.getenv("PAYSTACK_SECRET_KEY")
-        self.plan_code = plan_code or os.getenv("PAYSTACK_PLAN_CODE")
-        self.default_amount_kobo = self._normalize_amount(
-            default_amount_kobo or os.getenv("PAYSTACK_PLAN_AMOUNT_KOBO")
-        )
-        self.callback_url = (callback_url or os.getenv("PAYSTACK_CALLBACK_URL") or "").strip() or None
-        cancel_source = cancel_action_url or os.getenv("PAYSTACK_CANCEL_ACTION_URL")
-        self.cancel_action_url = (cancel_source or self.callback_url or "").strip() or None
+        self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
+        self.secret_key = secret_key
+        self.plan_code = plan_code
+        self.default_amount_kobo = self._normalize_amount(default_amount_kobo)
+        self.callback_url = (callback_url or "").strip() or None
+        cancel_source = cancel_action_url or self.callback_url
+        self.cancel_action_url = (cancel_source or "").strip() or None
         self.default_metadata: dict[str, Any] = {}
         if default_metadata:
             self.default_metadata.update(dict(default_metadata))
+        if fetch_plan_amount is None:
+            flag = (os.getenv("PAYSTACK_FETCH_PLAN_AMOUNT") or "").strip().lower()
+            self.fetch_plan_amount = flag in {"1", "true", "yes"}
+        else:
+            self.fetch_plan_amount = bool(fetch_plan_amount)
         if session is None:
             self.session = self._build_session()
             self._owns_session = True
@@ -105,7 +109,10 @@ class PaystackClient:
         if plan:
             payload["plan"] = plan
 
-        amount_value = self._resolve_amount(amount_kobo, plan)
+        plan_for_lookup = None
+        if self.fetch_plan_amount:
+            plan_for_lookup = plan_code or self.plan_code
+        amount_value = self._resolve_amount(amount_kobo, plan_for_lookup)
         if amount_value:
             payload["amount"] = amount_value
 
@@ -119,10 +126,10 @@ class PaystackClient:
         if metadata:
             metadata_payload.update(dict(metadata))
 
-        resolved_cancel_source = cancel_action_url or self.cancel_action_url or resolved_callback
+        resolved_cancel_source = cancel_action_url or resolved_callback or self.cancel_action_url
         resolved_cancel = (resolved_cancel_source or "").strip()
         if resolved_cancel:
-            metadata_payload.setdefault("cancel_action", resolved_cancel)
+            metadata_payload["cancel_action"] = resolved_cancel
 
         if "amount" not in payload and "plan" not in payload:
             raise PaystackError("Either a plan code or an amount must be supplied to start a subscription.")
@@ -358,7 +365,7 @@ class PaystackClient:
             return None
         return amount
 
-    def _resolve_amount(self, amount_kobo: int | None, plan_code: str | None) -> int | None:
+    def _resolve_amount(self, amount_kobo: int | None, plan_code: str | None = None) -> int | None:
         """Return the checkout amount in kobo for the request."""
 
         explicit = self._normalize_amount(amount_kobo)
@@ -370,11 +377,10 @@ class PaystackClient:
 
         plan = (plan_code or "").strip()
         if plan:
-            inferred = self._plan_amount(plan)
-            if inferred:
-                return inferred
-        return None
+            return self._plan_amount(plan)
 
+        return None
+    
     def _plan_amount(self, plan_code: str) -> int | None:
         """Retrieve (and cache) the configured Paystack plan amount."""
 

@@ -4,8 +4,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .inputs import load_inputs
-from .model import FinancialModel
+from .core.inputs import load_inputs
+from .core.model import FinancialModel
 
 
 def run_model(input_path: Path | None = None, output: Path | None = None) -> None:

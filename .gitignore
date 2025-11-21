@@ -4,3 +4,4 @@ outputs/
 .env
 .venv
 *.egg-info
+.vscode

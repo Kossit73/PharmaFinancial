@@ -42,18 +42,18 @@ if TYPE_CHECKING:  # pragma: no cover - typing aid only
 else:  # pragma: no cover - used when Streamlit isn't fully available
     DeltaGenerator = Any  # type: ignore[misc]
 
-from .ai import AIInsights
-from .debt import amortise_entries
-from .inputs import DebtEntry, ModelInputs, parse_inputs
-from .model import (
+from .core.ai import AIInsights
+from .core.debt import amortise_entries
+from .core.inputs import DebtEntry, ModelInputs, parse_inputs
+from .core.model import (
     CASH_FLOW_BEGIN_COLUMN,
     CASH_FLOW_END_COLUMN,
     CASH_FLOW_NET_COLUMN,
     FinancialModel,
     FinancialOutputs,
 )
-from .report import collect_report_sections, generate_report
-from .table import Table
+from .core.report import collect_report_sections, generate_report
+from .core.table import Table
 from .paystack import PaystackClient, PaystackError, SubscriptionStatus
 from .subscription_store import StoredSubscriptionRecord, get_subscription_store
 
@@ -198,7 +198,7 @@ def _rerun() -> None:
     """
 
     candidates: list[Callable[[], None]] = []
-    for attr in ("experimental_rerun", "rerun"):
+    for attr in ("rerun", "experimental_rerun"):
         helper = getattr(st, attr, None)
         if callable(helper):  # pragma: no cover - depends on Streamlit version
             if helper not in candidates:
@@ -1066,7 +1066,16 @@ def _get_paystack_client() -> PaystackClient | None:
     global _PAYSTACK_CLIENT
     if _PAYSTACK_CLIENT is None:
         try:
-            _PAYSTACK_CLIENT = PaystackClient()
+            fetch_plan_flag = (os.getenv("PAYSTACK_FETCH_PLAN_AMOUNT") or "").strip().lower()
+            _PAYSTACK_CLIENT = PaystackClient(
+                secret_key=os.getenv("PAYSTACK_SECRET_KEY"),
+                base_url=os.getenv("PAYSTACK_BASE_URL"),
+                plan_code=os.getenv("PAYSTACK_PLAN_CODE"),
+                default_amount_kobo=os.getenv("PAYSTACK_PLAN_AMOUNT_KOBO"),
+                callback_url=os.getenv("PAYSTACK_CALLBACK_URL"),
+                cancel_action_url=os.getenv("PAYSTACK_CANCEL_ACTION_URL"),
+                fetch_plan_amount=fetch_plan_flag in {"1", "true", "yes"},
+            )
         except Exception as exc:  # pragma: no cover - defensive guard
             LOGGER.warning("Failed to create Paystack client: %s", exc)
             return None
@@ -1323,17 +1332,22 @@ def _subscription_dialog_body() -> None:
 # ---------------------------------------------------------------------------
 # Streamlit dialog registration
 # ---------------------------------------------------------------------------
-if hasattr(st, "dialog"):
-
-    @st.dialog("Subscription Required")  # type: ignore[misc]
-    def _subscription_dialog() -> None:
+def _subscription_dialog() -> None:
+    with st.container():
         _subscription_dialog_body()
 
-else:
 
-    def _subscription_dialog() -> None:
-        with st.container():
+_dialog_factory = getattr(st, "dialog", None)
+if callable(_dialog_factory):  # pragma: no cover - depends on Streamlit runtime
+    try:
+
+        @_dialog_factory("Subscription Required")  # type: ignore[misc]
+        def _dialog_wrapped() -> None:
             _subscription_dialog_body()
+
+        _subscription_dialog = _dialog_wrapped  # type: ignore[assignment]
+    except Exception:  # pragma: no cover - decorator unavailable
+        pass
 
 
 def _normalize_email(value: str | None) -> str:
