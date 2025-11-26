@@ -7,8 +7,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from pharma_financial.inputs import load_inputs, parse_inputs
-from pharma_financial.model import (
+from pharma_financial.core.inputs import load_inputs, parse_inputs
+from pharma_financial.core.model import (
     CASH_FLOW_BEGIN_COLUMN,
     CASH_FLOW_END_COLUMN,
     CASH_FLOW_NET_COLUMN,
@@ -782,4 +782,3 @@ class FinancialModelTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

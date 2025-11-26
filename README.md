@@ -124,12 +124,15 @@ Automated smoke tests validate that the financial engine executes end-to-end usi
 python -m unittest discover -s tests -p 'test_*.py'
 ```
 
-For ad-hoc experimentation you can also run the engine directly from the Python prompt:
+For ad-hoc experimentation you can also run the engine directly from the Python prompt. The
+modelling engine now lives under the `pharma_financial.core` namespace (legacy modules re-export
+the same classes for backwards compatibility), so import from `core` when scripting against the
+financial toolkit:
 
 ```bash
 python - <<'PY'
-from pharma_financial.inputs import load_inputs
-from pharma_financial.model import FinancialModel
+from pharma_financial.core.inputs import load_inputs
+from pharma_financial.core.model import FinancialModel
 
 inputs = load_inputs()
 model = FinancialModel(inputs)

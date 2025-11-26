@@ -26,6 +26,18 @@ except Exception:  # pragma: no cover - lightweight stub for non-Streamlit envir
     class _StreamlitStub:
         session_state: dict = {}
 
+        def cache_data(self, **_kwargs):
+            def decorator(func):
+                return func
+
+            return decorator
+
+        def cache_resource(self, **_kwargs):
+            def decorator(func):
+                return func
+
+            return decorator
+
         def __getattr__(self, name: str):  # noqa: D401 - simple runtime guard
             def _missing(*args, **kwargs):
                 raise RuntimeError(
@@ -36,6 +48,35 @@ except Exception:  # pragma: no cover - lightweight stub for non-Streamlit envir
 
     st = _StreamlitStub()  # type: ignore
     st.sidebar = _StreamlitStub()  # type: ignore[attr-defined]
+
+_CACHE_DATA = getattr(st, "cache_data", None)
+_CACHE_RESOURCE = getattr(st, "cache_resource", None)
+
+
+def _cache_data(**kwargs):
+    cache_fn = _CACHE_DATA
+    if callable(cache_fn):
+        decorator = cache_fn(**kwargs)
+        if callable(decorator):
+            return decorator
+
+    def decorator(func):
+        return func
+
+    return decorator
+
+
+def _cache_resource(**kwargs):
+    cache_fn = _CACHE_RESOURCE
+    if callable(cache_fn):
+        decorator = cache_fn(**kwargs)
+        if callable(decorator):
+            return decorator
+
+    def decorator(func):
+        return func
+
+    return decorator
 
 if TYPE_CHECKING:  # pragma: no cover - typing aid only
     from streamlit.delta_generator import DeltaGenerator
@@ -54,8 +95,9 @@ from .core.model import (
 )
 from .core.report import collect_report_sections, generate_report
 from .core.table import Table
-from .paystack import PaystackClient, PaystackError, SubscriptionStatus
-from .subscription_store import StoredSubscriptionRecord, get_subscription_store
+from .services.paystack import PaystackClient, PaystackError, SubscriptionStatus
+from .services.subscription_store import StoredSubscriptionRecord
+from .ui import ModelGateway, SubscriptionGateway
 
 try:  # pragma: no cover - executed in environments with pandas available
     import pandas as pd
@@ -142,6 +184,8 @@ GEN_AI_LABEL_TO_CODE = {label: code for code, label in GEN_AI_FEATURE_LABELS.ite
 
 _INPUT_CACHE: dict[str, ModelInputs] = {}
 _MODEL_CACHE: dict[str, tuple["FinancialModel", "FinancialOutputs"]] = {}
+_MODEL_GATEWAY = ModelGateway()
+_SUBSCRIPTION_GATEWAY = SubscriptionGateway()
 LOGGER = logging.getLogger(__name__)
 _PAYSTACK_CLIENT: PaystackClient | None = None
 _ENV_FILE_LOADED = False
@@ -293,15 +337,19 @@ def _cached_parse_inputs(payload: Mapping[str, object]) -> tuple[ModelInputs, st
     return cached, digest
 
 
-def _cached_model_run(inputs: ModelInputs, digest: str) -> tuple[FinancialModel, FinancialOutputs]:
+def _cached_model_run(
+    inputs: ModelInputs,
+    digest: str,
+    payload: Mapping[str, object] | None = None,
+) -> tuple[FinancialModel, FinancialOutputs]:
     """Return cached model/output pairs for the provided payload digest."""
 
     cached = _MODEL_CACHE.get(digest)
     if cached is not None:
         return cached
 
-    model = FinancialModel(inputs)
-    outputs = model.run()
+    resolved_payload = payload or {}
+    model, outputs = _MODEL_GATEWAY.run_model(resolved_payload, inputs)
     _MODEL_CACHE[digest] = (model, outputs)
     return model, outputs
 
@@ -376,7 +424,7 @@ def _ensure_scenario_payload(
             payload["financing"] = financing
 
     inputs, digest = _cached_parse_inputs(payload)
-    return _cached_model_run(inputs, digest)
+    return _cached_model_run(inputs, digest, payload)
 
 
 def _generate_excel_bytes(
@@ -568,8 +616,8 @@ def main() -> None:
     config_container = st.container()
     download_container = st.container()
 
-    inputs, digest = _resolve_inputs(config_container)
-    model, outputs = _cached_model_run(inputs, digest)
+    inputs, payload, digest = _resolve_inputs(config_container)
+    model, outputs = _cached_model_run(inputs, digest, payload)
 
     _render_excel_model_download(download_container, model, outputs)
 
@@ -607,10 +655,10 @@ def main() -> None:
         _render_break_even(outputs)
 
 
-def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:
+def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, Mapping[str, object], str]:
     with container:
         if "input_payload" not in st.session_state:
-            _initialise_session_payload(json.loads(DEFAULT_INPUT_JSON))
+            _initialise_session_payload(_default_payload())
 
         payload = st.session_state["input_payload"]
 
@@ -803,7 +851,7 @@ def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:
 
     inputs, digest = _cached_parse_inputs(committed_payload)
     st.session_state["input_fingerprint"] = digest
-    return inputs, digest
+    return inputs, committed_payload, digest
 
 
 def _load_payload_from_bytes(data: bytes, suffix: str) -> Mapping[str, object]:
@@ -1273,6 +1321,14 @@ def _subscription_dialog_body() -> None:
             if isinstance(stored, SubscriptionStatus) and last_checked_email == normalized_email:
                 status = stored
 
+    if normalized_email and st.button("Re-check subscription status", key="subscription_modal_recheck"):
+        with st.spinner("Refreshing subscription status..."):
+            refreshed = _refresh_subscription_status(st.session_state.get(email_key, ""))
+        if refreshed is not None:
+            status = refreshed
+            st.session_state["subscription_modal_status"] = refreshed
+            st.session_state["subscription_modal_checked_email"] = normalized_email
+
     if status and status.is_active:
         alert_slot.success("Subscription verified. Preparing your download…")
         pending_download = st.session_state.pop("subscription_pending_download", None)
@@ -1362,11 +1418,8 @@ def _subscription_store_record(email: str | None) -> StoredSubscriptionRecord | 
     normalized = _normalize_email(email)
     if not normalized:
         return None
-    store = get_subscription_store()
-    if not store:
-        return None
     try:
-        return store.get_status(normalized)
+        return _SUBSCRIPTION_GATEWAY.get_record(normalized)
     except Exception as exc:  # pragma: no cover - defensive guard
         LOGGER.debug("Unable to read subscription store: %s", exc)
         return None
@@ -1378,11 +1431,8 @@ def _subscription_store_remove(email: str) -> None:
     normalized = _normalize_email(email)
     if not normalized:
         return
-    store = get_subscription_store()
-    if not store:
-        return
     try:
-        store.remove_status(normalized)
+        _SUBSCRIPTION_GATEWAY.remove_record(normalized)
     except Exception as exc:  # pragma: no cover - defensive guard
         LOGGER.debug("Unable to remove subscription store entry: %s", exc)
 
@@ -1392,12 +1442,9 @@ def _persist_subscription_status(status: SubscriptionStatus, *, source: str) -> 
 
     if not status or not status.email:
         return
-    store = get_subscription_store()
-    if not store:
-        return
     ttl = _SUBSCRIPTION_CACHE_TTL_SECONDS if status.is_active else None
     try:
-        store.write_status(status, source=source, ttl_seconds=ttl)
+        _SUBSCRIPTION_GATEWAY.write_status(status, source=source, ttl_seconds=ttl)
     except Exception as exc:  # pragma: no cover - defensive guard
         LOGGER.debug("Unable to persist subscription status: %s", exc)
 
@@ -1488,6 +1535,23 @@ def _subscription_cache_set(email: str, status: SubscriptionStatus) -> None:
     cache[normalized] = {"status": status, "checked_at": time.time()}
     st.session_state["subscription_cache"] = cache
     _persist_subscription_status(status, source="session_cache")
+
+
+def _refresh_subscription_status(email: str) -> SubscriptionStatus | None:
+    """Force a fresh subscription lookup by clearing caches and hitting Paystack."""
+
+    normalized = _normalize_email(email)
+    if not normalized:
+        st.warning("Please enter your subscription email before re-checking.")
+        return None
+
+    _subscription_cache_forget(normalized)
+    try:
+        _SUBSCRIPTION_GATEWAY.remove_record(normalized)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        LOGGER.debug("Unable to clear subscription store entry for %s: %s", normalized, exc)
+
+    return _verify_subscription_email(email)
 
 
 def _verify_subscription_email(email: str) -> SubscriptionStatus | None:
@@ -8273,3 +8337,8 @@ if __name__ == "__main__":  # pragma: no cover - Streamlit executes the script d
             "This module is a Streamlit application. Launch it with "
             "`streamlit run streamlit_app.py` instead of executing it directly."
         )
+@_cache_data(show_spinner=False)
+def _default_payload() -> dict[str, object]:
+    """Return the default modelling payload cached across reruns."""
+
+    return json.loads(DEFAULT_INPUT_JSON)

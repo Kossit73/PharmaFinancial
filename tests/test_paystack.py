@@ -1,6 +1,11 @@
+import sys
 import unittest
+from pathlib import Path
 
-from pharma_financial.paystack import PaystackClient, PaystackError
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from pharma_financial.services.paystack import PaystackClient, PaystackError
 
 
 class DummyResponse:
@@ -139,14 +144,6 @@ class PaystackClientTest(unittest.TestCase):
                 {
                     "status_code": 200,
                     "payload": {"status": True, "message": "", "data": {"subscriptions": []}},
-                },
-                {
-                    "status_code": 200,
-                    "payload": {
-                        "status": True,
-                        "message": "",
-                        "data": [],
-                    },
                 },
                 {
                     "status_code": 200,

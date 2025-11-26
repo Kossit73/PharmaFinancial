@@ -8,6 +8,9 @@ from io import BytesIO
 from pathlib import Path
 from unittest import mock
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
 try:  # pragma: no cover - optional dependency check
     from docx import Document
 except Exception:  # pragma: no cover - import guard for missing optional dependency
@@ -32,7 +35,7 @@ class _NoOp:
         return self
 
 
-from pharma_financial.paystack import SubscriptionStatus
+from pharma_financial.services.paystack import SubscriptionStatus
 from pharma_financial.subscription_store import SubscriptionStore
 
 
@@ -397,7 +400,21 @@ class SubscriptionCacheTest(AppModuleTestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         db_path = Path(self.tempdir.name) / "subscriptions.db"
         self.store = SubscriptionStore(db_path)
-        patcher = mock.patch("pharma_financial.app.get_subscription_store", return_value=self.store)
+
+        class _StubGateway:
+            def __init__(self, backing_store):
+                self.store = backing_store
+
+            def get_record(self, email):
+                return self.store.get_status(email)
+
+            def remove_record(self, email):
+                self.store.remove_status(email)
+
+            def write_status(self, status, *, source, ttl_seconds=None):
+                self.store.write_status(status, source=source, ttl_seconds=ttl_seconds)
+
+        patcher = mock.patch("pharma_financial.app._SUBSCRIPTION_GATEWAY", _StubGateway(self.store))
         patcher.start()
         self.addCleanup(patcher.stop)
 
