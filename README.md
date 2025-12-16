@@ -38,7 +38,24 @@ This project provides a Python implementation of the Pharmaceuticals financial m
    > `PYTHONPATH=$(pwd)/src` before running the command so that Python can locate
    > the module.
 
-3. **Launch the Streamlit dashboard**
+3. **Run the FastAPI service (API mode)**
+
+   ```bash
+   # set auth secrets (examples)
+   export FINANCIAL_MODELS_AUTH_SECRET=dev-secret          # required for JWT auth
+   export FINANCIAL_MODELS_API_TOKEN=dev-api-key           # optional API key auth
+   export FINANCIAL_MODELS_GOOGLE_AUDIENCE=your-client-id  # optional Google ID token auth
+
+   # run the API
+   ./.venv/bin/uvicorn financial_models.api.server:create_app --factory --reload --port 8000
+   ```
+
+   - Base URL: `http://localhost:8000` with Swagger UI at `/docs` (use **Authorize** to add `Bearer <jwt>` or `X-API-Key`).
+   - Model routes: `POST /model/pharma/run` and `POST /inputs/pharma/validate` (see `docs/api_contract.md`).
+   - Auth routes: `/auth/register`, `/auth/login` (OAuth2 form), `/auth/me`, `/auth/me` (PATCH), `/auth/users` (GET), `/auth/users/{email}` (DELETE).
+   - User store: defaults to `~/.financial_models/users.db` (override with `FINANCIAL_MODELS_USER_DB`). Set `FINANCIAL_MODELS_AUTH_SECRET` to issue/verify JWTs.
+
+4. **Launch the Streamlit dashboard (optional if using the API/Angular frontend)**
 
    ```bash
    streamlit run streamlit_app.py
@@ -69,15 +86,15 @@ Set the following environment variables (for example in `.env`) to enable the bu
 
 ### API Authentication
 
-When deploying the FastAPI service (`financial_models.api.server`) set `PHARMA_FINANCIAL_API_TOKEN` to any strong secret. Every request (except `/health`) must then include this token via the `X-API-Key` header:
+When deploying the FastAPI service (`financial_models.api.server`) set `FINANCIAL_MODELS_API_TOKEN` to any strong secret. Every request (except `/health`) must then include this token via the `X-API-Key` header:
 
 ```bash
-curl -H "X-API-Key: $PHARMA_FINANCIAL_API_TOKEN" http://localhost:8000/model/pharma/run -d '{"inputs": ...}'
+curl -H "X-API-Key: $FINANCIAL_MODELS_API_TOKEN" http://localhost:8000/model/pharma/run -d '{"inputs": ...}'
 ```
 
-If `PHARMA_FINANCIAL_API_TOKEN` is unset the service remains open, which is suitable only for local development.
+If `FINANCIAL_MODELS_API_TOKEN` is unset the service remains open, which is suitable only for local development.
 
-To accept Google sign-ins instead (or in addition), configure `PHARMA_FINANCIAL_GOOGLE_AUDIENCE` with the OAuth client ID(s) allowed to call the API (comma-separated when you have multiple). Requests must then include a Google ID token in the standard `Authorization: Bearer <token>` header. The server verifies the token against Google and extracts the caller’s identity before running the model. Ensure `google-auth` is available in the environment so verification succeeds.
+To accept Google sign-ins instead (or in addition), configure `FINANCIAL_MODELS_GOOGLE_AUDIENCE` with the OAuth client ID(s) allowed to call the API (comma-separated when you have multiple). Requests must then include a Google ID token in the standard `Authorization: Bearer <token>` header. The server verifies the token against Google and extracts the caller’s identity before running the model. Ensure `google-auth` is available in the environment so verification succeeds.
 
 #### Cache invalidation & webhooks
 

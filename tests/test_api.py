@@ -127,7 +127,7 @@ def test_subscription_status_endpoints_roundtrip():
 
 def test_api_key_required_when_configured():
     payload = {"inputs": _load_default_inputs()}
-    with mock.patch.dict(os.environ, {"PHARMA_FINANCIAL_API_TOKEN": "super-secret"}):
+    with mock.patch.dict(os.environ, {"FINANCIAL_MODELS_API_TOKEN": "super-secret"}):
         client = TestClient(create_app())
         unauthenticated = client.post("/model/pharma/run", json=payload)
         assert unauthenticated.status_code == 401
@@ -137,7 +137,7 @@ def test_api_key_required_when_configured():
 
 def test_google_authentication_enforced_when_audience_configured():
     payload = {"inputs": _load_default_inputs()}
-    with mock.patch.dict(os.environ, {"PHARMA_FINANCIAL_GOOGLE_AUDIENCE": "client-1"}):
+    with mock.patch.dict(os.environ, {"FINANCIAL_MODELS_GOOGLE_AUDIENCE": "client-1"}):
         client = TestClient(create_app())
         response = client.post("/model/pharma/run", json=payload)
         assert response.status_code == 401
@@ -145,7 +145,7 @@ def test_google_authentication_enforced_when_audience_configured():
 
 def test_google_authentication_with_valid_bearer_token():
     payload = {"inputs": _load_default_inputs()}
-    with mock.patch.dict(os.environ, {"PHARMA_FINANCIAL_GOOGLE_AUDIENCE": "client-1"}):
+    with mock.patch.dict(os.environ, {"FINANCIAL_MODELS_GOOGLE_AUDIENCE": "client-1"}):
         with mock.patch("financial_models.api.server._verify_google_token", return_value={"sub": "abc", "email": "a@b.com"}) as verify:
             client = TestClient(create_app())
             response = client.post(

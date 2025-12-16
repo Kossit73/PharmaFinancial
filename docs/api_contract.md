@@ -11,8 +11,8 @@ All endpoints accept and return JSON.
 
 ## Authentication
 
-- API token: set `PHARMA_FINANCIAL_API_TOKEN` on the server. Clients send `X-API-Key: <token>`. When unset, the API is open (not recommended outside local dev).
-- Google ID token: set `PHARMA_FINANCIAL_GOOGLE_AUDIENCE` to the allowed OAuth client ID(s). Clients send `Authorization: Bearer <id-token>`. Both API token and Google auth can be enabled; either will authorize. `/health` remains public.
+- API token: set `FINANCIAL_MODELS_API_TOKEN` on the server. Clients send `X-API-Key: <token>`. When unset, the API is open (not recommended outside local dev).
+- Google ID token: set `FINANCIAL_MODELS_GOOGLE_AUDIENCE` to the allowed OAuth client ID(s). Clients send `Authorization: Bearer <id-token>`. Both API token and Google auth can be enabled; either will authorize. `/health` remains public.
 
 ## Common Schemas
 
@@ -50,7 +50,7 @@ All endpoints accept and return JSON.
 - Example request:
   ```http
   POST /model/pharma/run
-  X-API-Key: $PHARMA_FINANCIAL_API_TOKEN
+  X-API-Key: $FINANCIAL_MODELS_API_TOKEN
   Content-Type: application/json
 
   {
