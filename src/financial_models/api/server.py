@@ -92,6 +92,35 @@ def _resolve_inputs(payload: Dict[str, Any] | None, spec: ModelSpec) -> ModelInp
     return spec.load_inputs()
 
 
+def _resolve_subscription_email(request_email: str | None, context: AuthContext | None) -> str | None:
+    """Determine the subscription email tied to the request.
+
+    - When auth is disabled: fall back to the request email.
+    - When using API token: trust the provided email (for service-to-service).
+    - Otherwise: require the caller's email to match the provided email (when given), and
+      default to the caller's email when absent.
+    """
+
+    if context is None:
+        return request_email
+    if context.method == "api_token":
+        return request_email
+    caller_email = (context.email or "").strip().lower()
+    if not caller_email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing.")
+    if request_email and request_email.strip().lower() != caller_email:
+        raise HTTPException(status_code=403, detail="Cannot manage subscriptions for another user.")
+    return caller_email
+
+
+def _ensure_user_exists(email: str | None) -> None:
+    if not email:
+        return
+    store = get_user_store()
+    if store.get_user(email) is None:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+
 def _run_model(inputs: ModelInputs, spec: ModelSpec) -> ModelRunResponse:
     model = spec.model_factory(inputs)
     outputs = model.run()
@@ -473,14 +502,16 @@ def create_app() -> FastAPI:
         client: PaystackClient = Depends(get_paystack_client),
         _: AuthContext | None = Depends(require_authorization),
     ) -> SubscriptionCheckResponse:
+        email = _resolve_subscription_email(request.email, _)
+        _ensure_user_exists(email)
         try:
-            status = client.has_active_subscription(request.email)
+            status = client.has_active_subscription(email or request.email)
         except PaystackError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         if not isinstance(status, SubscriptionStatus):
             raise HTTPException(status_code=500, detail="Unexpected Paystack response.")
         return SubscriptionCheckResponse(
-            email=status.email,
+            email=email or status.email,
             is_active=status.is_active,
             message=status.message,
             payload=status.payload,
@@ -491,14 +522,15 @@ def create_app() -> FastAPI:
         email: str,
         _: AuthContext | None = Depends(require_authorization),
     ) -> SubscriptionStatusRecord:
+        resolved_email = _resolve_subscription_email(email, _)
         store = get_subscription_store()
         if store is None:
             raise HTTPException(status_code=503, detail="Subscription store unavailable.")
-        record = store.get_status(email)
+        record = store.get_status(resolved_email or email)
         if record is None:
             raise HTTPException(status_code=404, detail="Subscription not found.")
         if record.is_expired():
-            store.remove_status(email)
+            store.remove_status(resolved_email or email)
             raise HTTPException(status_code=404, detail="Subscription not found.")
         return _record_payload(record)
 
@@ -507,17 +539,19 @@ def create_app() -> FastAPI:
         request: SubscriptionStatusUpsert,
         _: AuthContext | None = Depends(require_authorization),
     ) -> SubscriptionStatusRecord:
+        resolved_email = _resolve_subscription_email(request.email, _)
+        _ensure_user_exists(resolved_email)
         store = get_subscription_store()
         if store is None:
             raise HTTPException(status_code=503, detail="Subscription store unavailable.")
         status = SubscriptionStatus(
-            email=request.email,
+            email=resolved_email or request.email,
             is_active=request.is_active,
             message=request.status_message,
             payload=request.payload,
         )
         store.write_status(status, source=request.source or "api", ttl_seconds=request.ttl_seconds)
-        record = store.get_status(request.email)
+        record = store.get_status(resolved_email or request.email)
         if record is None:
             raise HTTPException(status_code=500, detail="Unable to persist subscription.")
         return _record_payload(record)
@@ -527,10 +561,11 @@ def create_app() -> FastAPI:
         email: str,
         _: AuthContext | None = Depends(require_authorization),
     ) -> None:
+        resolved_email = _resolve_subscription_email(email, _)
         store = get_subscription_store()
         if store is None:
             raise HTTPException(status_code=503, detail="Subscription store unavailable.")
-        store.remove_status(email)
+        store.remove_status(resolved_email or email)
         return None
 
     return app
