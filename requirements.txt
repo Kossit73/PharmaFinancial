@@ -6,7 +6,10 @@ streamlit
 openpyxl
 python-docx
 fpdf
-PyPDF2
+pypdf
 requests
 fastapi
 uvicorn
+google-auth
+email-validator
+email-validator

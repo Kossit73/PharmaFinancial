@@ -928,7 +928,10 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
 def load_inputs(path: Optional[Path] = None) -> ModelInputs:
     """Load model assumptions from JSON."""
     if path is None:
-        path = Path(__file__).resolve().parent / "data" / "default_inputs.json"
+        # Prefer the colocated core/data copy; fall back to the shared data directory used elsewhere
+        default_path = Path(__file__).resolve().parent / "data" / "default_inputs.json"
+        alt_path = Path(__file__).resolve().parent.parent / "data" / "default_inputs.json"
+        path = default_path if default_path.exists() else alt_path
     with Path(path).open("r", encoding="utf-8") as handle:
         raw = json.load(handle)
 

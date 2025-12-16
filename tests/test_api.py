@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT / "src"))
 if TestClient is None:  # pragma: no cover
     raise unittest.SkipTest("FastAPI is not installed; skipping API tests.")
 
-from pharma_financial.api.server import create_app, get_paystack_client
+from pharma_financial.api.server import API_TOKEN_HEADER, create_app, get_paystack_client
 from pharma_financial.services.paystack import SubscriptionStatus
 
 
@@ -36,7 +36,7 @@ def test_healthcheck_endpoint():
 def test_model_run_endpoint_returns_outputs():
     client = TestClient(create_app())
     payload = {"inputs": _load_default_inputs()}
-    response = client.post("/model/run", json=payload)
+    response = client.post("/model/pharma/run", json=payload)
     assert response.status_code == 200
     data = response.json()
     assert "summary_metrics" in data
@@ -46,13 +46,34 @@ def test_model_run_endpoint_returns_outputs():
 
 def test_inputs_validate_endpoint_flags_errors():
     client = TestClient(create_app())
-    good_response = client.post("/inputs/validate", json={"inputs": _load_default_inputs()})
+    good_response = client.post("/inputs/pharma/validate", json={"inputs": _load_default_inputs()})
     assert good_response.status_code == 200
     assert good_response.json()["valid"] is True
 
-    bad_response = client.post("/inputs/validate", json={"inputs": {"years": []}})
+    bad_response = client.post("/inputs/pharma/validate", json={"inputs": {"years": []}})
     assert bad_response.status_code == 200
     assert bad_response.json()["valid"] is False
+
+
+def test_model_run_rejects_unknown_model_type():
+    client = TestClient(create_app())
+    payload = {"inputs": _load_default_inputs()}
+    response = client.post("/model/unknown-model/run", json=payload)
+    assert response.status_code == 404
+
+
+def test_model_run_versioned_path():
+    client = TestClient(create_app())
+    payload = {"inputs": _load_default_inputs()}
+    response = client.post("/model/pharma/run", json=payload)
+    assert response.status_code == 200
+
+
+def test_inputs_validate_versioned_path():
+    client = TestClient(create_app())
+    good_response = client.post("/inputs/pharma/validate", json={"inputs": _load_default_inputs()})
+    assert good_response.status_code == 200
+    assert good_response.json()["valid"] is True
 
 
 def test_subscription_check_endpoint_uses_dependency_override():
@@ -102,3 +123,35 @@ def test_subscription_status_endpoints_roundtrip():
         assert delete.status_code == 204
         missing = client.get("/subscriptions/status", params={"email": email})
         assert missing.status_code == 404
+
+
+def test_api_key_required_when_configured():
+    payload = {"inputs": _load_default_inputs()}
+    with mock.patch.dict(os.environ, {"PHARMA_FINANCIAL_API_TOKEN": "super-secret"}):
+        client = TestClient(create_app())
+        unauthenticated = client.post("/model/pharma/run", json=payload)
+        assert unauthenticated.status_code == 401
+        authorised = client.post("/model/pharma/run", json=payload, headers={API_TOKEN_HEADER: "super-secret"})
+        assert authorised.status_code == 200
+
+
+def test_google_authentication_enforced_when_audience_configured():
+    payload = {"inputs": _load_default_inputs()}
+    with mock.patch.dict(os.environ, {"PHARMA_FINANCIAL_GOOGLE_AUDIENCE": "client-1"}):
+        client = TestClient(create_app())
+        response = client.post("/model/pharma/run", json=payload)
+        assert response.status_code == 401
+
+
+def test_google_authentication_with_valid_bearer_token():
+    payload = {"inputs": _load_default_inputs()}
+    with mock.patch.dict(os.environ, {"PHARMA_FINANCIAL_GOOGLE_AUDIENCE": "client-1"}):
+        with mock.patch("pharma_financial.api.server._verify_google_token", return_value={"sub": "abc", "email": "a@b.com"}) as verify:
+            client = TestClient(create_app())
+            response = client.post(
+                "/model/pharma/run",
+                json=payload,
+                headers={"Authorization": "Bearer valid-token"},
+            )
+            assert response.status_code == 200
+            verify.assert_called_once_with("valid-token", ["client-1"])

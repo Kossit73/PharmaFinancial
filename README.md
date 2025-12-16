@@ -11,6 +11,7 @@ This project provides a Python implementation of the Pharmaceuticals financial m
 - Break-even and payback analytics.
 - Streamlit web application delivering dashboards and statements, complemented by a CLI that exports schedules to CSV files.
 - Integrated machine-learning forecasts and optional generative AI summaries with configurable providers and API keys.
+- FastAPI service with documented contract for frontend clients (see `docs/api_contract.md`).
 
 ## Getting Started
 
@@ -65,6 +66,18 @@ Set the following environment variables (for example in `.env`) to enable the bu
 - `PAYSTACK_PLAN_AMOUNT_KOBO` *(optional)* – fallback amount (in Kobo) used when Paystack does not return the plan amount automatically.
 - `PAYSTACK_CALLBACK_URL` *(optional but recommended)* – URL Paystack redirects users to after they complete checkout. Point this at the Streamlit deployment so users return to the app automatically.
 - `PAYSTACK_CANCEL_ACTION_URL` *(optional)* – URL invoked when a user cancels or Paystack declines a payment, ensuring they are taken back to the Streamlit app even if the transaction fails.
+
+### API Authentication
+
+When deploying the FastAPI service (`pharma_financial.api.server`) set `PHARMA_FINANCIAL_API_TOKEN` to any strong secret. Every request (except `/health`) must then include this token via the `X-API-Key` header:
+
+```bash
+curl -H "X-API-Key: $PHARMA_FINANCIAL_API_TOKEN" http://localhost:8000/model/pharma/run -d '{"inputs": ...}'
+```
+
+If `PHARMA_FINANCIAL_API_TOKEN` is unset the service remains open, which is suitable only for local development.
+
+To accept Google sign-ins instead (or in addition), configure `PHARMA_FINANCIAL_GOOGLE_AUDIENCE` with the OAuth client ID(s) allowed to call the API (comma-separated when you have multiple). Requests must then include a Google ID token in the standard `Authorization: Bearer <token>` header. The server verifies the token against Google and extracts the caller’s identity before running the model. Ensure `google-auth` is available in the environment so verification succeeds.
 
 #### Cache invalidation & webhooks
 

@@ -64,6 +64,18 @@ class ValidationRequest(BaseModel):
     inputs: Mapping[str, Any]
 
 
+class PharmaModelRunRequest(ModelRunRequest):
+    """Model run request specific to the pharmaceuticals engine."""
+
+    pass
+
+
+class PharmaValidationRequest(ValidationRequest):
+    """Validation request specific to the pharmaceuticals engine."""
+
+    pass
+
+
 class ValidationResponse(BaseModel):
     """Response returned by /inputs/validate."""
 

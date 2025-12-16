@@ -86,7 +86,7 @@ class ModelGateway:
             return model, outputs
 
         response = self.session.post(  # type: ignore[union-attr]
-            f"{self.base_url.rstrip('/')}/model/run",
+            f"{self.base_url.rstrip('/')}/model/pharma/run",
             json={"inputs": payload},
             timeout=self.timeout,
         )

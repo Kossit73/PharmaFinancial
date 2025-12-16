@@ -125,9 +125,15 @@ except Exception:  # pragma: no cover - import guard when package missing
     Document = None  # type: ignore
 
 try:  # pragma: no cover - optional dependency for PDF ingestion
-    from PyPDF2 import PdfReader
+    from pypdf import PdfReader
 except Exception:  # pragma: no cover - import guard when package missing
-    PdfReader = None  # type: ignore
+    try:
+        import warnings
+
+        warnings.filterwarnings("ignore", category=DeprecationWarning, module="PyPDF2")
+        from PyPDF2 import PdfReader  # type: ignore
+    except Exception:
+        PdfReader = None  # type: ignore
 
 # ---------------------------------------------------------------------------
 # Module level caches
@@ -943,7 +949,7 @@ def _load_payload_from_docx(data: bytes) -> Mapping[str, object]:
 
 def _load_payload_from_pdf(data: bytes) -> Mapping[str, object]:
     if PdfReader is None:  # pragma: no cover - optional dependency path
-        raise ValueError("PDF support requires the 'PyPDF2' package to be installed.")
+        raise ValueError("PDF support requires the 'pypdf' (or legacy 'PyPDF2') package to be installed.")
 
     reader = PdfReader(io.BytesIO(data))
     text_parts: list[str] = []
