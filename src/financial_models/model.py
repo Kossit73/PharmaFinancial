@@ -1,4 +1,4 @@
-"""Backwards-compatible shims for ``pharma_financial.model``."""
+"""Backwards-compatible shims for ``financial_models.model``."""
 
 from .core import model as _core_model
 from .core.model import *  # noqa: F401,F403

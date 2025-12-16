@@ -17,12 +17,12 @@ sys.path.insert(0, str(ROOT / "src"))
 if TestClient is None:  # pragma: no cover
     raise unittest.SkipTest("FastAPI is not installed; skipping API tests.")
 
-from pharma_financial.api.server import API_TOKEN_HEADER, create_app, get_paystack_client
-from pharma_financial.services.paystack import SubscriptionStatus
+from financial_models.api.server import API_TOKEN_HEADER, create_app, get_paystack_client
+from financial_models.services.paystack import SubscriptionStatus
 
 
 def _load_default_inputs() -> dict:
-    inputs_path = ROOT / "src" / "pharma_financial" / "data" / "default_inputs.json"
+    inputs_path = ROOT / "src" / "financial_models" / "data" / "default_inputs.json"
     return json.loads(inputs_path.read_text())
 
 
@@ -146,7 +146,7 @@ def test_google_authentication_enforced_when_audience_configured():
 def test_google_authentication_with_valid_bearer_token():
     payload = {"inputs": _load_default_inputs()}
     with mock.patch.dict(os.environ, {"PHARMA_FINANCIAL_GOOGLE_AUDIENCE": "client-1"}):
-        with mock.patch("pharma_financial.api.server._verify_google_token", return_value={"sub": "abc", "email": "a@b.com"}) as verify:
+        with mock.patch("financial_models.api.server._verify_google_token", return_value={"sub": "abc", "email": "a@b.com"}) as verify:
             client = TestClient(create_app())
             response = client.post(
                 "/model/pharma/run",

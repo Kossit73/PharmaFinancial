@@ -180,7 +180,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--db",
         default=os.getenv("SUBSCRIPTION_STORE_PATH"),
-        help="Path to the subscription SQLite store (defaults to ~/.pharma_financial/subscriptions.db).",
+        help="Path to the subscription SQLite store (defaults to ~/.financial_models/subscriptions.db).",
     )
     parser.add_argument(
         "--secret",
@@ -191,7 +191,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Entry point used by ``python -m pharma_financial.webhook``."""
+    """Entry point used by ``python -m financial_models.webhook``."""
 
     if FastAPI is None or uvicorn is None:
         raise SystemExit("FastAPI and uvicorn are required to run the webhook server.")

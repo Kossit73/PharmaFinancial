@@ -1,6 +1,6 @@
 # Pharmaceuticals Financial Model API Contract
 
-This file captures the HTTP contract exposed by `pharma_financial.api.server` so frontend developers can integrate without reading the Python code. The FastAPI app also serves an OpenAPI document at `/openapi.json` that can be fed to client generators (e.g. `npx @openapitools/openapi-generator-cli generate -g typescript-angular ...`).
+This file captures the HTTP contract exposed by `financial_models.api.server` so frontend developers can integrate without reading the Python code. The FastAPI app also serves an OpenAPI document at `/openapi.json` that can be fed to client generators (e.g. `npx @openapitools/openapi-generator-cli generate -g typescript-angular ...`).
 
 ## Base URL
 
@@ -39,7 +39,7 @@ All endpoints accept and return JSON.
 - Auth: required unless auth is disabled
 - Model types: `pharma` (current). Requests to other model paths return 404 until additional models are registered.
 - Request body (`ModelRunRequest`):
-  - `inputs`: full modelling payload (object). When omitted, server uses bundled defaults (`src/pharma_financial/data/default_inputs.json`).
+  - `inputs`: full modelling payload (object). When omitted, server uses bundled defaults (`src/financial_models/data/default_inputs.json`).
 - 200 response (`ModelRunResponse`): financial outputs as tables
   - `summary_metrics`, `income_statement`, `balance_sheet`, `cash_flow`, `goal_seek`, `break_even`, `payback`, `discounted_payback`, `monte_carlo`: `TablePayload`
   - `scenario_results`: object of scenario name → `TablePayload`

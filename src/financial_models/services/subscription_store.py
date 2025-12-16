@@ -17,7 +17,7 @@ LOGGER = logging.getLogger(__name__)
 
 DEFAULT_STORE_PATH = Path(
     os.getenv("SUBSCRIPTION_STORE_PATH")
-    or Path.home() / ".pharma_financial" / "subscriptions.db"
+    or Path.home() / ".financial_models" / "subscriptions.db"
 )
 
 

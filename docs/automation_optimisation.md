@@ -21,7 +21,7 @@ risking the integrity of the financial engine:
   revenue, margin, and cash flow statements are computed automatically.
 
 ## 3. Continuous Export Automation
-* Schedule the CLI exporter (`python -m pharma_financial.cli --output <dir>`) via
+* Schedule the CLI exporter (`python -m financial_models.cli --output <dir>`) via
   a CI pipeline or cron job to distribute refreshed PDF/Excel packs to
   stakeholders after each assumption change.
 * Add Slack or Teams webhooks to notify investors when a new consolidated report

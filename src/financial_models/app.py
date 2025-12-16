@@ -439,7 +439,7 @@ def _generate_excel_bytes(
     """Return an Excel workbook representing the model results."""
 
     sections = collect_report_sections(model, outputs)
-    report_name = "pharma_financial_model"
+    report_name = "financial_models_model"
     slug = _scenario_slug(scenario_name)
     if slug and slug != "base":
         report_name = f"{report_name}_{slug}"
@@ -1612,7 +1612,7 @@ def _create_subscription_checkout(email: str) -> str | None:
     try:
         url = client.create_subscription_checkout(
             normalized,
-            metadata={"source": "pharma_financial_app"},
+            metadata={"source": "financial_models_app"},
         )
     except PaystackError as exc:
         st.error(f"Unable to generate checkout link: {exc}")

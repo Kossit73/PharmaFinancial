@@ -8,7 +8,7 @@ from pathlib import Path
 # Ensure the ``src`` directory is importable when the package has not been
 # installed. Streamlit executes this file directly and the execution working
 # directory may not include ``src`` on ``PYTHONPATH``. Adding it explicitly keeps
-# ``from pharma_financial import ...`` imports functional both locally and on
+# ``from financial_models import ...`` imports functional both locally and on
 # Streamlit Cloud deployments without requiring an editable install.
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
@@ -16,7 +16,7 @@ if SRC.exists() and str(SRC) not in sys.path:  # pragma: no cover - import path 
     sys.path.insert(0, str(SRC))
 
 try:
-    from pharma_financial.app import main
+    from financial_models.app import main
 except ModuleNotFoundError as exc:  # pragma: no cover - executed when deps missing
     if exc.name == "streamlit":
         raise SystemExit(

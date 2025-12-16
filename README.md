@@ -28,12 +28,12 @@ This project provides a Python implementation of the Pharmaceuticals financial m
 2. **Run the CLI**
 
    ```bash
-   python src/pharma_financial/__main__.py --output outputs
+   python src/financial_models/__main__.py --output outputs
    ```
 
    This command writes CSV schedules for all statements, scenario tables, sensitivity pivots, and the Monte Carlo simulation to the `outputs/` directory.
 
-   > **Tip:** If you prefer `python -m pharma_financial`, either install the
+   > **Tip:** If you prefer `python -m financial_models`, either install the
    > package in editable mode (`pip install -e .`) or export
    > `PYTHONPATH=$(pwd)/src` before running the command so that Python can locate
    > the module.
@@ -69,7 +69,7 @@ Set the following environment variables (for example in `.env`) to enable the bu
 
 ### API Authentication
 
-When deploying the FastAPI service (`pharma_financial.api.server`) set `PHARMA_FINANCIAL_API_TOKEN` to any strong secret. Every request (except `/health`) must then include this token via the `X-API-Key` header:
+When deploying the FastAPI service (`financial_models.api.server`) set `PHARMA_FINANCIAL_API_TOKEN` to any strong secret. Every request (except `/health`) must then include this token via the `X-API-Key` header:
 
 ```bash
 curl -H "X-API-Key: $PHARMA_FINANCIAL_API_TOKEN" http://localhost:8000/model/pharma/run -d '{"inputs": ...}'
@@ -86,14 +86,14 @@ The Excel export tab now exposes a **Check subscription status** button which re
 For server-driven invalidation, run the lightweight webhook receiver (set `PAYSTACK_WEBHOOK_SECRET` or reuse `PAYSTACK_SECRET_KEY`) and point your Paystack dashboard at it:
 
 ```bash
-python -m pharma_financial.webhook --host 0.0.0.0 --port 8080
+python -m financial_models.webhook --host 0.0.0.0 --port 8080
 ```
 
-The server validates `X-Paystack-Signature`, records events in a SQLite database (`~/.pharma_financial/subscriptions.db` by default, override with `SUBSCRIPTION_STORE_PATH`), and marks subscriptions as revoked when Paystack emits cancellation or failed renewal events. Every Streamlit session consults the shared store before allowing downloads, so webhook updates cut off access immediately even if the UI cache is still valid.
+The server validates `X-Paystack-Signature`, records events in a SQLite database (`~/.financial_models/subscriptions.db` by default, override with `SUBSCRIPTION_STORE_PATH`), and marks subscriptions as revoked when Paystack emits cancellation or failed renewal events. Every Streamlit session consults the shared store before allowing downloads, so webhook updates cut off access immediately even if the UI cache is still valid.
 
 ## Customising Assumptions
 
-All modelling assumptions are defined in [`src/pharma_financial/data/default_inputs.json`](src/pharma_financial/data/default_inputs.json). Duplicate this file and pass the new path to the CLI using `--inputs` to evaluate alternative cases. The structure mirrors the specification shared in the project brief, covering production volumes, cost inflation, labour structures, financing, and working capital.
+All modelling assumptions are defined in [`src/financial_models/data/default_inputs.json`](src/financial_models/data/default_inputs.json). Duplicate this file and pass the new path to the CLI using `--inputs` to evaluate alternative cases. The structure mirrors the specification shared in the project brief, covering production volumes, cost inflation, labour structures, financing, and working capital.
 
 ### AI, Machine Learning, and Generative Insights
 
@@ -118,7 +118,7 @@ streamlit run streamlit_app.py
 ```
 streamlit_app.py
 src/
-  pharma_financial/
+  financial_models/
     __init__.py
     __main__.py
     app.py
@@ -138,14 +138,14 @@ python -m unittest discover -s tests -p 'test_*.py'
 ```
 
 For ad-hoc experimentation you can also run the engine directly from the Python prompt. The
-modelling engine now lives under the `pharma_financial.core` namespace (legacy modules re-export
+modelling engine now lives under the `financial_models.core` namespace (legacy modules re-export
 the same classes for backwards compatibility), so import from `core` when scripting against the
 financial toolkit:
 
 ```bash
 python - <<'PY'
-from pharma_financial.core.inputs import load_inputs
-from pharma_financial.core.model import FinancialModel
+from financial_models.core.inputs import load_inputs
+from financial_models.core.model import FinancialModel
 
 inputs = load_inputs()
 model = FinancialModel(inputs)

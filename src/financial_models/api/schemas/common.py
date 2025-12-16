@@ -31,7 +31,7 @@ class AIInsightsPayload(BaseModel):
 
 
 class ModelRunRequest(BaseModel):
-    """Request body for /model/run."""
+    """Request body for /model/{model_type}/run."""
 
     inputs: Optional[Mapping[str, Any]] = Field(
         default=None,
@@ -40,7 +40,7 @@ class ModelRunRequest(BaseModel):
 
 
 class ModelRunResponse(BaseModel):
-    """Response payload returned by /model/run."""
+    """Response payload returned by /model/{model_type}/run."""
 
     summary_metrics: TablePayload
     income_statement: TablePayload
@@ -59,25 +59,13 @@ class ModelRunResponse(BaseModel):
 
 
 class ValidationRequest(BaseModel):
-    """Request body for /inputs/validate."""
+    """Request body for /inputs/{model_type}/validate."""
 
     inputs: Mapping[str, Any]
 
 
-class PharmaModelRunRequest(ModelRunRequest):
-    """Model run request specific to the pharmaceuticals engine."""
-
-    pass
-
-
-class PharmaValidationRequest(ValidationRequest):
-    """Validation request specific to the pharmaceuticals engine."""
-
-    pass
-
-
 class ValidationResponse(BaseModel):
-    """Response returned by /inputs/validate."""
+    """Response returned by /inputs/{model_type}/validate."""
 
     valid: bool
     message: str

@@ -35,8 +35,8 @@ class _NoOp:
         return self
 
 
-from pharma_financial.services.paystack import SubscriptionStatus
-from pharma_financial.subscription_store import SubscriptionStore
+from financial_models.services.paystack import SubscriptionStatus
+from financial_models.subscription_store import SubscriptionStore
 
 
 class DummyStreamlit(types.ModuleType):
@@ -70,12 +70,12 @@ class AppModuleTestCase(unittest.TestCase):
         sys.modules["streamlit"] = stub
         sys.modules["streamlit.runtime"] = runtime
 
-        if "pharma_financial.app" in sys.modules:
-            del sys.modules["pharma_financial.app"]
+        if "financial_models.app" in sys.modules:
+            del sys.modules["financial_models.app"]
 
         importlib.invalidate_caches()
         self.stub = stub
-        self.app = importlib.import_module("pharma_financial.app")
+        self.app = importlib.import_module("financial_models.app")
         self.app._INPUT_CACHE.clear()
         self.app._MODEL_CACHE.clear()
 
@@ -90,8 +90,8 @@ class AppModuleTestCase(unittest.TestCase):
         else:
             sys.modules["streamlit.runtime"] = self.original_runtime
 
-        if "pharma_financial.app" in sys.modules:
-            del sys.modules["pharma_financial.app"]
+        if "financial_models.app" in sys.modules:
+            del sys.modules["financial_models.app"]
 
 
 class RerunHelperTest(AppModuleTestCase):
@@ -102,7 +102,7 @@ class RerunHelperTest(AppModuleTestCase):
 
     def test_projection_horizon_dropdown_updates_years(self):
         payload = json.loads(
-            Path("src/pharma_financial/data/default_inputs.json").read_text(
+            Path("src/financial_models/data/default_inputs.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -120,7 +120,7 @@ class RerunHelperTest(AppModuleTestCase):
 
     def test_align_payload_preserves_calendar_years_when_not_updating(self):
         payload = json.loads(
-            Path("src/pharma_financial/data/default_inputs.json").read_text(
+            Path("src/financial_models/data/default_inputs.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -147,7 +147,7 @@ class RerunHelperTest(AppModuleTestCase):
 
     def test_core_rows_calculations_match_inputs(self):
         payload = json.loads(
-            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+            Path("src/financial_models/data/default_inputs.json").read_text(encoding="utf-8")
         )
         rows = self.app._payload_to_core_rows(payload)
         self.assertTrue(rows)
@@ -185,7 +185,7 @@ class RerunHelperTest(AppModuleTestCase):
 
     def test_core_rows_widget_sync_updates_payload(self):
         payload = json.loads(
-            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+            Path("src/financial_models/data/default_inputs.json").read_text(encoding="utf-8")
         )
         rows = self.app._payload_to_core_rows(payload)
         self.assertTrue(rows)
@@ -215,7 +215,7 @@ class RerunHelperTest(AppModuleTestCase):
 
     def test_commission_rows_roundtrip(self):
         payload = json.loads(
-            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+            Path("src/financial_models/data/default_inputs.json").read_text(encoding="utf-8")
         )
         rows = self.app._payload_to_commission_rows(payload)
         self.assertTrue(rows)
@@ -236,7 +236,7 @@ class RerunHelperTest(AppModuleTestCase):
 
     def test_utility_entries_extend_projection_horizon(self):
         payload = json.loads(
-            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+            Path("src/financial_models/data/default_inputs.json").read_text(encoding="utf-8")
         )
         rows = self.app._payload_to_utility_entries(payload)
         original_years = list(payload["years"])
@@ -264,7 +264,7 @@ class RerunHelperTest(AppModuleTestCase):
 
     def test_receivable_rows_do_not_shrink_horizon(self):
         payload = json.loads(
-            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+            Path("src/financial_models/data/default_inputs.json").read_text(encoding="utf-8")
         )
         original_years = list(payload["years"])
         rows = self.app._payload_to_receivable_rows(payload)
@@ -276,7 +276,7 @@ class RerunHelperTest(AppModuleTestCase):
 
     def test_cached_parse_and_model_run_reuse_digest(self):
         payload = json.loads(
-            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+            Path("src/financial_models/data/default_inputs.json").read_text(encoding="utf-8")
         )
         inputs_a, digest_a = self.app._cached_parse_inputs(payload)
         inputs_b, digest_b = self.app._cached_parse_inputs(payload)
@@ -292,7 +292,7 @@ class RerunHelperTest(AppModuleTestCase):
 
     def test_inventory_rows_roundtrip(self):
         payload = json.loads(
-            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+            Path("src/financial_models/data/default_inputs.json").read_text(encoding="utf-8")
         )
         rows = self.app._payload_to_inventory_rows(payload)
         self.assertTrue(rows)
@@ -315,7 +315,7 @@ class RerunHelperTest(AppModuleTestCase):
 
     def test_receivable_rows_roundtrip(self):
         payload = json.loads(
-            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+            Path("src/financial_models/data/default_inputs.json").read_text(encoding="utf-8")
         )
         rows = self.app._payload_to_receivable_rows(payload)
         self.assertTrue(rows)
@@ -341,7 +341,7 @@ class RerunHelperTest(AppModuleTestCase):
 
     def test_ai_settings_roundtrip(self):
         payload = json.loads(
-            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+            Path("src/financial_models/data/default_inputs.json").read_text(encoding="utf-8")
         )
         settings = self.app._payload_to_ai_settings(payload)
         settings["provider"] = "Azure OpenAI"
@@ -359,7 +359,7 @@ class RerunHelperTest(AppModuleTestCase):
 
     def test_scenario_payload_uses_configured_adjustments(self):
         payload = json.loads(
-            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+            Path("src/financial_models/data/default_inputs.json").read_text(encoding="utf-8")
         )
         inputs, digest = self.app._cached_parse_inputs(payload)
         base_model, base_outputs = self.app._cached_model_run(inputs, digest)
@@ -384,7 +384,7 @@ class RerunHelperTest(AppModuleTestCase):
 
     def test_generate_excel_bytes_returns_workbook(self):
         payload = json.loads(
-            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+            Path("src/financial_models/data/default_inputs.json").read_text(encoding="utf-8")
         )
         inputs, digest = self.app._cached_parse_inputs(payload)
         model, outputs = self.app._cached_model_run(inputs, digest)
@@ -414,7 +414,7 @@ class SubscriptionCacheTest(AppModuleTestCase):
             def write_status(self, status, *, source, ttl_seconds=None):
                 self.store.write_status(status, source=source, ttl_seconds=ttl_seconds)
 
-        patcher = mock.patch("pharma_financial.app._SUBSCRIPTION_GATEWAY", _StubGateway(self.store))
+        patcher = mock.patch("financial_models.app._SUBSCRIPTION_GATEWAY", _StubGateway(self.store))
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -443,11 +443,11 @@ class SubscriptionCacheTest(AppModuleTestCase):
         self.assertIn("user@example.com", cache)
 class UploadLoaderTests(unittest.TestCase):
     def setUp(self):
-        if "pharma_financial.app" in sys.modules:
-            importlib.reload(sys.modules["pharma_financial.app"])
-            self.app = sys.modules["pharma_financial.app"]
+        if "financial_models.app" in sys.modules:
+            importlib.reload(sys.modules["financial_models.app"])
+            self.app = sys.modules["financial_models.app"]
         else:
-            self.app = importlib.import_module("pharma_financial.app")
+            self.app = importlib.import_module("financial_models.app")
 
         self.sample_payload = {
             "example": True,
