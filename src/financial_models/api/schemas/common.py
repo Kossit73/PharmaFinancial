@@ -107,3 +107,10 @@ class SubscriptionStatusUpsert(BaseModel):
     payload: Optional[Mapping[str, Any]] = None
     source: Optional[str] = None
     ttl_seconds: Optional[float] = None
+
+
+class AuthUpdateRequest(BaseModel):
+    """Request body for updating the current user."""
+
+    name: Optional[str] = Field(default=None, description="Optional display name.")
+    password: Optional[str] = Field(default=None, description="Optional new password (local accounts only).")

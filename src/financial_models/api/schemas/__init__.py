@@ -1,6 +1,7 @@
 """Schema exports for API consumers."""
 from .common import (
     AIInsightsPayload,
+    AuthUpdateRequest,
     ModelRunRequest,
     ModelRunResponse,
     ScenarioToolResultPayload,
@@ -12,7 +13,7 @@ from .common import (
     ValidationRequest,
     ValidationResponse,
 )
-from .pharma import PharmaModelRunRequest, PharmaValidationRequest
+from .pharma import PharmaInputsPayload, PharmaModelRunRequest, PharmaValidationRequest
 
 __all__ = [
     "AIInsightsPayload",
@@ -26,6 +27,8 @@ __all__ = [
     "TablePayload",
     "ValidationRequest",
     "ValidationResponse",
+    "AuthUpdateRequest",
     "PharmaModelRunRequest",
     "PharmaValidationRequest",
+    "PharmaInputsPayload",
 ]

@@ -155,3 +155,69 @@ def test_google_authentication_with_valid_bearer_token():
             )
             assert response.status_code == 200
             verify.assert_called_once_with("valid-token", ["client-1"])
+
+
+def test_auth_register_and_login_allows_model_run(tmp_path):
+    payload = {"inputs": _load_default_inputs()}
+    env = {
+        "FINANCIAL_MODELS_AUTH_SECRET": "dev-secret",
+        "FINANCIAL_MODELS_USER_DB": str(tmp_path / "users.db"),
+    }
+    with mock.patch.dict(os.environ, env):
+        client = TestClient(create_app())
+        register = client.post("/auth/register", params={"email": "user@example.com", "password": "pass"})
+        assert register.status_code == 200
+        token = register.json()["access_token"]
+        login = client.post(
+            "/auth/login",
+            data={"username": "user@example.com", "password": "pass"},
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        assert login.status_code == 200
+        bearer = {"Authorization": f"Bearer {token}"}
+        authorised = client.post("/model/pharma/run", json=payload, headers=bearer)
+        assert authorised.status_code == 200
+
+
+def test_auth_update_and_delete(tmp_path):
+    env = {
+        "FINANCIAL_MODELS_AUTH_SECRET": "dev-secret",
+        "FINANCIAL_MODELS_USER_DB": str(tmp_path / "users.db"),
+    }
+    with mock.patch.dict(os.environ, env):
+        client = TestClient(create_app())
+        register = client.post("/auth/register", params={"email": "user@example.com", "password": "pass", "name": "Old"})
+        assert register.status_code == 200
+        token = register.json()["access_token"]
+        bearer = {"Authorization": f"Bearer {token}"}
+        update = client.patch("/auth/me", json={"name": "New Name"}, headers=bearer)
+        assert update.status_code == 200
+        assert update.json()["name"] == "New Name"
+        delete = client.delete("/auth/users/user@example.com", headers=bearer)
+        assert delete.status_code == 204
+        relogin = client.post(
+            "/auth/login",
+            data={"username": "user@example.com", "password": "pass"},
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        assert relogin.status_code == 401
+
+
+def test_auth_list_users(tmp_path):
+    env = {
+        "FINANCIAL_MODELS_AUTH_SECRET": "dev-secret",
+        "FINANCIAL_MODELS_USER_DB": str(tmp_path / "users.db"),
+    }
+    with mock.patch.dict(os.environ, env):
+        client = TestClient(create_app())
+        r1 = client.post("/auth/register", params={"email": "one@example.com", "password": "pass"})
+        token1 = r1.json()["access_token"]
+        r2 = client.post("/auth/register", params={"email": "two@example.com", "password": "pass"})
+        assert r2.status_code == 200
+        bearer = {"Authorization": f"Bearer {token1}"}
+        listing = client.get("/auth/users", headers=bearer)
+        assert listing.status_code == 200
+        users = listing.json()["users"]
+        emails = {u["email"] for u in users}
+        assert "one@example.com" in emails
+        assert "two@example.com" in emails

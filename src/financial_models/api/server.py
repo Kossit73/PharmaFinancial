@@ -6,22 +6,28 @@ import math
 import os
 import secrets
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any, Callable, Dict, Mapping, MutableMapping, Sequence, Type
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi.openapi.utils import get_openapi
+from fastapi.security import OAuth2PasswordRequestForm
+from jose import JWTError, jwt
 
 from ..core.inputs import ModelInputs, load_inputs, parse_inputs
 from ..core.model import FinancialModel
 from ..core.table import Table
 from ..services.paystack import PaystackClient, PaystackError, SubscriptionStatus
 from ..services.subscription_store import StoredSubscriptionRecord, get_subscription_store
+from ..services.user_store import UserRecord, get_user_store
 from .schemas import (
     AIInsightsPayload,
     ModelRunRequest,
     ModelRunResponse,
     PharmaModelRunRequest,
     PharmaValidationRequest,
+    AuthUpdateRequest,
     ScenarioToolResultPayload,
     SubscriptionCheckRequest,
     SubscriptionCheckResponse,
@@ -128,6 +134,9 @@ API_TOKEN_ENV = "PHARMA_FINANCIAL_API_TOKEN"
 API_TOKEN_HEADER = "X-API-Key"
 GOOGLE_AUDIENCE_ENV = "PHARMA_FINANCIAL_GOOGLE_AUDIENCE"
 GOOGLE_VALID_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
+JWT_SECRET_ENV = "FINANCIAL_MODELS_AUTH_SECRET"
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRY_SECONDS = 3600
 
 try:  # pragma: no cover - optional dependency
     from google.oauth2 import id_token as google_id_token  # type: ignore
@@ -145,6 +154,7 @@ class AuthContext:
     subject: str | None = None
     email: str | None = None
     claims: Mapping[str, Any] | None = None
+    user: UserRecord | None = None
 
 
 def _expected_api_token() -> str | None:
@@ -156,6 +166,31 @@ def _google_audiences() -> list[str]:
     value = os.getenv(GOOGLE_AUDIENCE_ENV, "")
     audiences = [item.strip() for item in value.split(",") if item.strip()]
     return audiences
+
+
+def _jwt_secret() -> str | None:
+    secret = os.getenv(JWT_SECRET_ENV, "").strip()
+    return secret or None
+
+
+def _issue_jwt(user: UserRecord) -> str:
+    secret = _jwt_secret()
+    if secret is None:
+        raise RuntimeError("JWT secret is not configured.")
+    payload = {
+        "sub": str(user.id),
+        "email": user.email,
+        "provider": user.provider,
+        "exp": datetime.now(timezone.utc) + timedelta(seconds=JWT_EXPIRY_SECONDS),
+    }
+    return jwt.encode(payload, secret, algorithm=JWT_ALGORITHM)
+
+
+def _verify_jwt(token: str) -> Mapping[str, Any]:
+    secret = _jwt_secret()
+    if secret is None:
+        raise RuntimeError("JWT secret is not configured.")
+    return jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
 
 
 def _verify_google_token(token: str, audiences: Sequence[str]) -> Mapping[str, Any]:
@@ -190,31 +225,63 @@ def require_authorization(
 
     expected = _expected_api_token()
     google_audiences = _google_audiences()
+    secret = _jwt_secret()
 
-    if expected is None and not google_audiences:
+    if expected is None and not google_audiences and not secret:
         return None  # auth disabled
 
     if expected is not None and x_api_key:
         if secrets.compare_digest(x_api_key.strip(), expected):
             return AuthContext(method="api_token")
 
-    if google_audiences and authorization:
+    if authorization:
         scheme, _, token = authorization.strip().partition(" ")
         token = token.strip()
         if scheme.lower() == "bearer" and token:
-            try:
-                payload = _verify_google_token(token, google_audiences)
-            except RuntimeError as exc:  # pragma: no cover - dependency guard
-                raise HTTPException(status_code=500, detail=str(exc)) from exc
-            except ValueError:
-                pass
-            else:
-                return AuthContext(
-                    method="google",
-                    subject=str(payload.get("sub") or ""),
-                    email=payload.get("email"),
-                    claims=payload,
-                )
+            if secret:
+                try:
+                    payload = _verify_jwt(token)
+                    email = payload.get("email")
+                    user = None
+                    if email:
+                        user_store = get_user_store()
+                        user = user_store.get_user(email)
+                    return AuthContext(
+                        method="jwt",
+                        subject=str(payload.get("sub") or ""),
+                        email=email,
+                        claims=payload,
+                        user=user,
+                    )
+                except JWTError:
+                    pass
+                except RuntimeError as exc:  # pragma: no cover - missing secret
+                    raise HTTPException(status_code=500, detail=str(exc)) from exc
+            if google_audiences:
+                try:
+                    payload = _verify_google_token(token, google_audiences)
+                except RuntimeError as exc:  # pragma: no cover - dependency guard
+                    raise HTTPException(status_code=500, detail=str(exc)) from exc
+                except ValueError:
+                    pass
+                else:
+                    user = None
+                    try:
+                        user_store = get_user_store()
+                        user = user_store.ensure_user(
+                            email=payload.get("email") or "",
+                            name=payload.get("name") or payload.get("email"),
+                            provider="google",
+                        )
+                    except Exception:
+                        LOGGER.debug("Unable to upsert Google user", exc_info=True)
+                    return AuthContext(
+                        method="google",
+                        subject=str(payload.get("sub") or ""),
+                        email=payload.get("email"),
+                        claims=payload,
+                        user=user,
+                    )
 
     detail = "Unauthorized request."
     if expected is not None and not x_api_key:
@@ -255,13 +322,94 @@ def create_app() -> FastAPI:
     def healthcheck() -> Dict[str, str]:
         return {"status": "ok"}
 
-    def _register_model_routes(model_type: str, spec: ModelSpec) -> None:
-        run_request_model = spec.run_request_model
-        validate_request_model = spec.validate_request_model
+    @app.post("/auth/register")
+    def register_user(email: str, password: str, name: str | None = None) -> Dict[str, Any]:
+        secret = _jwt_secret()
+        if secret is None:
+            raise HTTPException(status_code=500, detail=f"{JWT_SECRET_ENV} is not configured.")
+        store = get_user_store()
+        try:
+            user = store.create_user(email=email, password=password, name=name, provider="local")
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        token = _issue_jwt(user)
+        return {"access_token": token, "token_type": "bearer", "user": {"email": user.email, "name": user.name}}
 
-        @app.post(f"/model/{model_type}/run", response_model=ModelRunResponse)
+    @app.post("/auth/login")
+    def login_user(form_data: OAuth2PasswordRequestForm = Depends()) -> Dict[str, Any]:
+        secret = _jwt_secret()
+        if secret is None:
+            raise HTTPException(status_code=500, detail=f"{JWT_SECRET_ENV} is not configured.")
+        store = get_user_store()
+        user = store.verify_user(email=form_data.username, password=form_data.password)
+        if user is None:
+            raise HTTPException(status_code=401, detail="Invalid email or password.")
+        token = _issue_jwt(user)
+        return {"access_token": token, "token_type": "bearer", "user": {"email": user.email, "name": user.name}}
+
+    @app.get("/auth/me")
+    def current_user(context: AuthContext | None = Depends(require_authorization)) -> Dict[str, Any]:
+        if context is None or not context.email:
+            raise HTTPException(status_code=401, detail="Unauthorized.")
+        return {"email": context.email, "method": context.method, "claims": context.claims}
+
+    @app.patch("/auth/me")
+    def update_current_user(
+        update: AuthUpdateRequest,
+        context: AuthContext | None = Depends(require_authorization),
+    ) -> Dict[str, Any]:
+        if context is None or not context.email:
+            raise HTTPException(status_code=401, detail="Unauthorized.")
+        store = get_user_store()
+        if update.password and context.method not in {"jwt", "api_token"}:
+            raise HTTPException(status_code=400, detail="Password changes require local account authentication.")
+        try:
+            user = store.update_user(context.email, name=update.name, password=update.password)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"email": user.email, "name": user.name}
+
+    @app.delete("/auth/users/{email}", status_code=204)
+    def delete_user(
+        email: str,
+        context: AuthContext | None = Depends(require_authorization),
+    ) -> None:
+        normalized = (email or "").strip().lower()
+        if context is None or not context.email or context.email.lower() != normalized:
+            raise HTTPException(status_code=403, detail="Forbidden.")
+        store = get_user_store()
+        store.delete_user(normalized)
+        return None
+
+    @app.get("/auth/users")
+    def list_users(context: AuthContext | None = Depends(require_authorization)) -> Dict[str, Any]:
+        if context is None:
+            raise HTTPException(status_code=401, detail="Unauthorized.")
+        store = get_user_store()
+        users = store.list_users()
+        return {
+            "users": [
+                {
+                    "email": user.email,
+                    "name": user.name,
+                    "provider": user.provider,
+                    "created_at": user.created_at,
+                }
+                for user in users
+            ]
+        }
+
+    def _register_model_routes(model_type: str, spec: ModelSpec) -> None:
+        RunRequestModel = spec.run_request_model
+        ValidateRequestModel = spec.validate_request_model
+        # Ensure Pydantic models are fully built for OpenAPI generation
+        if hasattr(RunRequestModel, "model_rebuild"):
+            RunRequestModel.model_rebuild()  # type: ignore[attr-defined]
+        if hasattr(ValidateRequestModel, "model_rebuild"):
+            ValidateRequestModel.model_rebuild()  # type: ignore[attr-defined]
+
         def run_model_versioned(
-            request: run_request_model, _: AuthContext | None = Depends(require_authorization)
+            request: RunRequestModel, _: AuthContext | None = Depends(require_authorization)
         ) -> ModelRunResponse:
             try:
                 inputs = _resolve_inputs(dict(request.inputs) if request.inputs is not None else None, spec)
@@ -269,9 +417,8 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=400, detail=f"Invalid inputs: {exc}") from exc
             return _run_model(inputs, spec)
 
-        @app.post(f"/inputs/{model_type}/validate", response_model=ValidationResponse)
         def validate_inputs_versioned(
-            request: validate_request_model,
+            request: ValidateRequestModel,
             _: AuthContext | None = Depends(require_authorization),
         ) -> ValidationResponse:
             try:
@@ -280,8 +427,45 @@ def create_app() -> FastAPI:
                 return ValidationResponse(valid=False, message=str(exc))
             return ValidationResponse(valid=True, message="Inputs parsed successfully.")
 
+        run_model_versioned.__annotations__["request"] = RunRequestModel
+        validate_inputs_versioned.__annotations__["request"] = ValidateRequestModel
+
+        app.add_api_route(
+            f"/model/{model_type}/run",
+            run_model_versioned,
+            methods=["POST"],
+            response_model=ModelRunResponse,
+        )
+        app.add_api_route(
+            f"/inputs/{model_type}/validate",
+            validate_inputs_versioned,
+            methods=["POST"],
+            response_model=ValidationResponse,
+        )
+
     for model_type, spec in MODEL_REGISTRY.items():
         _register_model_routes(model_type, spec)
+
+    def custom_openapi():
+        if app.openapi_schema:
+            return app.openapi_schema
+        openapi_schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            description=app.description,
+            routes=app.routes,
+        )
+        openapi_schema.setdefault("components", {}).setdefault("securitySchemes", {}).update(
+            {
+                "bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"},
+                "apiKeyAuth": {"type": "apiKey", "name": API_TOKEN_HEADER, "in": "header"},
+            }
+        )
+        openapi_schema["security"] = [{"bearerAuth": []}, {"apiKeyAuth": []}]
+        app.openapi_schema = openapi_schema
+        return app.openapi_schema
+
+    app.openapi = custom_openapi  # type: ignore[assignment]
 
     @app.post("/subscriptions/check", response_model=SubscriptionCheckResponse)
     def check_subscription(
