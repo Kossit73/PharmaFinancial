@@ -1,13 +1,13 @@
 import json
 import unittest
 
-from financial_models.pharma.report import (
+from financial_models.core.report import (
     ReportGenerationError,
     ReportSection,
     ReportTable,
     generate_report,
 )
-from financial_models.pharma.table import build_table
+from financial_models.core.table import build_table
 
 
 class ReportGenerationTest(unittest.TestCase):

@@ -27,9 +27,9 @@ from .biotech import (
 )
 from .pharma.inputs import ModelInputs, load_inputs as load_pharma_inputs, parse_inputs as parse_pharma_inputs
 from .pharma.model import FinancialModel
-from .pharma.table import Table
+from .core.table import Table
 from .api.schemas.common import AIInsightsPayload
-from .pharma.report import collect_biotech_report_sections, collect_report_sections
+from .core.report import collect_biotech_report_sections, collect_report_sections
 
 
 @dataclass
