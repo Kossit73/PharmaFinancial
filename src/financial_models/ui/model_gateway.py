@@ -10,10 +10,10 @@ try:  # pragma: no cover - optional dependency guard
 except Exception:  # pragma: no cover
     requests = None  # type: ignore
 
-from ..core.ai import AIInsights
-from ..core.inputs import ModelInputs
-from ..core.model import FinancialModel, FinancialOutputs, ScenarioToolResult
-from ..core.table import Table
+from ..pharma.ai import AIInsights
+from ..pharma.inputs import ModelInputs
+from ..pharma.model import FinancialModel, FinancialOutputs, ScenarioToolResult
+from ..pharma.table import Table
 
 
 def _clean_cell(value: Any) -> Any:

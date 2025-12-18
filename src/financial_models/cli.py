@@ -5,7 +5,7 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-from .core.report import REPORT_FORMATS, generate_report
+from .pharma.report import REPORT_FORMATS, generate_report
 
 from .model_registry import get_model_spec, list_models
 

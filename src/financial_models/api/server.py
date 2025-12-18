@@ -17,7 +17,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 
 from ..model_registry import MODEL_REGISTRY, ModelSpec
-from ..core.report import REPORT_FORMATS, generate_report
+from ..pharma.report import REPORT_FORMATS, generate_report
 from ..services.paystack import PaystackClient, PaystackError, SubscriptionStatus
 from ..services.subscription_store import StoredSubscriptionRecord, get_subscription_store
 from ..services.user_store import UserRecord, get_user_store

@@ -1,7 +1,8 @@
 """Pharmaceutical financial modelling toolkit."""
-from .core.ai import AIInsights
-from .core.inputs import AIParameters, load_inputs, parse_inputs
-from .core.model import FinancialModel, FinancialOutputs, IRRResult, ScenarioToolResult
+
+from .pharma.ai import AIInsights
+from .pharma.inputs import AIParameters, load_inputs, parse_inputs
+from .pharma.model import FinancialModel, FinancialOutputs, IRRResult, ScenarioToolResult
 
 __all__ = [
     "load_inputs",

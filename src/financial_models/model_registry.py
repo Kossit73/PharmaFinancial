@@ -29,6 +29,7 @@ from .pharma.inputs import ModelInputs, load_inputs as load_pharma_inputs, parse
 from .pharma.model import FinancialModel
 from .pharma.table import Table
 from .api.schemas.common import AIInsightsPayload
+from .pharma.report import collect_biotech_report_sections, collect_report_sections
 
 
 @dataclass

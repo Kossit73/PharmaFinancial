@@ -677,11 +677,6 @@ def _excel_column_letter(n: int) -> str:
     return string
 
 
-def _excel_sheet_xml_value(value: str) -> str:
-    escaped = xml_escape(value)
-    return f"<t xml:space=\"preserve\">{escaped}</t>"
-
-
 def _escape_csv(value: Any) -> str:
     text = _stringify(value)
     if any(ch in text for ch in [",", "\n", '"']):
@@ -747,7 +742,6 @@ def _table_to_rows(data: Any) -> List[MutableMapping[str, Any]]:
             return []
         if all(isinstance(item, Mapping) for item in data):
             return [dict(item) for item in data]  # type: ignore[arg-type]
-        # Coerce positional rows into a single-column table
         return [{"value": item} for item in data]  # type: ignore[list-item]
 
     return [{"value": data}]

@@ -4,8 +4,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from financial_models.core.debt import amortise_entries, amortise_entry
-from financial_models.core.inputs import DebtEntry
+from financial_models.pharma.debt import amortise_entries, amortise_entry
+from financial_models.pharma.inputs import DebtEntry
 
 
 def test_amortise_entry_generates_full_schedule():

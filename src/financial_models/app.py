@@ -83,18 +83,18 @@ if TYPE_CHECKING:  # pragma: no cover - typing aid only
 else:  # pragma: no cover - used when Streamlit isn't fully available
     DeltaGenerator = Any  # type: ignore[misc]
 
-from .core.ai import AIInsights
-from .core.debt import amortise_entries
-from .core.inputs import DebtEntry, ModelInputs, parse_inputs
-from .core.model import (
+from .pharma.ai import AIInsights
+from .pharma.debt import amortise_entries
+from .pharma.inputs import DebtEntry, ModelInputs, parse_inputs
+from .pharma.model import (
     CASH_FLOW_BEGIN_COLUMN,
     CASH_FLOW_END_COLUMN,
     CASH_FLOW_NET_COLUMN,
     FinancialModel,
     FinancialOutputs,
 )
-from .core.report import collect_report_sections, generate_report
-from .core.table import Table
+from .pharma.report import collect_report_sections, generate_report
+from .pharma.table import Table
 from .services.paystack import PaystackClient, PaystackError, SubscriptionStatus
 from .services.subscription_store import StoredSubscriptionRecord
 from .ui import ModelGateway, SubscriptionGateway

@@ -7,8 +7,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from financial_models.core.inputs import load_inputs, parse_inputs
-from financial_models.core.model import (
+from financial_models.pharma.inputs import load_inputs, parse_inputs
+from financial_models.pharma.model import (
     CASH_FLOW_BEGIN_COLUMN,
     CASH_FLOW_END_COLUMN,
     CASH_FLOW_NET_COLUMN,

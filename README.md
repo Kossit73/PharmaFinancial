@@ -155,8 +155,7 @@ python -m unittest discover -s tests -p 'test_*.py'
 ```
 
 For ad-hoc experimentation you can also run the engine directly from the Python prompt. The
-pharma modelling engine now lives under the `financial_models.pharma` namespace (the legacy
-`financial_models.core` modules remain as thin compatibility shims), so import from `pharma`
+pharma modelling engine now lives under the `financial_models.pharma` namespace, so import from `pharma`
 when scripting against the financial toolkit:
 
 ```bash

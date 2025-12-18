@@ -1,3 +1,3 @@
 """Backwards-compatible shims for ``financial_models.report``."""
 
-from .core.report import *  # noqa: F401,F403
+from .pharma.report import *  # noqa: F401,F403
