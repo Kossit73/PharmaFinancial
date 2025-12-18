@@ -107,10 +107,11 @@ python -m financial_models.webhook --host 0.0.0.0 --port 8080
 ```
 
 The server validates `X-Paystack-Signature`, records events in a SQLite database (`~/.financial_models/subscriptions.db` by default, override with `SUBSCRIPTION_STORE_PATH`), and marks subscriptions as revoked when Paystack emits cancellation or failed renewal events. Every Streamlit session consults the shared store before allowing downloads, so webhook updates cut off access immediately even if the UI cache is still valid.
+The implementation now lives under `financial_models.services.webhook`, but the `python -m financial_models.webhook` entry point remains unchanged for compatibility.
 
 ## Customising Assumptions
 
-All modelling assumptions are defined in [`src/financial_models/data/default_inputs.json`](src/financial_models/data/default_inputs.json). Duplicate this file and pass the new path to the CLI using `--inputs` to evaluate alternative cases. The structure mirrors the specification shared in the project brief, covering production volumes, cost inflation, labour structures, financing, and working capital.
+All pharma modelling assumptions are defined in [`src/financial_models/data/default_inputs.json`](src/financial_models/data/default_inputs.json) (mirrored under `financial_models/pharma/data/`). Duplicate this file and pass the new path to the CLI using `--inputs` to evaluate alternative cases. The structure mirrors the specification shared in the project brief, covering production volumes, cost inflation, labour structures, financing, and working capital. Biotech defaults live under [`src/financial_models/biotech/data/default_inputs.json`](src/financial_models/biotech/data/default_inputs.json).
 
 ### AI, Machine Learning, and Generative Insights
 
@@ -133,18 +134,23 @@ streamlit run streamlit_app.py
 ## Project Structure
 
 ```
-streamlit_app.py
-src/
-  financial_models/
-    __init__.py
-    __main__.py
-    app.py
-    cli.py
-    inputs.py
-    model.py
-    data/
-      default_inputs.json
+src/financial_models/
+  core/                # shared building blocks (ai/report/table) reused by every model
+  pharma/              # pharma engine: inputs, model, data/default_inputs.json (+ ai/report/table shims to core)
+  biotech/             # biotech valuation engine: inputs, model, data/default_inputs.json
+  api/                 # FastAPI app + pydantic schemas
+  services/            # paystack + subscription storage + webhook receiver
+  ui/                  # UI gateways used by Streamlit/Angular
+  model_registry.py    # central registry used by CLI/API to expose models
+  data/default_inputs.json  # legacy default inputs consumed by CLI/tests (mirrors pharma defaults)
 ```
+
+### Adding additional models
+
+1. Create `src/financial_models/<name>/` with `inputs.py`, `model.py`, and `data/default_inputs.json`. If you want shared reporting/AI, add thin wrappers that import `financial_models.core.report`/`financial_models.core.ai` and export `generate_report`/`REPORT_FORMATS` or AI helpers.
+2. Register the model in `model_registry.py` (load_inputs, parse_inputs, run_core, build_response, optional report builders, CLI exporter).
+3. If the API should serve it, add pydantic request/response schemas under `financial_models/api/schemas/<name>/` and wire routes in `financial_models/api/server.py`.
+4. Update docs and tests with the new model key.
 
 ## Testing the Model Logic
 
