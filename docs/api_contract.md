@@ -1,4 +1,4 @@
-# Pharmaceuticals Financial Model API Contract
+# Financial Models API Contract
 
 This file captures the HTTP contract exposed by `financial_models.api.server` so frontend developers can integrate without reading the Python code. The FastAPI app also serves an OpenAPI document at `/openapi.json` that can be fed to client generators (e.g. `npx @openapitools/openapi-generator-cli generate -g typescript-angular ...`).
 
@@ -82,6 +82,35 @@ All endpoints accept and return JSON.
 - Request (`ValidationRequest`): `{ "inputs": { ...payload... } }`
 - 200 response (`ValidationResponse`): `{ "valid": true|false, "message": "<detail>" }`
 
+### `POST /model/biotech/run`
+- Auth: required unless auth is disabled
+- Request (`BiotechModelRunRequest`):
+  - `inputs`: object with `model_config` and `products` list. When omitted, server uses defaults (`src/financial_models/biotech/data/default_inputs.json`).
+- 200 response (`BiotechModelRunResponse`):
+  - `rnpv`: number
+  - `consolidated`: `TablePayload`
+  - `dcf_table`: `TablePayload`
+  - `per_product`: object of product name → `TablePayload`
+  - `per_product_prob`: object of product name → `TablePayload` (probability-weighted)
+- Example request:
+  ```http
+  POST /model/biotech/run
+  X-API-Key: $FINANCIAL_MODELS_API_TOKEN
+  Content-Type: application/json
+
+  {
+    "inputs": {
+      "model_config": { "first_year": 2024, "n_years": 25, ... },
+      "products": [{ "name": "AgSeed-101", "success_prob": 0.35, ... }]
+    }
+  }
+  ```
+
+### `POST /inputs/biotech/validate`
+- Auth: required unless auth is disabled
+- Request (`BiotechValidationRequest`): `{ "inputs": { "model_config": {...}, "products": [...] } }`
+- 200 response (`ValidationResponse`): `{ "valid": true|false, "message": "<detail>" }`
+
 ### `POST /subscriptions/check`
 - Auth: required unless auth is disabled
 - Request (`SubscriptionCheckRequest`): `{ "email": "user@example.com" }`
@@ -90,6 +119,8 @@ All endpoints accept and return JSON.
   - `is_active`: boolean
   - `message`: string
   - `payload`: object | null (raw Paystack response)
+  - `cached`: boolean (true when served from persisted cache)
+  - `cached_at`: number | null (epoch seconds when cached)
 
 ### `GET /subscriptions/status`
 - Auth: required unless auth is disabled

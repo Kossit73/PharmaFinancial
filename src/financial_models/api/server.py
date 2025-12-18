@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any, Callable, Dict, Mapping, MutableMapping, Sequence, Type
 
+import pandas as pd
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import OAuth2PasswordRequestForm
@@ -18,11 +19,21 @@ from jose import JWTError, jwt
 from ..core.inputs import ModelInputs, load_inputs, parse_inputs
 from ..core.model import FinancialModel
 from ..core.table import Table
+from ..biotech import (
+    BiotechInputs,
+    ValuationEngine as BiotechValuationEngine,
+    build_portfolio as build_biotech_portfolio,
+    load_inputs as load_biotech_inputs,
+    parse_inputs as parse_biotech_inputs,
+)
 from ..services.paystack import PaystackClient, PaystackError, SubscriptionStatus
 from ..services.subscription_store import StoredSubscriptionRecord, get_subscription_store
 from ..services.user_store import UserRecord, get_user_store
 from .schemas import (
     AIInsightsPayload,
+    BiotechModelRunRequest,
+    BiotechModelRunResponse,
+    BiotechValidationRequest,
     ModelRunRequest,
     ModelRunResponse,
     PharmaModelRunRequest,
@@ -54,6 +65,12 @@ def _table_payload(table: Table | None) -> TablePayload | None:
         return None
     sanitized = {key: [_clean_value(v) for v in values] for key, values in table.as_dict().items()}
     return TablePayload(index_name=table.index_name, index=list(table.index), data=sanitized)
+
+
+def _df_payload(df: pd.DataFrame | None, *, index_name: str = "Year") -> TablePayload | None:
+    if df is None:
+        return None
+    return TablePayload(index_name=index_name, index=list(df.index), data=df.to_dict(orient="list"))
 
 
 def _ai_payload(insights) -> AIInsightsPayload | None:
@@ -553,6 +570,43 @@ def create_app() -> FastAPI:
         return app.openapi_schema
 
     app.openapi = custom_openapi  # type: ignore[assignment]
+
+    @app.post("/model/biotech/run", response_model=BiotechModelRunResponse)
+    def run_biotech_model(
+        request: BiotechModelRunRequest,
+        _: AuthContext | None = Depends(require_authorization),
+    ) -> BiotechModelRunResponse:
+        try:
+            inputs = (
+                parse_biotech_inputs(dict(request.inputs))
+                if request.inputs is not None
+                else load_biotech_inputs()
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid inputs: {exc}") from exc
+
+        portfolio = build_biotech_portfolio(inputs)
+        result = BiotechValuationEngine(portfolio).run()
+        return BiotechModelRunResponse(
+            rnpv=float(result.rnpv),
+            consolidated=_df_payload(result.consolidated) or TablePayload(),
+            dcf_table=_df_payload(result.dcf_table) or TablePayload(),
+            per_product={name: _df_payload(df) or TablePayload() for name, df in result.per_product.items()},
+            per_product_prob={
+                name: _df_payload(df) or TablePayload() for name, df in result.per_product_prob.items()
+            },
+        )
+
+    @app.post("/inputs/biotech/validate", response_model=ValidationResponse)
+    def validate_biotech_inputs(
+        request: BiotechValidationRequest,
+        _: AuthContext | None = Depends(require_authorization),
+    ) -> ValidationResponse:
+        try:
+            parse_biotech_inputs(dict(request.inputs))
+        except Exception as exc:
+            return ValidationResponse(valid=False, message=str(exc))
+        return ValidationResponse(valid=True, message="Inputs parsed successfully.")
 
     @app.post("/subscriptions/checkout", response_model=SubscriptionCheckoutResponse)
     def create_subscription_checkout(

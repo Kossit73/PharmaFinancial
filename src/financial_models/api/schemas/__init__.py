@@ -4,6 +4,7 @@ from .common import (
     AuthUpdateRequest,
     ModelRunRequest,
     ModelRunResponse,
+    TablePayload,
     ScenarioToolResultPayload,
     SubscriptionCheckRequest,
     SubscriptionCheckResponse,
@@ -13,9 +14,14 @@ from .common import (
     SubscriptionStatusUpsert,
     SubscriptionVerifyRequest,
     SubscriptionVerifyResponse,
-    TablePayload,
     ValidationRequest,
     ValidationResponse,
+)
+from .biotech import (
+    BiotechInputsPayload,
+    BiotechModelRunRequest,
+    BiotechModelRunResponse,
+    BiotechValidationRequest,
 )
 from .pharma import PharmaInputsPayload, PharmaModelRunRequest, PharmaValidationRequest
 
@@ -32,11 +38,15 @@ __all__ = [
     "SubscriptionStatusUpsert",
     "SubscriptionVerifyRequest",
     "SubscriptionVerifyResponse",
-    "TablePayload",
     "ValidationRequest",
     "ValidationResponse",
     "AuthUpdateRequest",
     "PharmaModelRunRequest",
     "PharmaValidationRequest",
     "PharmaInputsPayload",
+    "BiotechInputsPayload",
+    "BiotechModelRunRequest",
+    "BiotechModelRunResponse",
+    "BiotechValidationRequest",
+    "TablePayload",
 ]
