@@ -8,7 +8,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
-from typing import Any, Callable, Dict, Mapping, MutableMapping, Sequence, Type
+from typing import Any, Dict, Mapping, MutableMapping, Sequence, Type
 
 import pandas as pd
 from fastapi import Depends, FastAPI, Header, HTTPException, status
@@ -16,9 +16,10 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.security import OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 
-from ..core.inputs import ModelInputs, load_inputs, parse_inputs
+from ..core.inputs import ModelInputs
 from ..core.model import FinancialModel
 from ..core.table import Table
+from ..model_registry import MODEL_REGISTRY, ModelSpec
 from ..biotech import (
     BiotechInputs,
     ValuationEngine as BiotechValuationEngine,
