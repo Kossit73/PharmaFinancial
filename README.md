@@ -155,14 +155,14 @@ python -m unittest discover -s tests -p 'test_*.py'
 ```
 
 For ad-hoc experimentation you can also run the engine directly from the Python prompt. The
-modelling engine now lives under the `financial_models.core` namespace (legacy modules re-export
-the same classes for backwards compatibility), so import from `core` when scripting against the
-financial toolkit:
+pharma modelling engine now lives under the `financial_models.pharma` namespace (the legacy
+`financial_models.core` modules remain as thin compatibility shims), so import from `pharma`
+when scripting against the financial toolkit:
 
 ```bash
 python - <<'PY'
-from financial_models.core.inputs import load_inputs
-from financial_models.core.model import FinancialModel
+from financial_models.pharma.inputs import load_inputs
+from financial_models.pharma.model import FinancialModel
 
 inputs = load_inputs()
 model = FinancialModel(inputs)

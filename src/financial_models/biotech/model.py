@@ -291,6 +291,7 @@ class ValuationResult:
     consolidated: pd.DataFrame
     per_product: Dict[str, pd.DataFrame]
     per_product_prob: Dict[str, pd.DataFrame]
+    ai_insights: object | None = None
 
 
 class ValuationEngine:
@@ -336,6 +337,7 @@ class ValuationEngine:
             consolidated=cons,
             per_product=agg["per_product"],
             per_product_prob=agg["per_product_prob"],
+            ai_insights=None,
         )
 
 

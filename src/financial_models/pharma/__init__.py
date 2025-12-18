@@ -1,8 +1,8 @@
-"""Pharma package shim pointing to the core implementation."""
+"""Pharma engine implementation."""
 from __future__ import annotations
 
-from financial_models.core.inputs import ModelInputs, load_inputs, parse_inputs
-from financial_models.core.model import (
+from .inputs import ModelInputs, load_inputs, parse_inputs
+from .model import (
     CASH_FLOW_BEGIN_COLUMN,
     CASH_FLOW_END_COLUMN,
     CASH_FLOW_NET_COLUMN,
@@ -11,7 +11,7 @@ from financial_models.core.model import (
     IRRResult,
     ScenarioToolResult,
 )
-from financial_models.core.table import Table
+from .table import Table
 
 __all__ = [
     "ModelInputs",

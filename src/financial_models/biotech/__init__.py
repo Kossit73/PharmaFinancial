@@ -1,6 +1,6 @@
 """Biotech financial model public API (ported from Valuation Codex)."""
 
-from .core import (
+from .model import (
     ModelConfig,
     ProductConfig,
     Product,

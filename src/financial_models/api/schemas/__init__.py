@@ -17,13 +17,13 @@ from .common import (
     ValidationRequest,
     ValidationResponse,
 )
+from .pharma import PharmaInputsPayload, PharmaModelRunRequest, PharmaValidationRequest
 from .biotech import (
     BiotechInputsPayload,
     BiotechModelRunRequest,
     BiotechModelRunResponse,
     BiotechValidationRequest,
 )
-from .pharma import PharmaInputsPayload, PharmaModelRunRequest, PharmaValidationRequest
 
 __all__ = [
     "AIInsightsPayload",

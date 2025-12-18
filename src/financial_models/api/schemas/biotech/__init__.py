@@ -1,9 +1,5 @@
-from .models import (
-    BiotechInputsPayload,
-    BiotechModelRunRequest,
-    BiotechModelRunResponse,
-    BiotechValidationRequest,
-)
+from .inputs import BiotechInputsPayload
+from .models import BiotechModelRunRequest, BiotechModelRunResponse, BiotechValidationRequest
 
 __all__ = [
     "BiotechInputsPayload",

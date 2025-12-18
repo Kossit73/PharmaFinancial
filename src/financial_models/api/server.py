@@ -2,45 +2,27 @@
 from __future__ import annotations
 
 import logging
-import math
 import os
 import secrets
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
-from typing import Any, Dict, Mapping, MutableMapping, Sequence, Type
+from typing import Any, Dict, Mapping, MutableMapping, Sequence
 
-import pandas as pd
 from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi.responses import Response
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 
-from ..core.inputs import ModelInputs
-from ..core.model import FinancialModel
-from ..core.table import Table
 from ..model_registry import MODEL_REGISTRY, ModelSpec
-from ..biotech import (
-    BiotechInputs,
-    ValuationEngine as BiotechValuationEngine,
-    build_portfolio as build_biotech_portfolio,
-    load_inputs as load_biotech_inputs,
-    parse_inputs as parse_biotech_inputs,
-)
+from ..core.report import REPORT_FORMATS, generate_report
 from ..services.paystack import PaystackClient, PaystackError, SubscriptionStatus
 from ..services.subscription_store import StoredSubscriptionRecord, get_subscription_store
 from ..services.user_store import UserRecord, get_user_store
 from .schemas import (
-    AIInsightsPayload,
-    BiotechModelRunRequest,
-    BiotechModelRunResponse,
-    BiotechValidationRequest,
-    ModelRunRequest,
-    ModelRunResponse,
-    PharmaModelRunRequest,
-    PharmaValidationRequest,
     AuthUpdateRequest,
-    ScenarioToolResultPayload,
     SubscriptionCheckRequest,
     SubscriptionCheckResponse,
     SubscriptionCheckoutRequest,
@@ -49,69 +31,22 @@ from .schemas import (
     SubscriptionStatusUpsert,
     SubscriptionVerifyRequest,
     SubscriptionVerifyResponse,
-    TablePayload,
-    ValidationRequest,
     ValidationResponse,
 )
 
 
-def _clean_value(value: Any) -> Any:
-    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
-        return None
-    return value
+def _input_payload(payload: Any) -> Dict[str, Any]:
+    """Convert request payloads (Pydantic models or dicts) into plain dicts using aliases."""
+
+    if hasattr(payload, "model_dump"):
+        return payload.model_dump(by_alias=True)  # type: ignore[call-arg, attr-defined]
+    return dict(payload or {})
 
 
-def _table_payload(table: Table | None) -> TablePayload | None:
-    if table is None:
-        return None
-    sanitized = {key: [_clean_value(v) for v in values] for key, values in table.as_dict().items()}
-    return TablePayload(index_name=table.index_name, index=list(table.index), data=sanitized)
-
-
-def _df_payload(df: pd.DataFrame | None, *, index_name: str = "Year") -> TablePayload | None:
-    if df is None:
-        return None
-    return TablePayload(index_name=index_name, index=list(df.index), data=df.to_dict(orient="list"))
-
-
-def _ai_payload(insights) -> AIInsightsPayload | None:
-    if insights is None:
-        return None
-    return AIInsightsPayload(
-        enabled=bool(insights.enabled),
-        generative_summary=insights.generative_summary,
-        metadata=insights.metadata,
-        ml_forecast=_table_payload(insights.ml_forecast),
-    )
-
-@dataclass
-class ModelSpec:
-    """Describes a registered model and how to execute it."""
-
-    name: str
-    load_inputs: Callable[[], ModelInputs]
-    parse_inputs: Callable[[Mapping[str, Any]], ModelInputs]
-    model_factory: Callable[[ModelInputs], Any] = FinancialModel
-    run_request_model: Type[ModelRunRequest] = ModelRunRequest
-    validate_request_model: Type[ValidationRequest] = ValidationRequest
-
-
-MODEL_REGISTRY: Dict[str, ModelSpec] = {
-    "pharma": ModelSpec(
-        name="Pharmaceuticals",
-        load_inputs=load_inputs,
-        parse_inputs=parse_inputs,
-        model_factory=FinancialModel,
-        run_request_model=PharmaModelRunRequest,
-        validate_request_model=PharmaValidationRequest,
-    )
-}
-
-
-def _resolve_inputs(payload: Dict[str, Any] | None, spec: ModelSpec) -> ModelInputs:
+def _resolve_inputs(payload: Mapping[str, Any] | None, spec: ModelSpec) -> Any:
     if payload:
         return spec.parse_inputs(payload)
-    return spec.load_inputs()
+    return spec.load_inputs(None)
 
 
 def _resolve_subscription_email(request_email: str | None, context: AuthContext | None) -> str | None:
@@ -158,28 +93,9 @@ def _extract_email_from_transaction(payload: Mapping[str, Any] | None) -> str:
     return str(email or "").strip().lower()
 
 
-def _run_model(inputs: ModelInputs, spec: ModelSpec) -> ModelRunResponse:
-    model = spec.model_factory(inputs)
-    outputs = model.run()
-    return ModelRunResponse(
-        summary_metrics=_table_payload(outputs.summary_metrics),
-        income_statement=_table_payload(outputs.income_statement),
-        balance_sheet=_table_payload(outputs.balance_sheet),
-        cash_flow=_table_payload(outputs.cash_flow),
-        goal_seek=_table_payload(outputs.goal_seek),
-        break_even=_table_payload(outputs.break_even),
-        payback=_table_payload(outputs.payback),
-        discounted_payback=_table_payload(outputs.discounted_payback),
-        monte_carlo=_table_payload(outputs.monte_carlo),
-        scenario_results={name: _table_payload(table) for name, table in outputs.scenario_results.items()},
-        sensitivity_results={name: _table_payload(table) for name, table in outputs.sensitivity_results.items()},
-        scenario_tool_results={
-            name: ScenarioToolResultPayload(rows=result.rows, interpretation=result.interpretation)
-            for name, result in outputs.scenario_tool_results.items()
-        },
-        ai_insights=_ai_payload(outputs.ai_insights),
-        risk_factor_diagnostics=_table_payload(outputs.risk_factor_diagnostics),
-    )
+def _run_model(inputs: Any, spec: ModelSpec):
+    outputs = spec.run_core(inputs)
+    return spec.build_response(outputs)
 
 
 def _record_payload(record: StoredSubscriptionRecord) -> SubscriptionStatusRecord:
@@ -515,9 +431,10 @@ def create_app() -> FastAPI:
 
         def run_model_versioned(
             request: RunRequestModel, _: AuthContext | None = Depends(require_authorization)
-        ) -> ModelRunResponse:
+        ):
             try:
-                inputs = _resolve_inputs(dict(request.inputs) if request.inputs is not None else None, spec)
+                payload = _input_payload(request.inputs) if request.inputs is not None else None
+                inputs = _resolve_inputs(payload, spec)
             except Exception as exc:  # pragma: no cover - validation handled explicitly in /inputs/{model_type}/validate
                 raise HTTPException(status_code=400, detail=f"Invalid inputs: {exc}") from exc
             return _run_model(inputs, spec)
@@ -527,7 +444,7 @@ def create_app() -> FastAPI:
             _: AuthContext | None = Depends(require_authorization),
         ) -> ValidationResponse:
             try:
-                spec.parse_inputs(dict(request.inputs))
+                spec.parse_inputs(_input_payload(request.inputs))
             except Exception as exc:
                 return ValidationResponse(valid=False, message=str(exc))
             return ValidationResponse(valid=True, message="Inputs parsed successfully.")
@@ -539,7 +456,7 @@ def create_app() -> FastAPI:
             f"/model/{model_type}/run",
             run_model_versioned,
             methods=["POST"],
-            response_model=ModelRunResponse,
+            response_model=spec.response_model,
         )
         app.add_api_route(
             f"/inputs/{model_type}/validate",
@@ -547,6 +464,42 @@ def create_app() -> FastAPI:
             methods=["POST"],
             response_model=ValidationResponse,
         )
+
+        if spec.build_report_sections:
+
+            class ReportRequest(RunRequestModel):  # type: ignore[misc,valid-type]
+                format: str  # type: ignore[assignment]
+
+            def generate_report_versioned(
+                request: ReportRequest, _: AuthContext | None = Depends(require_authorization)
+            ):
+                fmt = (request.format or "").strip().upper()
+                if fmt not in REPORT_FORMATS:
+                    raise HTTPException(status_code=400, detail=f"Unsupported report format '{request.format}'.")
+                try:
+                    payload = _input_payload(request.inputs) if getattr(request, "inputs", None) is not None else None
+                    inputs = _resolve_inputs(payload, spec)
+                    result = spec.run_core(inputs)
+                    sections = spec.build_report_sections(inputs, result)
+                    data, mime, filename = generate_report(
+                        sections,
+                        fmt,
+                        report_name=spec.report_name or f"{model_type}_financial_report",
+                        report_title=spec.report_title or spec.name,
+                    )
+                except Exception as exc:  # pragma: no cover - report generation edge cases
+                    raise HTTPException(status_code=400, detail=f"Unable to generate report: {exc}") from exc
+                headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+                return Response(content=data, media_type=mime, headers=headers)
+
+            generate_report_versioned.__annotations__["request"] = ReportRequest  # type: ignore[attr-defined]
+
+            app.add_api_route(
+                f"/report/{model_type}/generate",
+                generate_report_versioned,
+                methods=["POST"],
+                response_class=Response,
+            )
 
     for model_type, spec in MODEL_REGISTRY.items():
         _register_model_routes(model_type, spec)
@@ -571,43 +524,6 @@ def create_app() -> FastAPI:
         return app.openapi_schema
 
     app.openapi = custom_openapi  # type: ignore[assignment]
-
-    @app.post("/model/biotech/run", response_model=BiotechModelRunResponse)
-    def run_biotech_model(
-        request: BiotechModelRunRequest,
-        _: AuthContext | None = Depends(require_authorization),
-    ) -> BiotechModelRunResponse:
-        try:
-            inputs = (
-                parse_biotech_inputs(dict(request.inputs))
-                if request.inputs is not None
-                else load_biotech_inputs()
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid inputs: {exc}") from exc
-
-        portfolio = build_biotech_portfolio(inputs)
-        result = BiotechValuationEngine(portfolio).run()
-        return BiotechModelRunResponse(
-            rnpv=float(result.rnpv),
-            consolidated=_df_payload(result.consolidated) or TablePayload(),
-            dcf_table=_df_payload(result.dcf_table) or TablePayload(),
-            per_product={name: _df_payload(df) or TablePayload() for name, df in result.per_product.items()},
-            per_product_prob={
-                name: _df_payload(df) or TablePayload() for name, df in result.per_product_prob.items()
-            },
-        )
-
-    @app.post("/inputs/biotech/validate", response_model=ValidationResponse)
-    def validate_biotech_inputs(
-        request: BiotechValidationRequest,
-        _: AuthContext | None = Depends(require_authorization),
-    ) -> ValidationResponse:
-        try:
-            parse_biotech_inputs(dict(request.inputs))
-        except Exception as exc:
-            return ValidationResponse(valid=False, message=str(exc))
-        return ValidationResponse(valid=True, message="Inputs parsed successfully.")
 
     @app.post("/subscriptions/checkout", response_model=SubscriptionCheckoutResponse)
     def create_subscription_checkout(

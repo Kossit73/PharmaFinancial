@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Mapping, Sequence
 
-from .core import ModelConfig, Portfolio, Product, ProductConfig
+from .model import ModelConfig, Portfolio, Product, ProductConfig
 
 
 DEFAULT_INPUTS_PATH = Path(__file__).resolve().parent / "data" / "default_inputs.json"
@@ -63,4 +63,3 @@ def build_portfolio(inputs: BiotechInputs) -> Portfolio:
 
     products = [Product(cfg, inputs.model_config) for cfg in inputs.products]
     return Portfolio(products, inputs.model_config)
-

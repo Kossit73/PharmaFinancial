@@ -1,4 +1,4 @@
-"""Utilities for assembling and exporting consolidated model reports."""
+"""Shared report generation utilities for financial models."""
 from __future__ import annotations
 
 import json
@@ -10,9 +10,6 @@ from io import BytesIO, StringIO
 from typing import Any, Iterable, List, Mapping, MutableMapping, Sequence, Tuple
 from xml.sax.saxutils import escape as xml_escape
 from zipfile import ZipFile
-
-from .model import FinancialModel, FinancialOutputs
-from .table import Table
 
 try:  # pragma: no cover - optional dependency
     import pandas as pd  # type: ignore
@@ -28,6 +25,9 @@ try:  # pragma: no cover - optional dependency
     from fpdf import FPDF  # type: ignore
 except Exception:  # pragma: no cover - FPDF may not be installed
     FPDF = None  # type: ignore
+
+from .model import FinancialModel, FinancialOutputs
+from .table import Table, build_table
 
 JSON_MIME = "application/json"
 CSV_MIME = "text/csv"
@@ -60,8 +60,20 @@ class ReportSection:
     notes: List[str] | None = None
 
 
+def _table_from_df(df: Any, *, index_name: str = "Year") -> Table | Any:
+    """Convert a pandas DataFrame into a Table when possible, otherwise return original."""
+
+    if df is None:
+        return []
+    if isinstance(df, Table):
+        return df
+    if pd is not None and hasattr(df, "index") and hasattr(df, "columns"):
+        return build_table(list(df.index), {c: df[c].tolist() for c in df.columns}, index_name=index_name)
+    return df
+
+
 def collect_report_sections(model: FinancialModel, outputs: FinancialOutputs) -> List[ReportSection]:
-    """Assemble report sections spanning all dashboards in the required order."""
+    """Assemble pharma report sections spanning all dashboards in the required order."""
 
     sections: List[ReportSection] = []
 
@@ -91,11 +103,7 @@ def collect_report_sections(model: FinancialModel, outputs: FinancialOutputs) ->
             provider = insight.metadata.get("provider")
             model_name = insight.metadata.get("model")
             status = insight.metadata.get("status")
-            details = ", ".join(
-                str(value)
-                for value in [provider, model_name, status]
-                if value not in (None, "")
-            )
+            details = ", ".join(str(value) for value in [provider, model_name, status] if value not in (None, ""))
             if details:
                 ai_notes.append(f"AI configuration: {details}")
 
@@ -173,11 +181,42 @@ def collect_report_sections(model: FinancialModel, outputs: FinancialOutputs) ->
     return sections
 
 
+def collect_biotech_report_sections(result: Any) -> List[ReportSection]:
+    """Build report sections for biotech valuation results."""
+
+    sections: List[ReportSection] = []
+    dcf_table = _table_from_df(getattr(result, "dcf_table", None))
+    consolidated = _table_from_df(getattr(result, "consolidated", None))
+    overview_tables = []
+    if getattr(result, "rnpv", None) is not None:
+        overview_tables.append(ReportTable("rNPV", [{"rNPV": result.rnpv}]))
+    if dcf_table:
+        overview_tables.append(ReportTable("Discounted Cash Flows", dcf_table))
+    if consolidated:
+        overview_tables.append(ReportTable("Consolidated Cash Flows", consolidated))
+    sections.append(ReportSection("Biotech Valuation Overview", overview_tables))
+
+    per_product_tables: List[ReportTable] = []
+    for name, df in getattr(result, "per_product", {}).items():
+        per_product_tables.append(ReportTable(f"Per-product Cashflows: {name}", _table_from_df(df)))
+    if per_product_tables:
+        sections.append(ReportSection("Per-product Cashflows", per_product_tables))
+
+    per_product_prob_tables: List[ReportTable] = []
+    for name, df in getattr(result, "per_product_prob", {}).items():
+        per_product_prob_tables.append(ReportTable(f"Probability-weighted Cashflows: {name}", _table_from_df(df)))
+    if per_product_prob_tables:
+        sections.append(ReportSection("Probability-weighted Cashflows", per_product_prob_tables))
+
+    return sections
+
+
 def generate_report(
     sections: Sequence[ReportSection],
     format_name: str,
     *,
-    report_name: str = "longevity_financial_report",
+    report_name: str = "financial_report",
+    report_title: str | None = None,
 ) -> Tuple[bytes, str, str]:
     """Generate a consolidated report in the requested format."""
 
@@ -206,12 +245,12 @@ def generate_report(
         return data, EXCEL_MIME, filename
 
     if fmt == "word":
-        data = _build_word(sections)
+        data = _build_word(sections, title=report_title)
         filename = f"{report_name}_{timestamp}.docx"
         return data, WORD_MIME, filename
 
     if fmt == "pdf":
-        data = _build_pdf(sections)
+        data = _build_pdf(sections, title=report_title)
         filename = f"{report_name}_{timestamp}.pdf"
         return data, PDF_MIME, filename
 
@@ -296,8 +335,8 @@ def _build_excel(sections: Sequence[ReportSection]) -> bytes:
     return _build_excel_fallback(entries)
 
 
-def _build_word(sections: Sequence[ReportSection]) -> bytes:
-    blocks = _collect_report_blocks(sections)
+def _build_word(sections: Sequence[ReportSection], *, title: str | None = None) -> bytes:
+    blocks = _collect_report_blocks(sections, title=title)
 
     if Document is not None:
         document = Document()
@@ -321,8 +360,8 @@ def _build_word(sections: Sequence[ReportSection]) -> bytes:
     return _build_word_fallback(blocks)
 
 
-def _build_pdf(sections: Sequence[ReportSection]) -> bytes:
-    blocks = _collect_report_blocks(sections)
+def _build_pdf(sections: Sequence[ReportSection], *, title: str | None = None) -> bytes:
+    blocks = _collect_report_blocks(sections, title=title)
 
     if FPDF is not None:
         pdf = FPDF()
@@ -356,11 +395,11 @@ def _build_pdf(sections: Sequence[ReportSection]) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def _collect_report_blocks(sections: Sequence[ReportSection]) -> List[Tuple[str, str]]:
+def _collect_report_blocks(sections: Sequence[ReportSection], *, title: str | None = None) -> List[Tuple[str, str]]:
     """Flatten sections into typed text blocks for downstream exporters."""
 
     blocks: List[Tuple[str, str]] = [
-        ("title", "Pharmaceuticals Financial Report"),
+        ("title", title or "Financial Model Report"),
         ("subtitle", f"Generated on {datetime.now(UTC).isoformat()} UTC"),
     ]
 
@@ -521,33 +560,24 @@ def _excel_sheet_xml(rows: Sequence[Sequence[str]]) -> str:
     return "\n".join(parts)
 
 
-def _excel_column_letter(index: int) -> str:
-    result = ""
-    while index > 0:
-        index, remainder = divmod(index - 1, 26)
-        result = chr(65 + remainder) + result
-    return result or "A"
-
-
-def _excel_content_types(count: int) -> str:
-    sheet_overrides = "".join(
-        f'<Override PartName="/xl/worksheets/sheet{i}.xml" '
-        f'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
-        for i in range(1, count + 1)
+def _excel_content_types(n_sheets: int) -> str:
+    overrides = "".join(
+        f'<Override PartName="/xl/worksheets/sheet{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        for i in range(1, n_sheets + 1)
     )
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
         '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
         '<Default Extension="xml" ContentType="application/xml"/>'
-        '<Override PartName="/xl/workbook.xml" '
-        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
-        '<Override PartName="/xl/styles.xml" '
-        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
-        '<Override PartName="/docProps/app.xml" '
-        'ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        f"{overrides}"
+        '<Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>'
+        '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+        '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>'
         '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
-        f"{sheet_overrides}</Types>"
+        '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
+        "</Types>"
     )
 
 
@@ -555,44 +585,39 @@ def _excel_root_rels() -> str:
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-        '<Relationship Id="rId1" '
-        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
-        'Target="xl/workbook.xml"/>'
-        '<Relationship Id="rId2" '
-        'Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" '
-        'Target="docProps/core.xml"/>'
-        '<Relationship Id="rId3" '
-        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" '
-        'Target="docProps/app.xml"/>'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+        '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>'
+        '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>'
         "</Relationships>"
     )
 
 
-def _excel_workbook_xml(sheet_names: Sequence[str]) -> str:
-    sheets_xml = "".join(
-        f'<sheet name="{xml_escape(name)}" sheetId="{idx}" r:id="rId{idx}"/>'
-        for idx, name in enumerate(sheet_names, start=1)
-    )
-    return (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
-        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-        f"<sheets>{sheets_xml}</sheets>"
-        "</workbook>"
-    )
-
-
-def _excel_workbook_rels(count: int) -> str:
-    relations = "".join(
-        f'<Relationship Id="rId{i}" '
-        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" '
-        f'Target="worksheets/sheet{i}.xml"/>'
-        for i in range(1, count + 1)
+def _excel_workbook_rels(n_sheets: int) -> str:
+    entries = "".join(
+        f'<Relationship Id="rId{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{i}.xml"/>'
+        for i in range(1, n_sheets + 1)
     )
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-        f"{relations}</Relationships>"
+        f"{entries}"
+        '<Relationship Id="rId{last}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+        '<Relationship Id="rId{ss}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>'
+    ).format(last=n_sheets + 1, ss=n_sheets + 2)
+
+
+def _excel_workbook_xml(sheet_names: Sequence[str]) -> str:
+    sheets_xml = "".join(
+        f'<sheet name="{xml_escape(name)}" sheetId="{idx}" r:id="rId{idx}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/>'
+        for idx, name in enumerate(sheet_names, start=1)
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        "<sheets>"
+        f"{sheets_xml}"
+        "</sheets>"
+        "</workbook>"
     )
 
 
@@ -600,354 +625,68 @@ def _excel_styles_xml() -> str:
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-        '<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>'
-        '<fills count="1"><fill><patternFill patternType="none"/></fill></fills>'
-        '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
-        '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-        '<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>'
-        '</styleSheet>'
-    )
-
-
-def _excel_core_props() -> str:
-    generated = datetime.now(UTC).isoformat()
-    return (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
-        'xmlns:dc="http://purl.org/dc/elements/1.1/" '
-        'xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" '
-        'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
-        '<dc:title>Pharmaceuticals Financial Report</dc:title>'
-        '<dc:creator>Pharmaceuticals Financial Model</dc:creator>'
-        f'<dcterms:created xsi:type="dcterms:W3CDTF">{generated}</dcterms:created>'
-        f'<dcterms:modified xsi:type="dcterms:W3CDTF">{generated}</dcterms:modified>'
-        '</cp:coreProperties>'
+        "<fonts count=\"1\"><font><sz val=\"11\"/><color theme=\"1\"/><name val=\"Calibri\"/></font></fonts>"
+        "<fills count=\"1\"><fill><patternFill patternType=\"none\"/></fill></fills>"
+        "<borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>"
+        "<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>"
+        "<cellXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/></cellXfs>"
+        "</styleSheet>"
     )
 
 
 def _excel_app_props(sheet_names: Sequence[str]) -> str:
-    parts = "".join(f"<vt:lpstr>{xml_escape(name)}</vt:lpstr>" for name in sheet_names)
+    names = "".join(f"<vt:lpstr>{xml_escape(name)}</vt:lpstr>" for name in sheet_names)
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\" "
+        "xmlns:vt=\"http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes\">"
+        "<Application>Python</Application>"
+        "<DocSecurity>0</DocSecurity>"
+        "<ScaleCrop>false</ScaleCrop>"
+        "<HeadingPairs><vt:vector size=\"2\" baseType=\"variant\"><vt:variant><vt:lpstr>Worksheets</vt:lpstr></vt:variant><vt:variant><vt:i4>"
+        f"{len(sheet_names)}</vt:i4></vt:variant></vt:vector></HeadingPairs>"
+        "<TitlesOfParts><vt:vector size=\"{n}\" baseType=\"lpstr\">{names}</vt:vector></TitlesOfParts>"
+        "<Manager/>"
+        "<Company/>"
+        "<LinksUpToDate>false</LinksUpToDate>"
+        "<SharedDoc>false</SharedDoc>"
+        "<HyperlinksChanged>false</HyperlinksChanged>"
+        "<AppVersion>16.0300</AppVersion>"
+        "</Properties>"
+    ).format(n=len(sheet_names), names=names)
+
+
+def _excel_core_props() -> str:
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" '
-        'xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
-        f'<HeadingPairs><vt:vector size="1" baseType="variant">'
-        '<vt:variant><vt:lpstr>Worksheets</vt:lpstr></vt:variant>'
-        '</vt:vector></HeadingPairs>'
-        f'<TitlesOfParts><vt:vector size="{len(sheet_names)}" baseType="lpstr">{parts}</vt:vector></TitlesOfParts>'
-        '</Properties>'
+        "<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" "
+        "xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:dcterms=\"http://purl.org/dc/terms/\" "
+        "xmlns:dcmitype=\"http://purl.org/dc/dcmitype/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">"
+        f"<dcterms:created xsi:type=\"dcterms:W3CDTF\">{datetime.now(UTC).isoformat()}</dcterms:created>"
+        "<dc:creator>financial_models</dc:creator>"
+        "<cp:revision>1</cp:revision>"
+        "</cp:coreProperties>"
     )
 
 
-def _build_word_fallback(blocks: Sequence[Tuple[str, str]]) -> bytes:
-    buffer = BytesIO()
-    with ZipFile(buffer, "w") as archive:
-        archive.writestr("[Content_Types].xml", _docx_content_types())
-        archive.writestr("_rels/.rels", _docx_root_rels())
-        archive.writestr("docProps/core.xml", _docx_core_props())
-        archive.writestr("docProps/app.xml", _docx_app_props())
-        archive.writestr("word/_rels/document.xml.rels", _docx_document_rels())
-        archive.writestr("word/document.xml", _docx_document_xml(blocks))
-    return buffer.getvalue()
+def _excel_column_letter(n: int) -> str:
+    string = ""
+    while n > 0:
+        n, remainder = divmod(n - 1, 26)
+        string = chr(65 + remainder) + string
+    return string
 
 
-def _docx_document_xml(blocks: Sequence[Tuple[str, str]]) -> str:
-    parts = [
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
-        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
-        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">',
-        "<w:body>",
-    ]
-
-    for kind, text in blocks:
-        parts.append(_docx_paragraph_xml(kind, text))
-
-    parts.append(
-        '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" '
-        'w:bottom="1440" w:left="1440"/></w:sectPr>'
-    )
-    parts.append("</w:body></w:document>")
-    return "".join(parts)
-
-
-def _docx_paragraph_xml(kind: str, text: str) -> str:
-    style_map = {
-        "title": "Title",
-        "subtitle": "Subtitle",
-        "heading1": "Heading1",
-        "heading2": "Heading2",
-        "note": "IntenseQuote",
-    }
-    style = style_map.get(kind)
-    escaped = xml_escape(text)
-    escaped = escaped.replace("\n", "&#10;")
-    p_parts = ["<w:p>"]
-    if style:
-        p_parts.append(f'<w:pPr><w:pStyle w:val="{style}"/></w:pPr>')
-    p_parts.append(f'<w:r><w:t xml:space="preserve">{escaped}</w:t></w:r></w:p>')
-    return "".join(p_parts)
-
-
-def _docx_content_types() -> str:
-    return (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
-        '<Default Extension="xml" ContentType="application/xml"/>'
-        '<Override PartName="/word/document.xml" '
-        'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
-        '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
-        '<Override PartName="/docProps/app.xml" '
-        'ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>'
-        '</Types>'
-    )
-
-
-def _docx_root_rels() -> str:
-    return (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-        '<Relationship Id="rId1" '
-        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
-        'Target="word/document.xml"/>'
-        '<Relationship Id="rId2" '
-        'Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" '
-        'Target="docProps/core.xml"/>'
-        '<Relationship Id="rId3" '
-        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" '
-        'Target="docProps/app.xml"/>'
-        '</Relationships>'
-    )
-
-
-def _docx_document_rels() -> str:
-    return (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>'
-    )
-
-
-def _docx_core_props() -> str:
-    generated = datetime.now(UTC).isoformat()
-    return (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
-        'xmlns:dc="http://purl.org/dc/elements/1.1/" '
-        'xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" '
-        'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
-        '<dc:title>Pharmaceuticals Financial Report</dc:title>'
-        '<dc:creator>Pharmaceuticals Financial Model</dc:creator>'
-        f'<dcterms:created xsi:type="dcterms:W3CDTF">{generated}</dcterms:created>'
-        f'<dcterms:modified xsi:type="dcterms:W3CDTF">{generated}</dcterms:modified>'
-        '</cp:coreProperties>'
-    )
-
-
-def _docx_app_props() -> str:
-    return (
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" '
-        'xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
-        '<Application>Pharmaceuticals Financial Model</Application>'
-        '</Properties>'
-    )
-
-
-def _build_pdf_fallback(blocks: Sequence[Tuple[str, str]]) -> bytes:
-    lines = _blocks_to_pdf_lines(blocks)
-    if not lines:
-        lines = ["Pharmaceuticals Financial Report"]
-
-    line_height = 14
-    page_height = 842
-    margin = 36
-    lines_per_page = max(int((page_height - 2 * margin) / line_height), 1)
-
-    pages: List[List[str]] = []
-    current: List[str] = []
-    for line in lines:
-        if len(current) >= lines_per_page:
-            pages.append(current)
-            current = []
-        current.append(line)
-    if current:
-        pages.append(current)
-
-    return _render_pdf_pages(pages, line_height=line_height, margin=margin, page_height=page_height)
-
-
-def _blocks_to_pdf_lines(blocks: Sequence[Tuple[str, str]]) -> List[str]:
-    lines: List[str] = []
-    for kind, text in blocks:
-        if kind == "title":
-            lines.append(text)
-            lines.append("")
-        elif kind == "subtitle":
-            lines.append(text)
-            lines.append("")
-        elif kind == "heading1":
-            lines.append(text.upper())
-        elif kind == "heading2":
-            lines.append(f"  {text}")
-        else:
-            lines.append(text)
-    return [line for line in lines if line is not None]
-
-
-def _render_pdf_pages(
-    pages: Sequence[Sequence[str]], *, line_height: int, margin: int, page_height: int
-) -> bytes:
-    page_count = max(len(pages), 1)
-    catalog_id = 1
-    pages_id = 2
-    page_ids = [idx for idx in range(3, 3 + page_count)]
-    content_ids = [idx for idx in range(3 + page_count, 3 + 2 * page_count)]
-    font_id = 3 + 2 * page_count
-    max_id = font_id
-
-    objects: dict[int, bytes] = {}
-
-    font_obj = b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
-    objects[font_id] = font_obj
-
-    page_refs = " ".join(f"{pid} 0 R" for pid in page_ids) or "3 0 R"
-    pages_obj = f"<< /Type /Pages /Count {page_count} /Kids [{page_refs}] >>".encode("ascii")
-    objects[pages_id] = pages_obj
-
-    for idx, page in enumerate(pages or [["No data available."]]):
-        page_id = page_ids[idx]
-        content_id = content_ids[idx]
-        stream = _pdf_content_stream(page, line_height=line_height, margin=margin, page_height=page_height)
-        content = (
-            f"<< /Length {len(stream)} >>\nstream\n".encode("ascii")
-            + stream
-            + b"\nendstream"
-        )
-        objects[content_id] = content
-        page_obj = (
-            f"<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 595 842] "
-            f"/Resources << /Font << /F1 {font_id} 0 R >> >> /Contents {content_id} 0 R >>"
-        ).encode("ascii")
-        objects[page_id] = page_obj
-
-    catalog_obj = f"<< /Type /Catalog /Pages {pages_id} 0 R >>".encode("ascii")
-    objects[catalog_id] = catalog_obj
-
-    buffer = BytesIO()
-    buffer.write(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
-
-    offsets: dict[int, int] = {}
-    for obj_id in range(1, max_id + 1):
-        offsets[obj_id] = buffer.tell()
-        buffer.write(f"{obj_id} 0 obj\n".encode("ascii"))
-        buffer.write(objects.get(obj_id, b"<<>>"))
-        buffer.write(b"\nendobj\n")
-
-    startxref = buffer.tell()
-    buffer.write(b"xref\n")
-    buffer.write(f"0 {max_id + 1}\n".encode("ascii"))
-    buffer.write(b"0000000000 65535 f \n")
-    for obj_id in range(1, max_id + 1):
-        offset = offsets[obj_id]
-        buffer.write(f"{offset:010d} 00000 n \n".encode("ascii"))
-    buffer.write(b"trailer\n")
-    buffer.write(f"<< /Size {max_id + 1} /Root {catalog_id} 0 R >>\n".encode("ascii"))
-    buffer.write(b"startxref\n")
-    buffer.write(f"{startxref}\n".encode("ascii"))
-    buffer.write(b"%%EOF")
-    return buffer.getvalue()
-
-
-def _pdf_content_stream(lines: Sequence[str], *, line_height: int, margin: int, page_height: int) -> bytes:
-    y = page_height - margin
-    commands = ["BT", "/F1 12 Tf"]
-    for line in lines:
-        escaped = _pdf_escape(line)
-        commands.append(f"1 0 0 1 {margin} {int(y)} Tm ({escaped}) Tj")
-        y -= line_height
-    commands.append("ET")
-    return "\n".join(commands).encode("latin-1")
-
-
-def _pdf_escape(text: str) -> str:
-    return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-
-
-def _ordered_columns(rows: Sequence[Mapping[str, Any]]) -> List[str]:
-    seen: List[str] = []
-    for row in rows:
-        for key in row.keys():
-            if key not in seen:
-                seen.append(key)
-    return seen
-
-def _table_to_rows(data: Any) -> List[Mapping[str, Any]]:
-    if data is None:
-        return []
-    if isinstance(data, list):
-        if data and isinstance(data[0], Mapping):
-            return [dict(row) for row in data]  # shallow copy
-        return [
-            {"Value": item}
-            for item in data
-        ]
-    if isinstance(data, Table):
-        mapping = data.as_dict()
-        rows: List[MutableMapping[str, Any]] = []
-        for position, idx in enumerate(data.index):
-            row: MutableMapping[str, Any] = {data.index_name: idx}
-            for column, values in mapping.items():
-                row[column] = values[position]
-            rows.append(row)
-        return rows
-    if pd is not None and isinstance(data, pd.DataFrame):
-        frame = data.reset_index()
-        return frame.to_dict(orient="records")
-    if isinstance(data, Mapping):
-        return [
-            {"Metric": key, "Value": value}
-            for key, value in data.items()
-        ]
-    try:
-        return json.loads(json.dumps(data))
-    except Exception:
-        return [{"Value": _stringify(data)}]
-
-
-def _table_to_dataframe(data: Any):
-    if pd is None:
-        return None
-    if isinstance(data, pd.DataFrame):
-        return data
-    if isinstance(data, Table):
-        return data.to_frame()
-    rows = _table_to_rows(data)
-    if not rows:
-        return pd.DataFrame()
-    return pd.DataFrame(rows)
+def _excel_sheet_xml_value(value: str) -> str:
+    escaped = xml_escape(value)
+    return f"<t xml:space=\"preserve\">{escaped}</t>"
 
 
 def _escape_csv(value: Any) -> str:
     text = _stringify(value)
-    if any(char in text for char in [",", "\n", '"']):
-        text = text.replace('"', '""')
-        return f'"{text}"'
+    if any(ch in text for ch in [",", "\n", '"']):
+        return '"' + text.replace('"', '""') + '"'
     return text
-
-
-def _sheet_name(section: str, table: str, tracker: MutableMapping[str, int]) -> str:
-    base = f"{section} {table}".strip() or "Sheet"
-    base = re.sub(r"[^A-Za-z0-9 ]", "", base)
-    base = re.sub(r"\s+", " ", base).strip()
-    if not base:
-        base = "Sheet"
-    base = base[:31]
-    count = tracker.get(base, 0)
-    if count:
-        suffix = f"_{count}"
-        base = f"{base[:31-len(suffix)]}{suffix}"
-    tracker[base] = count + 1
-    return base
 
 
 def _stringify(value: Any) -> str:
@@ -956,25 +695,100 @@ def _stringify(value: Any) -> str:
     if isinstance(value, float):
         if math.isnan(value):
             return ""
-        return f"{value:,.4f}" if abs(value) < 1 else f"{value:,.2f}"
+        if math.isinf(value):
+            return "∞" if value > 0 else "-∞"
     return str(value)
 
 
-def _pdf_multiline(pdf: "FPDF", text: str, *, bold: bool = False) -> None:
-    if bold:
-        pdf.set_font("Arial", "B", 10)
-    else:
-        pdf.set_font("Arial", "", 10)
-    pdf.multi_cell(0, 6, text)
-    if bold:
-        pdf.set_font("Arial", "", 10)
+def _ordered_columns(rows: Sequence[Mapping[str, Any]]) -> List[str]:
+    if not rows:
+        return []
+    columns = list(rows[0].keys())
+    return columns
+
+
+def _sheet_name(section_title: str, table_title: str, tracker: MutableMapping[str, int]) -> str:
+    base = re.sub(r"[^A-Za-z0-9]", "_", f"{section_title}_{table_title}").strip("_") or "Sheet"
+    max_len = 31
+    count = tracker.get(base, 0)
+    tracker[base] = count + 1
+    suffix = f"_{count}" if count else ""
+    allowed = max_len - len(suffix)
+    base = base[:allowed] if allowed > 0 else base[:max_len]
+    name = f"{base}{suffix}"
+    return name[:max_len]
+
+
+def _table_to_rows(data: Any) -> List[MutableMapping[str, Any]]:
+    """Normalise different table structures into a list of row dictionaries."""
+
+    if data is None:
+        return []
+
+    if isinstance(data, Table):
+        rows: List[MutableMapping[str, Any]] = []
+        columns = data.columns()
+        for idx, _ in enumerate(data.index):
+            row = {data.index_name: data.index[idx]}
+            for column in columns:
+                row[column] = data.data[column][idx]
+            rows.append(row)
+        return rows
+
+    if pd is not None and isinstance(data, pd.DataFrame):
+        rows = data.reset_index().to_dict(orient="records")  # type: ignore[attr-defined]
+        return [dict(row) for row in rows]
+
+    if isinstance(data, Mapping):
+        return [dict(data)]
+
+    if isinstance(data, (list, tuple)):
+        if not data:
+            return []
+        if all(isinstance(item, Mapping) for item in data):
+            return [dict(item) for item in data]  # type: ignore[arg-type]
+        # Coerce positional rows into a single-column table
+        return [{"value": item} for item in data]  # type: ignore[list-item]
+
+    return [{"value": data}]
+
+
+def _pdf_multiline(pdf: Any, text: str) -> None:
+    pdf.set_font("Arial", size=10)
+    for line in text.splitlines() or [""]:
+        pdf.multi_cell(0, 5, line)
+
+
+def _build_word_fallback(blocks: Sequence[Tuple[str, str]]) -> bytes:
+    buffer = StringIO()
+    for kind, text in blocks:
+        prefix = {
+            "title": "# ",
+            "subtitle": "## ",
+            "heading1": "### ",
+            "heading2": "#### ",
+            "note": "> ",
+        }.get(kind, "")
+        buffer.write(f"{prefix}{text}\n\n")
+    return buffer.getvalue().encode("utf-8")
+
+
+def _build_pdf_fallback(blocks: Sequence[Tuple[str, str]]) -> bytes:
+    content = "\n".join(text for _, text in blocks)
+    return content.encode("utf-8")
 
 
 __all__ = [
-    "REPORT_FORMATS",
     "ReportGenerationError",
     "ReportSection",
     "ReportTable",
     "collect_report_sections",
+    "collect_biotech_report_sections",
     "generate_report",
+    "REPORT_FORMATS",
+    "JSON_MIME",
+    "CSV_MIME",
+    "EXCEL_MIME",
+    "WORD_MIME",
+    "PDF_MIME",
 ]
