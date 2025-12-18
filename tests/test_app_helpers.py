@@ -36,7 +36,7 @@ class _NoOp:
 
 
 from financial_models.services.paystack import SubscriptionStatus
-from financial_models.subscription_store import SubscriptionStore
+from financial_models.services.subscription_store import SubscriptionStore
 
 
 class DummyStreamlit(types.ModuleType):
