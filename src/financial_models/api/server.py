@@ -31,8 +31,12 @@ from .schemas import (
     ScenarioToolResultPayload,
     SubscriptionCheckRequest,
     SubscriptionCheckResponse,
+    SubscriptionCheckoutRequest,
+    SubscriptionCheckoutResponse,
     SubscriptionStatusRecord,
     SubscriptionStatusUpsert,
+    SubscriptionVerifyRequest,
+    SubscriptionVerifyResponse,
     TablePayload,
     ValidationRequest,
     ValidationResponse,
@@ -121,6 +125,21 @@ def _ensure_user_exists(email: str | None) -> None:
         raise HTTPException(status_code=404, detail="User not found.")
 
 
+def _extract_email_from_transaction(payload: Mapping[str, Any] | None) -> str:
+    """Return the best-effort email value from a Paystack transaction payload."""
+
+    if not isinstance(payload, Mapping):
+        return ""
+    email = payload.get("email") or ""
+    customer = payload.get("customer")
+    if not email and isinstance(customer, Mapping):
+        email = customer.get("email") or ""
+    metadata = payload.get("metadata")
+    if not email and isinstance(metadata, Mapping):
+        email = metadata.get("email") or metadata.get("user_email") or ""
+    return str(email or "").strip().lower()
+
+
 def _run_model(inputs: ModelInputs, spec: ModelSpec) -> ModelRunResponse:
     model = spec.model_factory(inputs)
     outputs = model.run()
@@ -157,6 +176,43 @@ def _record_payload(record: StoredSubscriptionRecord) -> SubscriptionStatusRecor
     )
 
 
+def _status_from_record(record: StoredSubscriptionRecord) -> SubscriptionStatus:
+    return SubscriptionStatus(
+        email=record.email,
+        is_active=record.is_active,
+        message=record.status_message,
+        payload=record.payload,
+    )
+
+
+def _cached_subscription_status(email: str | None) -> tuple[SubscriptionStatus, float] | None:
+    if not email:
+        return None
+    store = get_subscription_store()
+    if store is None:
+        return None
+    record = store.get_status(email)
+    if record is None:
+        return None
+    if record.is_expired():
+        store.remove_status(email)
+        return None
+    return _status_from_record(record), record.updated_at
+
+
+def _persist_subscription_status(status: SubscriptionStatus, *, source: str) -> None:
+    if not status.email:
+        return
+    store = get_subscription_store()
+    if store is None:
+        return
+    ttl_seconds = SUBSCRIPTION_ACTIVE_TTL_SECONDS if status.is_active else SUBSCRIPTION_INACTIVE_TTL_SECONDS
+    try:
+        store.write_status(status, source=source, ttl_seconds=ttl_seconds)
+    except Exception:  # pragma: no cover - defensive persistence
+        LOGGER.debug("Unable to persist subscription status for %s", status.email)
+
+
 LOGGER = logging.getLogger(__name__)
 
 API_TOKEN_ENV = "FINANCIAL_MODELS_API_TOKEN"
@@ -166,6 +222,8 @@ GOOGLE_VALID_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 JWT_SECRET_ENV = "FINANCIAL_MODELS_AUTH_SECRET"
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_SECONDS = 3600
+SUBSCRIPTION_ACTIVE_TTL_SECONDS = float(os.getenv("SUBSCRIPTION_ACTIVE_TTL_SECONDS", 10 * 60))
+SUBSCRIPTION_INACTIVE_TTL_SECONDS = float(os.getenv("SUBSCRIPTION_INACTIVE_TTL_SECONDS", 2 * 60))
 
 try:  # pragma: no cover - optional dependency
     from google.oauth2 import id_token as google_id_token  # type: ignore
@@ -496,6 +554,80 @@ def create_app() -> FastAPI:
 
     app.openapi = custom_openapi  # type: ignore[assignment]
 
+    @app.post("/subscriptions/checkout", response_model=SubscriptionCheckoutResponse)
+    def create_subscription_checkout(
+        request: SubscriptionCheckoutRequest,
+        client: PaystackClient = Depends(get_paystack_client),
+        _: AuthContext | None = Depends(require_authorization),
+    ) -> SubscriptionCheckoutResponse:
+        email = _resolve_subscription_email(request.email, _)
+        _ensure_user_exists(email)
+        metadata: Dict[str, Any] = {"source": "financial_models_api"}
+        if request.metadata:
+            metadata.update(request.metadata)
+        if request.scenario:
+            metadata.setdefault("scenario", request.scenario)
+        metadata.setdefault("email", email or request.email)
+        try:
+            checkout_url = client.create_subscription_checkout(
+                email or request.email,
+                metadata=metadata,
+            )
+        except PaystackError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if not checkout_url:
+            raise HTTPException(status_code=500, detail="Unable to generate Paystack checkout URL.")
+        return SubscriptionCheckoutResponse(email=email or request.email, checkout_url=checkout_url)
+
+    @app.post("/subscriptions/verify", response_model=SubscriptionVerifyResponse)
+    def verify_subscription(
+        request: SubscriptionVerifyRequest,
+        client: PaystackClient = Depends(get_paystack_client),
+        _: AuthContext | None = Depends(require_authorization),
+    ) -> SubscriptionVerifyResponse:
+        reference = (request.reference or "").strip()
+        if not reference:
+            raise HTTPException(status_code=400, detail="Reference is required.")
+        try:
+            tx = client.verify_transaction(reference)
+        except PaystackError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        if not isinstance(tx, Mapping):
+            raise HTTPException(status_code=502, detail="Unexpected Paystack verification response.")
+
+        status_value = str(tx.get("status") or "").strip().lower()
+        if status_value != "success":
+            return SubscriptionVerifyResponse(
+                email=None,
+                is_active=False,
+                message="Transaction not successful.",
+                payload=tx,
+            )
+
+        email = _extract_email_from_transaction(tx)
+        if not email:
+            return SubscriptionVerifyResponse(
+                email=None,
+                is_active=False,
+                message="Transaction verified but no email found in Paystack payload.",
+                payload=tx,
+            )
+
+        try:
+            sub_status = client.has_active_subscription(email)
+        except PaystackError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+        _persist_subscription_status(sub_status, source="api:verify")
+
+        return SubscriptionVerifyResponse(
+            email=email,
+            is_active=sub_status.is_active,
+            message=sub_status.message,
+            payload=sub_status.payload or tx,
+        )
+
     @app.post("/subscriptions/check", response_model=SubscriptionCheckResponse)
     def check_subscription(
         request: SubscriptionCheckRequest,
@@ -504,17 +636,31 @@ def create_app() -> FastAPI:
     ) -> SubscriptionCheckResponse:
         email = _resolve_subscription_email(request.email, _)
         _ensure_user_exists(email)
+        cached = _cached_subscription_status(email or request.email)
+        if cached:
+            status, updated_at = cached
+            return SubscriptionCheckResponse(
+                email=status.email,
+                is_active=status.is_active,
+                message=status.message,
+                payload=status.payload,
+                cached=True,
+                cached_at=updated_at,
+            )
         try:
             status = client.has_active_subscription(email or request.email)
         except PaystackError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         if not isinstance(status, SubscriptionStatus):
             raise HTTPException(status_code=500, detail="Unexpected Paystack response.")
+        _persist_subscription_status(status, source="api:check")
         return SubscriptionCheckResponse(
             email=email or status.email,
             is_active=status.is_active,
             message=status.message,
             payload=status.payload,
+            cached=False,
+            cached_at=time.time(),
         )
 
     @app.get("/subscriptions/status", response_model=SubscriptionStatusRecord)

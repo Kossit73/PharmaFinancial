@@ -84,6 +84,8 @@ class SubscriptionCheckResponse(BaseModel):
     is_active: bool
     message: str
     payload: Optional[Mapping[str, Any]] = None
+    cached: bool = False
+    cached_at: Optional[float] = None
 
 
 class SubscriptionStatusRecord(BaseModel):
@@ -107,6 +109,36 @@ class SubscriptionStatusUpsert(BaseModel):
     payload: Optional[Mapping[str, Any]] = None
     source: Optional[str] = None
     ttl_seconds: Optional[float] = None
+
+
+class SubscriptionCheckoutRequest(BaseModel):
+    """Request body for generating a Paystack checkout link."""
+
+    email: EmailStr
+    metadata: Optional[Mapping[str, Any]] = None
+    scenario: Optional[str] = Field(default=None, description="Optional scenario label to include in metadata.")
+
+
+class SubscriptionCheckoutResponse(BaseModel):
+    """Response payload containing a checkout URL."""
+
+    email: EmailStr
+    checkout_url: str
+
+
+class SubscriptionVerifyRequest(BaseModel):
+    """Request body for verifying a Paystack transaction reference."""
+
+    reference: str
+
+
+class SubscriptionVerifyResponse(BaseModel):
+    """Response payload after verifying a Paystack transaction."""
+
+    email: Optional[EmailStr] = None
+    is_active: bool
+    message: str
+    payload: Optional[Mapping[str, Any]] = None
 
 
 class AuthUpdateRequest(BaseModel):
