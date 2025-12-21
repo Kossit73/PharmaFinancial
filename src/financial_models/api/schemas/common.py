@@ -141,6 +141,13 @@ class SubscriptionVerifyResponse(BaseModel):
     payload: Optional[Mapping[str, Any]] = None
 
 
+class AuthLoginRequest(BaseModel):
+    """Request body for user login."""
+
+    email: EmailStr = Field(description="User email address.")
+    password: str = Field(description="User password.")
+
+
 class AuthUpdateRequest(BaseModel):
     """Request body for updating the current user."""
 

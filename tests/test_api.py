@@ -170,10 +170,15 @@ def test_auth_register_and_login_allows_model_run(tmp_path):
         token = register.json()["access_token"]
         login = client.post(
             "/auth/login",
+            json={"email": "user@example.com", "password": "pass"},
+        )
+        assert login.status_code == 200
+        login_form = client.post(
+            "/auth/login",
             data={"username": "user@example.com", "password": "pass"},
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
-        assert login.status_code == 200
+        assert login_form.status_code == 200
         bearer = {"Authorization": f"Bearer {token}"}
         authorised = client.post("/model/pharma/run", json=payload, headers=bearer)
         assert authorised.status_code == 200

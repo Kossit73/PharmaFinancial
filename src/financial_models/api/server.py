@@ -10,10 +10,9 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from typing import Any, Dict, Mapping, MutableMapping, Sequence
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import Response
 from fastapi.openapi.utils import get_openapi
-from fastapi.security import OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 
 from ..model_registry import MODEL_REGISTRY, ModelSpec
@@ -22,6 +21,7 @@ from ..services.paystack import PaystackClient, PaystackError, SubscriptionStatu
 from ..services.subscription_store import StoredSubscriptionRecord, get_subscription_store
 from ..services.user_store import UserRecord, get_user_store
 from .schemas import (
+    AuthLoginRequest,
     AuthUpdateRequest,
     SubscriptionCheckRequest,
     SubscriptionCheckResponse,
@@ -357,12 +357,27 @@ def create_app() -> FastAPI:
         return {"access_token": token, "token_type": "bearer", "user": {"email": user.email, "name": user.name}}
 
     @app.post("/auth/login")
-    def login_user(form_data: OAuth2PasswordRequestForm = Depends()) -> Dict[str, Any]:
+    async def login_user(
+        request: Request, payload: AuthLoginRequest | None = Body(default=None)
+    ) -> Dict[str, Any]:
         secret = _jwt_secret()
         if secret is None:
             raise HTTPException(status_code=500, detail=f"{JWT_SECRET_ENV} is not configured.")
         store = get_user_store()
-        user = store.verify_user(email=form_data.username, password=form_data.password)
+        username: str | None = None
+        password: str | None = None
+        if payload is not None:
+            username = payload.email
+            password = payload.password
+        else:
+            content_type = request.headers.get("content-type", "")
+            if "application/x-www-form-urlencoded" in content_type:
+                form = await request.form()
+                username = form.get("username")
+                password = form.get("password")
+        if not username or not password:
+            raise HTTPException(status_code=400, detail="Email and password are required.")
+        user = store.verify_user(email=username, password=password)
         if user is None:
             raise HTTPException(status_code=401, detail="Invalid email or password.")
         token = _issue_jwt(user)

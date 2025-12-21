@@ -52,7 +52,7 @@ This project provides a Python implementation of the Pharmaceuticals financial m
 
    - Base URL: `http://localhost:8000` with Swagger UI at `/docs` (use **Authorize** to add `Bearer <jwt>` or `X-API-Key`).
    - Model routes: `POST /model/pharma/run` and `POST /inputs/pharma/validate` (see `docs/api_contract.md`).
-   - Auth routes: `/auth/register`, `/auth/login` (OAuth2 form), `/auth/me`, `/auth/me` (PATCH), `/auth/users` (GET), `/auth/users/{email}` (DELETE).
+   - Auth routes: `/auth/register`, `/auth/login` (JSON or form body), `/auth/me`, `/auth/me` (PATCH), `/auth/users` (GET), `/auth/users/{email}` (DELETE).
    - User store: defaults to `~/.financial_models/users.db` (override with `FINANCIAL_MODELS_USER_DB`). Set `FINANCIAL_MODELS_AUTH_SECRET` to issue/verify JWTs.
 
 4. **Launch the Streamlit dashboard (optional if using the API/Angular frontend)**
