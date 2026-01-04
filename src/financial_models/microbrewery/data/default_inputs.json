@@ -1,0 +1,3497 @@
+{
+  "config": {
+    "start_date": "2025-01-01",
+    "months": 72,
+    "pricing_cost_basis_month": 18,
+    "price_inflation_annual": 0.018,
+    "cost_inflation_annual": 0.018,
+    "tax_rate": 0.25,
+    "days_receivables": 22,
+    "days_inventory": 18,
+    "days_payables": 32,
+    "other_current_assets_pct_revenue": 0.05,
+    "other_current_liabilities_pct_direct_costs": 0.05,
+    "wacc_annual": 0.12,
+    "exit_month": 60,
+    "exit_ev_ebitda_multiple": 8.0,
+    "initial_cash": 500000.0
+  },
+  "dividend_policy": {
+    "enabled": true,
+    "model": "cash_sweep",
+    "start_month": 48,
+    "minimum_cash_position": 1250000.0,
+    "payout_ratio": 0.25
+  },
+  "skus": [
+    {
+      "sku_id": 1,
+      "name": "Pale Ale 330ml",
+      "direct_cost_per_unit": 2.05,
+      "markup_pct": 0.65,
+      "relative_opex_weight": 1.0
+    },
+    {
+      "sku_id": 2,
+      "name": "Pilsner 500ml",
+      "direct_cost_per_unit": 2.55,
+      "markup_pct": 0.62,
+      "relative_opex_weight": 1.05
+    }
+  ],
+  "channels": [
+    {
+      "channel": "Wholesale",
+      "price_factor": 1.4
+    },
+    {
+      "channel": "Retail",
+      "price_factor": 2.0
+    },
+    {
+      "channel": "E-Commerce",
+      "price_factor": 1.72
+    },
+    {
+      "channel": "On-Premise",
+      "price_factor": 1.0
+    }
+  ],
+  "sales_plan": [
+    {
+      "date": "2025-02-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 2700.0
+    },
+    {
+      "date": "2025-02-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 2100.0
+    },
+    {
+      "date": "2025-02-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 720.0
+    },
+    {
+      "date": "2025-02-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 480.0
+    },
+    {
+      "date": "2025-03-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 2794.5
+    },
+    {
+      "date": "2025-03-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 2173.5
+    },
+    {
+      "date": "2025-03-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 745.2
+    },
+    {
+      "date": "2025-03-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 496.8
+    },
+    {
+      "date": "2025-03-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 2025.0
+    },
+    {
+      "date": "2025-03-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 1575.0
+    },
+    {
+      "date": "2025-03-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 540.0
+    },
+    {
+      "date": "2025-03-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 360.0
+    },
+    {
+      "date": "2025-04-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 2892.3075
+    },
+    {
+      "date": "2025-04-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 2249.5725
+    },
+    {
+      "date": "2025-04-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 771.282
+    },
+    {
+      "date": "2025-04-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 514.188
+    },
+    {
+      "date": "2025-04-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 2106.0
+    },
+    {
+      "date": "2025-04-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 1638.0
+    },
+    {
+      "date": "2025-04-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 561.6
+    },
+    {
+      "date": "2025-04-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 374.4
+    },
+    {
+      "date": "2025-05-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 2993.538262
+    },
+    {
+      "date": "2025-05-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 2328.307537
+    },
+    {
+      "date": "2025-05-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 798.27687
+    },
+    {
+      "date": "2025-05-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 532.18458
+    },
+    {
+      "date": "2025-05-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 2190.24
+    },
+    {
+      "date": "2025-05-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 1703.52
+    },
+    {
+      "date": "2025-05-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 584.064
+    },
+    {
+      "date": "2025-05-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 389.376
+    },
+    {
+      "date": "2025-06-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 3098.312102
+    },
+    {
+      "date": "2025-06-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 2409.798301
+    },
+    {
+      "date": "2025-06-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 826.21656
+    },
+    {
+      "date": "2025-06-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 550.81104
+    },
+    {
+      "date": "2025-06-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 2277.8496
+    },
+    {
+      "date": "2025-06-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 1771.6608
+    },
+    {
+      "date": "2025-06-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 607.42656
+    },
+    {
+      "date": "2025-06-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 404.95104
+    },
+    {
+      "date": "2025-07-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 3206.753025
+    },
+    {
+      "date": "2025-07-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 2494.141242
+    },
+    {
+      "date": "2025-07-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 855.13414
+    },
+    {
+      "date": "2025-07-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 570.089427
+    },
+    {
+      "date": "2025-07-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 2368.963584
+    },
+    {
+      "date": "2025-07-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 1842.527232
+    },
+    {
+      "date": "2025-07-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 631.723622
+    },
+    {
+      "date": "2025-07-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 421.149082
+    },
+    {
+      "date": "2025-08-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 3318.989381
+    },
+    {
+      "date": "2025-08-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 2581.436185
+    },
+    {
+      "date": "2025-08-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 885.063835
+    },
+    {
+      "date": "2025-08-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 590.042557
+    },
+    {
+      "date": "2025-08-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 2463.722127
+    },
+    {
+      "date": "2025-08-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 1916.228321
+    },
+    {
+      "date": "2025-08-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 656.992567
+    },
+    {
+      "date": "2025-08-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 437.995045
+    },
+    {
+      "date": "2025-09-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 3435.154009
+    },
+    {
+      "date": "2025-09-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 2671.786452
+    },
+    {
+      "date": "2025-09-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 916.041069
+    },
+    {
+      "date": "2025-09-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 610.694046
+    },
+    {
+      "date": "2025-09-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 2562.271012
+    },
+    {
+      "date": "2025-09-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 1992.877454
+    },
+    {
+      "date": "2025-09-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 683.27227
+    },
+    {
+      "date": "2025-09-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 455.514847
+    },
+    {
+      "date": "2025-10-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 3555.3844
+    },
+    {
+      "date": "2025-10-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 2765.298978
+    },
+    {
+      "date": "2025-10-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 948.102507
+    },
+    {
+      "date": "2025-10-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 632.068338
+    },
+    {
+      "date": "2025-10-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 2664.761853
+    },
+    {
+      "date": "2025-10-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 2072.592552
+    },
+    {
+      "date": "2025-10-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 710.603161
+    },
+    {
+      "date": "2025-10-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 473.735441
+    },
+    {
+      "date": "2025-11-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 3679.822854
+    },
+    {
+      "date": "2025-11-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 2862.084442
+    },
+    {
+      "date": "2025-11-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 981.286094
+    },
+    {
+      "date": "2025-11-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 654.19073
+    },
+    {
+      "date": "2025-11-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 2771.352327
+    },
+    {
+      "date": "2025-11-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 2155.496254
+    },
+    {
+      "date": "2025-11-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 739.027287
+    },
+    {
+      "date": "2025-11-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 492.684858
+    },
+    {
+      "date": "2025-12-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 3808.616654
+    },
+    {
+      "date": "2025-12-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 2962.257397
+    },
+    {
+      "date": "2025-12-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 1015.631108
+    },
+    {
+      "date": "2025-12-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 677.087405
+    },
+    {
+      "date": "2025-12-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 2882.20642
+    },
+    {
+      "date": "2025-12-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 2241.716105
+    },
+    {
+      "date": "2025-12-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 768.588379
+    },
+    {
+      "date": "2025-12-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 512.392252
+    },
+    {
+      "date": "2026-01-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 3941.918237
+    },
+    {
+      "date": "2026-01-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 3065.936406
+    },
+    {
+      "date": "2026-01-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 1051.178196
+    },
+    {
+      "date": "2026-01-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 700.785464
+    },
+    {
+      "date": "2026-01-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 2997.494677
+    },
+    {
+      "date": "2026-01-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 2331.384749
+    },
+    {
+      "date": "2026-01-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 799.331914
+    },
+    {
+      "date": "2026-01-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 532.887943
+    },
+    {
+      "date": "2026-02-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 4079.885375
+    },
+    {
+      "date": "2026-02-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 3173.24418
+    },
+    {
+      "date": "2026-02-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 1087.969433
+    },
+    {
+      "date": "2026-02-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 725.312956
+    },
+    {
+      "date": "2026-02-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 3117.394464
+    },
+    {
+      "date": "2026-02-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 2424.640139
+    },
+    {
+      "date": "2026-02-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 831.30519
+    },
+    {
+      "date": "2026-02-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 554.20346
+    },
+    {
+      "date": "2026-03-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 4222.681363
+    },
+    {
+      "date": "2026-03-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 3284.307727
+    },
+    {
+      "date": "2026-03-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 1126.048363
+    },
+    {
+      "date": "2026-03-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 750.698909
+    },
+    {
+      "date": "2026-03-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 3242.090243
+    },
+    {
+      "date": "2026-03-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 2521.625744
+    },
+    {
+      "date": "2026-03-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 864.557398
+    },
+    {
+      "date": "2026-03-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 576.371599
+    },
+    {
+      "date": "2026-04-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 4370.475211
+    },
+    {
+      "date": "2026-04-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 3399.258497
+    },
+    {
+      "date": "2026-04-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 1165.460056
+    },
+    {
+      "date": "2026-04-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 776.973371
+    },
+    {
+      "date": "2026-04-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 3371.773852
+    },
+    {
+      "date": "2026-04-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 2622.490774
+    },
+    {
+      "date": "2026-04-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 899.139694
+    },
+    {
+      "date": "2026-04-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 599.426463
+    },
+    {
+      "date": "2026-05-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 4523.441843
+    },
+    {
+      "date": "2026-05-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 3518.232545
+    },
+    {
+      "date": "2026-05-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 1206.251158
+    },
+    {
+      "date": "2026-05-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 804.167439
+    },
+    {
+      "date": "2026-05-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 3506.644806
+    },
+    {
+      "date": "2026-05-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 2727.390405
+    },
+    {
+      "date": "2026-05-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 935.105282
+    },
+    {
+      "date": "2026-05-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 623.403521
+    },
+    {
+      "date": "2026-06-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 4681.762308
+    },
+    {
+      "date": "2026-06-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 3641.370684
+    },
+    {
+      "date": "2026-06-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 1248.469949
+    },
+    {
+      "date": "2026-06-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 832.313299
+    },
+    {
+      "date": "2026-06-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 3646.910599
+    },
+    {
+      "date": "2026-06-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 2836.486021
+    },
+    {
+      "date": "2026-06-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 972.509493
+    },
+    {
+      "date": "2026-06-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 648.339662
+    },
+    {
+      "date": "2026-07-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 4845.623988
+    },
+    {
+      "date": "2026-07-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 3768.818658
+    },
+    {
+      "date": "2026-07-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 1292.166397
+    },
+    {
+      "date": "2026-07-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 861.444265
+    },
+    {
+      "date": "2026-07-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 3792.787023
+    },
+    {
+      "date": "2026-07-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 2949.945462
+    },
+    {
+      "date": "2026-07-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 1011.409873
+    },
+    {
+      "date": "2026-07-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 674.273248
+    },
+    {
+      "date": "2026-08-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 5015.220828
+    },
+    {
+      "date": "2026-08-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 3900.727311
+    },
+    {
+      "date": "2026-08-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 1337.392221
+    },
+    {
+      "date": "2026-08-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 891.594814
+    },
+    {
+      "date": "2026-08-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 3944.498504
+    },
+    {
+      "date": "2026-08-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 3067.943281
+    },
+    {
+      "date": "2026-08-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 1051.866268
+    },
+    {
+      "date": "2026-08-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 701.244178
+    },
+    {
+      "date": "2026-09-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 5190.753557
+    },
+    {
+      "date": "2026-09-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 4037.252766
+    },
+    {
+      "date": "2026-09-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 1384.200948
+    },
+    {
+      "date": "2026-09-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 922.800632
+    },
+    {
+      "date": "2026-09-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 4102.278444
+    },
+    {
+      "date": "2026-09-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 3190.661012
+    },
+    {
+      "date": "2026-09-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 1093.940918
+    },
+    {
+      "date": "2026-09-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 729.293946
+    },
+    {
+      "date": "2026-10-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 5372.429931
+    },
+    {
+      "date": "2026-10-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 4178.556613
+    },
+    {
+      "date": "2026-10-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 1432.647982
+    },
+    {
+      "date": "2026-10-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 955.098654
+    },
+    {
+      "date": "2026-10-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 4266.369581
+    },
+    {
+      "date": "2026-10-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 3318.287452
+    },
+    {
+      "date": "2026-10-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 1137.698555
+    },
+    {
+      "date": "2026-10-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 758.465703
+    },
+    {
+      "date": "2026-11-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 5560.464979
+    },
+    {
+      "date": "2026-11-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 4324.806095
+    },
+    {
+      "date": "2026-11-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 1482.790661
+    },
+    {
+      "date": "2026-11-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 988.527107
+    },
+    {
+      "date": "2026-11-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 4437.024365
+    },
+    {
+      "date": "2026-11-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 3451.01895
+    },
+    {
+      "date": "2026-11-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 1183.206497
+    },
+    {
+      "date": "2026-11-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 788.804331
+    },
+    {
+      "date": "2026-12-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 5755.081253
+    },
+    {
+      "date": "2026-12-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 4476.174308
+    },
+    {
+      "date": "2026-12-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 1534.688334
+    },
+    {
+      "date": "2026-12-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1023.125556
+    },
+    {
+      "date": "2026-12-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 4614.505339
+    },
+    {
+      "date": "2026-12-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 3589.059708
+    },
+    {
+      "date": "2026-12-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 1230.534757
+    },
+    {
+      "date": "2026-12-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 820.356505
+    },
+    {
+      "date": "2027-01-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 5956.509097
+    },
+    {
+      "date": "2027-01-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 4632.840409
+    },
+    {
+      "date": "2027-01-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 1588.402426
+    },
+    {
+      "date": "2027-01-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1058.934951
+    },
+    {
+      "date": "2027-01-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 4799.085553
+    },
+    {
+      "date": "2027-01-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 3732.622097
+    },
+    {
+      "date": "2027-01-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 1279.756147
+    },
+    {
+      "date": "2027-01-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 853.170765
+    },
+    {
+      "date": "2027-02-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 6164.986915
+    },
+    {
+      "date": "2027-02-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 4794.989823
+    },
+    {
+      "date": "2027-02-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 1643.996511
+    },
+    {
+      "date": "2027-02-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1095.997674
+    },
+    {
+      "date": "2027-02-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 4991.048975
+    },
+    {
+      "date": "2027-02-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 3881.92698
+    },
+    {
+      "date": "2027-02-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 1330.946393
+    },
+    {
+      "date": "2027-02-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 887.297596
+    },
+    {
+      "date": "2027-03-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 6380.761458
+    },
+    {
+      "date": "2027-03-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 4962.814467
+    },
+    {
+      "date": "2027-03-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 1701.536389
+    },
+    {
+      "date": "2027-03-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1134.357592
+    },
+    {
+      "date": "2027-03-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 5190.690934
+    },
+    {
+      "date": "2027-03-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 4037.20406
+    },
+    {
+      "date": "2027-03-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 1384.184249
+    },
+    {
+      "date": "2027-03-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 922.789499
+    },
+    {
+      "date": "2027-04-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 6604.088109
+    },
+    {
+      "date": "2027-04-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 5136.512973
+    },
+    {
+      "date": "2027-04-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 1761.090162
+    },
+    {
+      "date": "2027-04-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1174.060108
+    },
+    {
+      "date": "2027-04-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 5398.318571
+    },
+    {
+      "date": "2027-04-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 4198.692222
+    },
+    {
+      "date": "2027-04-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 1439.551619
+    },
+    {
+      "date": "2027-04-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 959.701079
+    },
+    {
+      "date": "2027-05-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 6835.231192
+    },
+    {
+      "date": "2027-05-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 5316.290927
+    },
+    {
+      "date": "2027-05-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 1822.728318
+    },
+    {
+      "date": "2027-05-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1215.152212
+    },
+    {
+      "date": "2027-05-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 5614.251314
+    },
+    {
+      "date": "2027-05-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 4366.639911
+    },
+    {
+      "date": "2027-05-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 1497.133684
+    },
+    {
+      "date": "2027-05-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 998.089123
+    },
+    {
+      "date": "2027-06-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 7074.464284
+    },
+    {
+      "date": "2027-06-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 5502.36111
+    },
+    {
+      "date": "2027-06-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 1886.523809
+    },
+    {
+      "date": "2027-06-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1257.682539
+    },
+    {
+      "date": "2027-06-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 5838.821367
+    },
+    {
+      "date": "2027-06-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 4541.305507
+    },
+    {
+      "date": "2027-06-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 1557.019031
+    },
+    {
+      "date": "2027-06-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1038.012687
+    },
+    {
+      "date": "2027-07-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 7322.070534
+    },
+    {
+      "date": "2027-07-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 5694.943749
+    },
+    {
+      "date": "2027-07-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 1952.552142
+    },
+    {
+      "date": "2027-07-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1301.701428
+    },
+    {
+      "date": "2027-07-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 6072.374221
+    },
+    {
+      "date": "2027-07-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 4722.957728
+    },
+    {
+      "date": "2027-07-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 1619.299792
+    },
+    {
+      "date": "2027-07-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1079.533195
+    },
+    {
+      "date": "2027-08-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 7578.343003
+    },
+    {
+      "date": "2027-08-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 5894.26678
+    },
+    {
+      "date": "2027-08-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2020.891467
+    },
+    {
+      "date": "2027-08-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1347.260978
+    },
+    {
+      "date": "2027-08-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 6315.26919
+    },
+    {
+      "date": "2027-08-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 4911.876037
+    },
+    {
+      "date": "2027-08-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 1684.071784
+    },
+    {
+      "date": "2027-08-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1122.714523
+    },
+    {
+      "date": "2027-09-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 7843.585008
+    },
+    {
+      "date": "2027-09-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 6100.566117
+    },
+    {
+      "date": "2027-09-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2091.622669
+    },
+    {
+      "date": "2027-09-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1394.415112
+    },
+    {
+      "date": "2027-09-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 6567.879958
+    },
+    {
+      "date": "2027-09-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 5108.351078
+    },
+    {
+      "date": "2027-09-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 1751.434655
+    },
+    {
+      "date": "2027-09-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1167.623104
+    },
+    {
+      "date": "2027-10-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 8118.110483
+    },
+    {
+      "date": "2027-10-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 6314.085931
+    },
+    {
+      "date": "2027-10-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2164.829462
+    },
+    {
+      "date": "2027-10-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1443.219641
+    },
+    {
+      "date": "2027-10-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 6830.595156
+    },
+    {
+      "date": "2027-10-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 5312.685121
+    },
+    {
+      "date": "2027-10-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 1821.492042
+    },
+    {
+      "date": "2027-10-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1214.328028
+    },
+    {
+      "date": "2027-11-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 8402.24435
+    },
+    {
+      "date": "2027-11-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 6535.078939
+    },
+    {
+      "date": "2027-11-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2240.598493
+    },
+    {
+      "date": "2027-11-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1493.732329
+    },
+    {
+      "date": "2027-11-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 7103.818962
+    },
+    {
+      "date": "2027-11-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 5525.192526
+    },
+    {
+      "date": "2027-11-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 1894.351723
+    },
+    {
+      "date": "2027-11-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1262.901149
+    },
+    {
+      "date": "2027-12-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 8696.322902
+    },
+    {
+      "date": "2027-12-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 6763.806702
+    },
+    {
+      "date": "2027-12-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2319.019441
+    },
+    {
+      "date": "2027-12-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1546.01296
+    },
+    {
+      "date": "2027-12-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 7387.971721
+    },
+    {
+      "date": "2027-12-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 5746.200227
+    },
+    {
+      "date": "2027-12-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 1970.125792
+    },
+    {
+      "date": "2027-12-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1313.417195
+    },
+    {
+      "date": "2028-01-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2028-01-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2028-01-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2028-01-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2028-01-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 7683.49059
+    },
+    {
+      "date": "2028-01-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 5976.048236
+    },
+    {
+      "date": "2028-01-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2048.930824
+    },
+    {
+      "date": "2028-01-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1365.953883
+    },
+    {
+      "date": "2028-02-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2028-02-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2028-02-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2028-02-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2028-02-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 7990.830213
+    },
+    {
+      "date": "2028-02-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6215.090166
+    },
+    {
+      "date": "2028-02-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2130.888057
+    },
+    {
+      "date": "2028-02-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1420.592038
+    },
+    {
+      "date": "2028-03-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2028-03-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2028-03-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2028-03-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2028-03-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2028-03-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2028-03-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2028-03-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2028-04-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2028-04-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2028-04-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2028-04-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2028-04-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2028-04-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2028-04-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2028-04-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2028-05-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2028-05-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2028-05-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2028-05-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2028-05-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2028-05-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2028-05-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2028-05-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2028-06-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2028-06-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2028-06-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2028-06-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2028-06-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2028-06-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2028-06-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2028-06-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2028-07-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2028-07-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2028-07-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2028-07-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2028-07-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2028-07-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2028-07-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2028-07-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2028-08-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2028-08-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2028-08-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2028-08-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2028-08-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2028-08-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2028-08-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2028-08-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2028-09-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2028-09-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2028-09-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2028-09-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2028-09-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2028-09-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2028-09-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2028-09-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2028-10-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2028-10-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2028-10-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2028-10-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2028-10-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2028-10-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2028-10-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2028-10-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2028-11-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2028-11-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2028-11-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2028-11-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2028-11-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2028-11-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2028-11-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2028-11-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2028-12-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2028-12-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2028-12-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2028-12-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2028-12-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2028-12-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2028-12-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2028-12-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2029-01-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2029-01-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2029-01-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2029-01-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2029-01-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2029-01-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2029-01-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2029-01-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2029-02-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2029-02-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2029-02-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2029-02-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2029-02-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2029-02-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2029-02-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2029-02-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2029-03-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2029-03-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2029-03-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2029-03-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2029-03-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2029-03-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2029-03-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2029-03-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2029-04-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2029-04-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2029-04-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2029-04-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2029-04-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2029-04-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2029-04-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2029-04-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2029-05-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2029-05-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2029-05-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2029-05-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2029-05-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2029-05-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2029-05-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2029-05-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2029-06-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2029-06-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2029-06-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2029-06-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2029-06-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2029-06-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2029-06-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2029-06-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2029-07-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2029-07-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2029-07-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2029-07-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2029-07-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2029-07-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2029-07-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2029-07-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2029-08-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2029-08-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2029-08-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2029-08-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2029-08-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2029-08-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2029-08-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2029-08-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2029-09-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2029-09-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2029-09-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2029-09-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2029-09-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2029-09-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2029-09-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2029-09-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2029-10-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2029-10-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2029-10-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2029-10-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2029-10-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2029-10-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2029-10-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2029-10-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2029-11-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2029-11-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2029-11-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2029-11-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2029-11-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2029-11-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2029-11-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2029-11-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2029-12-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2029-12-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2029-12-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2029-12-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2029-12-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2029-12-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2029-12-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2029-12-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2030-01-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2030-01-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2030-01-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2030-01-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2030-01-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2030-01-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2030-01-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2030-01-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2030-02-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2030-02-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2030-02-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2030-02-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2030-02-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2030-02-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2030-02-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2030-02-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2030-03-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2030-03-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2030-03-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2030-03-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2030-03-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2030-03-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2030-03-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2030-03-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2030-04-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2030-04-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2030-04-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2030-04-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2030-04-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2030-04-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2030-04-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2030-04-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2030-05-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2030-05-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2030-05-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2030-05-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2030-05-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2030-05-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2030-05-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2030-05-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2030-06-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2030-06-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2030-06-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2030-06-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2030-06-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2030-06-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2030-06-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2030-06-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2030-07-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2030-07-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2030-07-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2030-07-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2030-07-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2030-07-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2030-07-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2030-07-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2030-08-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2030-08-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2030-08-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2030-08-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2030-08-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2030-08-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2030-08-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2030-08-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2030-09-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2030-09-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2030-09-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2030-09-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2030-09-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2030-09-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2030-09-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2030-09-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2030-10-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2030-10-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2030-10-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2030-10-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2030-10-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2030-10-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2030-10-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2030-10-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2030-11-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2030-11-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2030-11-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2030-11-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2030-11-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2030-11-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2030-11-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2030-11-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    },
+    {
+      "date": "2030-12-01",
+      "sku_id": 1,
+      "channel": "Wholesale",
+      "units": 9000.0
+    },
+    {
+      "date": "2030-12-01",
+      "sku_id": 1,
+      "channel": "Retail",
+      "units": 7000.0
+    },
+    {
+      "date": "2030-12-01",
+      "sku_id": 1,
+      "channel": "E-Commerce",
+      "units": 2400.0
+    },
+    {
+      "date": "2030-12-01",
+      "sku_id": 1,
+      "channel": "On-Premise",
+      "units": 1600.0
+    },
+    {
+      "date": "2030-12-01",
+      "sku_id": 2,
+      "channel": "Wholesale",
+      "units": 8100.0
+    },
+    {
+      "date": "2030-12-01",
+      "sku_id": 2,
+      "channel": "Retail",
+      "units": 6300.0
+    },
+    {
+      "date": "2030-12-01",
+      "sku_id": 2,
+      "channel": "E-Commerce",
+      "units": 2160.0
+    },
+    {
+      "date": "2030-12-01",
+      "sku_id": 2,
+      "channel": "On-Premise",
+      "units": 1440.0
+    }
+  ],
+  "opex_fixed_monthly": 95000.0,
+  "other_income_monthly": [
+    {
+      "month": 12,
+      "amount": 12500.0
+    }
+  ],
+  "capex_items": [
+    {
+      "name": "Land",
+      "amount": 850000.0,
+      "capex_month": 0,
+      "depreciation_years": 0
+    },
+    {
+      "name": "Brewery equipment",
+      "amount": 1150000.0,
+      "capex_month": 1,
+      "depreciation_years": 10
+    },
+    {
+      "name": "Packaging line",
+      "amount": 450000.0,
+      "capex_month": 6,
+      "depreciation_years": 8
+    }
+  ],
+  "debt_facilities": [
+    {
+      "name": "Mortgage",
+      "principal": 700000.0,
+      "annual_interest_rate": 0.032,
+      "draw_month": 0,
+      "grace_months": 6,
+      "term_months": 120,
+      "repayment_type": "linear"
+    },
+    {
+      "name": "Loan A",
+      "principal": 400000.0,
+      "annual_interest_rate": 0.028,
+      "draw_month": 5,
+      "grace_months": 4,
+      "term_months": 72,
+      "repayment_type": "annuity"
+    }
+  ],
+  "equity_injections": {
+    "0": 4200000.0,
+    "12": 650000.0
+  }
+}

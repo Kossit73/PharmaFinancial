@@ -25,6 +25,37 @@ from .biotech import (
     BiotechModelRunResponse,
     BiotechValidationRequest,
 )
+from .microbrewery import (
+    MicrobreweryCapexItemPayload,
+    MicrobreweryConfigPayload,
+    MicrobreweryDebtFacilityPayload,
+    MicrobreweryDividendPolicyPayload,
+    MicrobreweryInputsPayload,
+    MicrobreweryModelRunRequest,
+    MicrobreweryModelRunResponse,
+    MicrobrewerySalesPlanEntry,
+    MicrobreweryValidationRequest,
+)
+from .goat_farming import (
+    GoatAnalysisPayload,
+    GoatInputsPayload,
+    GoatModelRunRequest,
+    GoatModelRunResponse,
+    GoatScenarioPayload,
+    GoatValidationRequest,
+)
+from .cassava_ethanol import (
+    CassavaInputsPayload,
+    CassavaModelRunRequest,
+    CassavaModelRunResponse,
+    CassavaValidationRequest,
+)
+from .broiler_chicken import (
+    BroilerInputsPayload,
+    BroilerModelRunRequest,
+    BroilerModelRunResponse,
+    BroilerValidationRequest,
+)
 
 __all__ = [
     "AIInsightsPayload",
@@ -51,4 +82,27 @@ __all__ = [
     "BiotechModelRunResponse",
     "BiotechValidationRequest",
     "TablePayload",
+    "MicrobreweryCapexItemPayload",
+    "MicrobreweryConfigPayload",
+    "MicrobreweryDebtFacilityPayload",
+    "MicrobreweryDividendPolicyPayload",
+    "MicrobreweryInputsPayload",
+    "MicrobreweryModelRunRequest",
+    "MicrobreweryModelRunResponse",
+    "MicrobrewerySalesPlanEntry",
+    "MicrobreweryValidationRequest",
+    "GoatAnalysisPayload",
+    "GoatInputsPayload",
+    "GoatModelRunRequest",
+    "GoatModelRunResponse",
+    "GoatScenarioPayload",
+    "GoatValidationRequest",
+    "CassavaInputsPayload",
+    "CassavaModelRunRequest",
+    "CassavaModelRunResponse",
+    "CassavaValidationRequest",
+    "BroilerInputsPayload",
+    "BroilerModelRunRequest",
+    "BroilerModelRunResponse",
+    "BroilerValidationRequest",
 ]

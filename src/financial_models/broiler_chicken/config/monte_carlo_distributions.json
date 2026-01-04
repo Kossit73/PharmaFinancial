@@ -1,0 +1,44 @@
+[
+  {
+    "parameter": "live_price_per_kg",
+    "distribution": "normal",
+    "mode": "multiplicative",
+    "mean": 1.0,
+    "std": 0.06,
+    "bounds": [0.85, 1.2]
+  },
+  {
+    "parameter": "feed_cost_per_kg",
+    "distribution": "normal",
+    "mode": "multiplicative",
+    "mean": 1.0,
+    "std": 0.05,
+    "bounds": [0.85, 1.2]
+  },
+  {
+    "parameter": "mortality_rate",
+    "distribution": "normal",
+    "mode": "additive",
+    "mean": 0.0,
+    "std": 0.01,
+    "bounds": [0.0, 0.25]
+  },
+  {
+    "parameter": "price_growth",
+    "distribution": "triangular",
+    "mode": "additive",
+    "low": -0.01,
+    "mode_value": 0.02,
+    "high": 0.05,
+    "bounds": [-0.05, 0.08]
+  },
+  {
+    "parameter": "cost_inflation",
+    "distribution": "triangular",
+    "mode": "additive",
+    "low": 0.0,
+    "mode_value": 0.015,
+    "high": 0.04,
+    "bounds": [0.0, 0.06]
+  }
+]

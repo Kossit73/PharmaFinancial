@@ -1,6 +1,6 @@
-# Pharmaceuticals Financial Model
+# Financial Models Suite
 
-This project provides a Python implementation of the Pharmaceuticals financial model, translating the comprehensive set of assumptions provided into a reproducible analytical engine and interactive dashboards.
+This project provides Python implementations of the Pharmaceuticals, Biotech, Microbrewery, Goat Farming, Cassava Bioethanol, and Broiler Chicken financial models, translating comprehensive assumption sets into reproducible analytical engines and interactive dashboards.
 
 ## Features
 
@@ -12,6 +12,10 @@ This project provides a Python implementation of the Pharmaceuticals financial m
 - Streamlit web application delivering dashboards and statements, complemented by a CLI that exports schedules to CSV files.
 - Integrated machine-learning forecasts and optional generative AI summaries with configurable providers and API keys.
 - FastAPI service with documented contract for frontend clients (see `docs/api_contract.md`).
+- Microbrewery engine covering SKU/channel pricing, working capital, multi-facility debt schedules, monthly/annual statements, and equity IRR/MOIC.
+- Goat farming engine for manually entered schedules (CSV/JSON/API), producing scenarios, financial statements, KPIs, break-even, and advanced analytics.
+- Cassava bioethanol engine with landing-page inputs, scenarios (farm/buy/hybrid), statements, metrics, and break-even/payback analytics.
+- Broiler chicken engine producing full statements, revenue schedules, discounted cash flow valuation, and advanced analytics.
 
 ## Getting Started
 
@@ -31,7 +35,7 @@ This project provides a Python implementation of the Pharmaceuticals financial m
    python src/financial_models/__main__.py --output outputs
    ```
 
-   This command writes CSV schedules for all statements, scenario tables, sensitivity pivots, and the Monte Carlo simulation to the `outputs/` directory.
+   This command writes CSV schedules for all statements, scenario tables, sensitivity pivots, and the Monte Carlo simulation to the `outputs/` directory. Pass `--model microbrewery` for the microbrewery engine, `--model goat_farming` for the goat farming engine, `--model cassava_ethanol` for the cassava bioethanol engine, or `--model broiler_chicken` for the broiler model instead of the pharma default.
 
    > **Tip:** If you prefer `python -m financial_models`, either install the
    > package in editable mode (`pip install -e .`) or export
@@ -51,7 +55,7 @@ This project provides a Python implementation of the Pharmaceuticals financial m
    ```
 
    - Base URL: `http://localhost:8000` with Swagger UI at `/docs` (use **Authorize** to add `Bearer <jwt>` or `X-API-Key`).
-   - Model routes: `POST /model/pharma/run` and `POST /inputs/pharma/validate` (see `docs/api_contract.md`).
+   - Model routes: `POST /model/pharma/run`, `POST /inputs/pharma/validate`, `POST /model/microbrewery/run`, `POST /inputs/microbrewery/validate`, `POST /model/cassava_ethanol/run`, `POST /model/broiler_chicken/run`, `POST /model/goat_farming/run`, and biotech equivalents (see `docs/api_contract.md`).
    - Auth routes: `/auth/register`, `/auth/login` (JSON or form body), `/auth/me`, `/auth/me` (PATCH), `/auth/users` (GET), `/auth/users/{email}` (DELETE).
    - User store: defaults to `~/.financial_models/users.db` (override with `FINANCIAL_MODELS_USER_DB`). Set `FINANCIAL_MODELS_AUTH_SECRET` to issue/verify JWTs.
 
@@ -113,6 +117,14 @@ The implementation now lives under `financial_models.services.webhook`, but the 
 
 All pharma modelling assumptions are defined in [`src/financial_models/data/default_inputs.json`](src/financial_models/data/default_inputs.json) (mirrored under `financial_models/pharma/data/`). Duplicate this file and pass the new path to the CLI using `--inputs` to evaluate alternative cases. The structure mirrors the specification shared in the project brief, covering production volumes, cost inflation, labour structures, financing, and working capital. Biotech defaults live under [`src/financial_models/biotech/data/default_inputs.json`](src/financial_models/biotech/data/default_inputs.json).
 
+Microbrewery assumptions are bundled at [`src/financial_models/microbrewery/data/default_inputs.json`](src/financial_models/microbrewery/data/default_inputs.json). They capture SKU/channel pricing, CAPEX, multi-facility debt schedules, equity injections, and dividend policy parameters. Use `--model microbrewery --inputs <path>` with the CLI or the `/model/microbrewery/run` API route to evaluate alternate scenarios.
+
+Goat farming schedules can be provided as JSON/CSV with a `Period` column plus revenue, cost, and cash-flow series. When omitted, the API/CLI builds a 12-month default schedule in code (`src/financial_models/goat_farming/inputs.py`). Supply your own via `--model goat_farming --inputs <path>` (JSON payload matching the API schema) or the `/model/goat_farming/run` endpoint.
+
+Cassava bioethanol defaults come from the integrated landing-page generator (`src/financial_models/cassava_ethanol/adapter.py`); override the scenario via `/model/cassava_ethanol/run` or `--model cassava_ethanol`.
+
+Broiler chicken assumptions follow the `Assumptions` dataclass in `src/financial_models/broiler_chicken/assumptions.py`; pass overrides as JSON to `/model/broiler_chicken/run` or via CLI `--model broiler_chicken --inputs <path>`.
+
 ### AI, Machine Learning, and Generative Insights
 
 The Input Landing Page now includes an **AI & Machine Learning Configuration** section. Use it to:
@@ -138,6 +150,10 @@ src/financial_models/
   core/                # shared building blocks (ai/report/table) reused by every model
   pharma/              # pharma engine: inputs, model, data/default_inputs.json (+ ai/report/table shims to core)
   biotech/             # biotech valuation engine: inputs, model, data/default_inputs.json
+  microbrewery/        # microbrewery engine: inputs, model, data/default_inputs.json
+  goat_farming/        # goat farming engine: inputs + scenario/statements/analytics (default schedule generated in code)
+  cassava_ethanol/     # cassava bioethanol engine: landing page inputs, scenarios, statements, analytics
+  broiler_chicken/     # broiler chicken engine: assumptions, production/financing, statements, analytics
   api/                 # FastAPI app + pydantic schemas
   services/            # paystack + subscription storage + webhook receiver
   ui/                  # UI gateways used by Streamlit/Angular

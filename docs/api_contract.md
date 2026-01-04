@@ -37,7 +37,7 @@ All endpoints accept and return JSON.
 
 ### `POST /model/pharma/run`
 - Auth: required unless auth is disabled
-- Model types: `pharma` (current). Requests to other model paths return 404 until additional models are registered.
+- Model types: `pharma`, `microbrewery`, `biotech`, `goat_farming`, `cassava_ethanol`, and `broiler_chicken`.
 - Request body (`ModelRunRequest`):
   - `inputs`: full modelling payload (object). When omitted, server uses bundled defaults (`src/financial_models/data/default_inputs.json`).
 - 200 response (`ModelRunResponse`): financial outputs as tables
@@ -78,8 +78,96 @@ All endpoints accept and return JSON.
 
 ### `POST /inputs/pharma/validate`
 - Auth: required unless auth is disabled
-- Model types: `pharma` (current). Requests to other model paths return 404 until additional models are registered.
+- Model types: `pharma` (microbrewery and biotech have equivalent validation endpoints).
 - Request (`ValidationRequest`): `{ "inputs": { ...payload... } }`
+- 200 response (`ValidationResponse`): `{ "valid": true|false, "message": "<detail>" }`
+
+### `POST /model/microbrewery/run`
+- Auth: required unless auth is disabled
+- Request (`MicrobreweryModelRunRequest`):
+  - `inputs`: object containing `config`, `dividend_policy`, `skus`, `channels`, `sales_plan`, optional `capex_items`, `debt_facilities`, `equity_injections`, `opex_fixed_monthly`, and `other_income_monthly`. When omitted, server uses defaults (`src/financial_models/microbrewery/data/default_inputs.json`).
+- 200 response (`MicrobreweryModelRunResponse`):
+  - `monthly`, `annual`, `prices`: `TablePayload`
+  - `debt_schedules`: object of facility name → `TablePayload`
+  - `valuation`: object of valuation metrics (numbers)
+- Example request:
+  ```http
+  POST /model/microbrewery/run
+  X-API-Key: $FINANCIAL_MODELS_API_TOKEN
+  Content-Type: application/json
+
+  {
+    "inputs": {
+      "config": { "start_date": "2025-01-01", "months": 72, ... },
+      "skus": [{ "sku_id": 1, "name": "Pale Ale 330ml", "direct_cost_per_unit": 2.05, "markup_pct": 0.65 }],
+      "channels": [{ "channel": "Wholesale", "price_factor": 1.4 }],
+      "sales_plan": [{ "date": "2025-02-01", "sku_id": 1, "channel": "Wholesale", "units": 2700 }]
+    }
+  }
+  ```
+
+### `POST /inputs/microbrewery/validate`
+- Auth: required unless auth is disabled
+- Request (`MicrobreweryValidationRequest`): `{ "inputs": { ...payload... } }`
+- 200 response (`ValidationResponse`): `{ "valid": true|false, "message": "<detail>" }`
+
+### `POST /model/cassava_ethanol/run`
+- Auth: required unless auth is disabled
+- Request (`CassavaModelRunRequest`):
+  - `inputs`: optional object with `scenario` (`FARM_ONLY`, `BUY_ONLY`, `HYBRID`). When omitted, defaults are used.
+- 200 response (`CassavaModelRunResponse`):
+  - Monthly/annual income, balance, and cash flow statements: `TablePayload`
+  - `break_even`, `payback`: `TablePayload`
+  - `metrics`: object of key metrics
+  - `scenario`: string
+
+### `POST /inputs/cassava_ethanol/validate`
+- Auth: required unless auth is disabled
+- Request (`CassavaValidationRequest`): `{ "inputs": { "scenario": "FARM_ONLY" } }`
+- 200 response (`ValidationResponse`): `{ "valid": true|false, "message": "<detail>" }`
+
+### `POST /model/broiler_chicken/run`
+- Auth: required unless auth is disabled
+- Request (`BroilerModelRunRequest`):
+  - `inputs`: optional assumption overrides (keys align to `broiler_chicken.assumptions.Assumptions`). When omitted, defaults are used.
+- 200 response (`BroilerModelRunResponse`):
+  - `assumptions_schedule`, `income_statement`, `balance_sheet`, `cash_flow_statement`, `cashflows`, `revenue_summary`: `TablePayload`
+  - `valuation`: object with NPV/IRR and timeline metadata
+  - `advanced_analytics`: object of analysis name → `TablePayload`
+
+### `POST /inputs/broiler_chicken/validate`
+- Auth: required unless auth is disabled
+- Request (`BroilerValidationRequest`): `{ "inputs": { ...assumption overrides... } }`
+- 200 response (`ValidationResponse`): `{ "valid": true|false, "message": "<detail>" }`
+
+### `POST /model/goat_farming/run`
+- Auth: required unless auth is disabled
+- Request (`GoatModelRunRequest`):
+  - `inputs`: object containing `schedule` (list of rows with a `Period` column), optional `valuation_inputs` (e.g. `WACC`, `NPV`), optional `supplementary_tables`, and optional `scenario` shocks (`milk_price_pct`, `feed_cost_pct`). When omitted, server uses the bundled default schedule generated in `src/financial_models/goat/inputs.py`.
+- 200 response (`GoatModelRunResponse`):
+  - `schedule`, `scenario`, `performance`, `cash_flow`, `position`, `kpis`, `break_even`: `TablePayload`
+  - `advanced`: object of analysis name → `{ title, description, tables: { table_name: TablePayload } }`
+  - `valuation_summary`: object with WACC/NPV/Terminal Value (numbers or null)
+- Example request:
+  ```http
+  POST /model/goat_farming/run
+  X-API-Key: $FINANCIAL_MODELS_API_TOKEN
+  Content-Type: application/json
+
+  {
+    "inputs": {
+      "period_column": "Period",
+      "valuation_inputs": { "WACC": 0.12, "NPV": 750000 },
+      "schedule": [
+        { "Period": "2024-01-31", "Revenue": 100000, "COGS": 45000, "Gross Margin": 55000, "EBITDA": 25000, "NPAT": 15000 }
+      ]
+    }
+  }
+  ```
+
+### `POST /inputs/goat_farming/validate`
+- Auth: required unless auth is disabled
+- Request (`GoatValidationRequest`): `{ "inputs": { ...payload... } }`
 - 200 response (`ValidationResponse`): `{ "valid": true|false, "message": "<detail>" }`
 
 ### `POST /model/biotech/run`
