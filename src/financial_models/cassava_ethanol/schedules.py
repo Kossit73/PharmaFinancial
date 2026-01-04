@@ -33,7 +33,7 @@ def compute_depreciation_schedule(initial_investment: pd.DataFrame, start_year: 
         empty_monthly = pd.DataFrame(index=months)
         empty_monthly.index.name = "Month"
         empty_monthly["Total Depreciation"] = 0.0
-        empty_annual = empty_monthly.resample("Y").sum()
+        empty_annual = empty_monthly.resample("YE").sum()
         empty_annual.index = empty_annual.index.year
         empty_summary = pd.DataFrame(columns=[
             "Item",
@@ -79,7 +79,7 @@ def compute_depreciation_schedule(initial_investment: pd.DataFrame, start_year: 
     else:
         capex_series = capex_df.groupby("Month")["Capex"].sum().reindex(months, fill_value=0.0)
 
-    annual_df = monthly_df.resample("Y").sum()
+    annual_df = monthly_df.resample("YE").sum()
     annual_df.index = annual_df.index.year
 
     summary = initial_investment.copy()
@@ -231,7 +231,7 @@ def compute_production_tables(
             col_series.index = col_series.index.to_timestamp()
         compound_monthly[col] = col_series.reindex(months).ffill()
 
-    annual = compound_monthly.resample("Y").sum()
+    annual = compound_monthly.resample("YE").sum()
     annual.index = annual.index.year
 
     start_lookup: Dict[int, str | None] = {}
@@ -325,7 +325,7 @@ def compute_revenue_schedule(
     if monthly_revenue.empty:
         annual = pd.DataFrame(columns=monthly_revenue.columns)
     else:
-        annual = monthly_revenue.resample("Y").sum()
+        annual = monthly_revenue.resample("YE").sum()
         annual.index = annual.index.year
     return RevenueOutput(monthly_revenue, annual)
 
@@ -808,7 +808,7 @@ def compute_working_capital(
     if wc.empty:
         annual = pd.DataFrame(columns=wc.columns)
     else:
-        annual = wc.resample("Y").last()
+        annual = wc.resample("YE").last()
         annual.index = annual.index.year
         start_year = int(months.min().year)
         end_year = int(months.max().year)
@@ -946,7 +946,7 @@ def compute_financial_statements(
     income_monthly["Tax"] = income_monthly["EBT"].clip(lower=0) * tax_rate
     income_monthly["Net Income"] = income_monthly["EBT"] - income_monthly["Tax"]
 
-    income_annual = income_monthly.resample("Y").sum()
+    income_annual = income_monthly.resample("YE").sum()
     income_annual.index = income_annual.index.year
 
     wc_monthly = working_capital.monthly
@@ -999,7 +999,7 @@ def compute_financial_statements(
         + cashflow_monthly["Financing Cash Flow"]
     )
 
-    cashflow_annual = cashflow_monthly.resample("Y").sum()
+    cashflow_annual = cashflow_monthly.resample("YE").sum()
     cashflow_annual.index = cashflow_annual.index.year
 
     balance_monthly = pd.DataFrame(index=monthly.index)
@@ -1027,7 +1027,7 @@ def compute_financial_statements(
     balance_monthly["Total Liabilities"] = total_liabilities
     balance_monthly["Total Liabilities & Equity"] = total_liabilities + balance_monthly["Equity"]
 
-    balance_annual = balance_monthly.resample("Y").last()
+    balance_annual = balance_monthly.resample("YE").last()
     balance_annual.index = balance_annual.index.year
 
     def _balance_series(column: str) -> pd.Series:
@@ -1063,7 +1063,7 @@ def compute_financial_statements(
     balance_ratios_monthly["Debt-to-Equity Ratio"] = _safe_ratio(total_liabilities, equity_series)
     balance_ratios_monthly["Debt Ratio"] = _safe_ratio(total_liabilities, total_assets)
 
-    balance_ratios_annual = balance_ratios_monthly.resample("Y").last()
+    balance_ratios_annual = balance_ratios_monthly.resample("YE").last()
     balance_ratios_annual.index = balance_ratios_annual.index.year
 
     revenue_series = _income_series("Revenue")
@@ -1168,7 +1168,7 @@ def extract_expense_summary(
         monthly_df.index.name = "Month"
 
     if not monthly_df.empty:
-        annual_df = monthly_df.resample("Y").sum()
+        annual_df = monthly_df.resample("YE").sum()
         annual_df.index = annual_df.index.year
     else:
         annual_df = pd.DataFrame(columns=expense_columns)

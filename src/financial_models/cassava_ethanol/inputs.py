@@ -108,7 +108,7 @@ class EditableTable:
                     return "NaN"
                 return str(value)
 
-            normalised = normalised.applymap(_stringify)
+            normalised = normalised.map(_stringify)
             payload.append(normalised.to_csv(index=False))
         digest = hashlib.sha1("|".join(payload).encode("utf-8")).hexdigest()
         return digest

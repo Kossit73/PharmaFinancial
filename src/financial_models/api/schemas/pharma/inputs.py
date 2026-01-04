@@ -4,9 +4,11 @@ from __future__ import annotations
 from typing import Any, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, Field
+from pydantic import ConfigDict
 
 
 class PharmaInputsPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
     """Top-level payload accepted by the pharmaceuticals model."""
 
     years: Sequence[int] = Field(..., description="Projection years.")
@@ -29,6 +31,3 @@ class PharmaInputsPayload(BaseModel):
     monte_carlo: Optional[Mapping[str, Any]] = None
     goal_seek: Optional[Mapping[str, Any]] = None
     ai: Optional[Mapping[str, Any]] = None
-
-    class Config:
-        extra = "allow"

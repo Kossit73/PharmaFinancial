@@ -10,7 +10,7 @@ import pandas as pd
 
 from .goat_model import GoatModel, InputSchedule
 
-DEFAULT_DATA_PATH = Path(__file__).resolve().parent / "data" / "default_schedule.json"
+DEFAULT_DATA_PATH = Path(__file__).resolve().parent / "data" / "default_inputs.json"
 
 
 @dataclass
@@ -152,10 +152,14 @@ def parse_inputs(payload: Mapping[str, Any]) -> GoatModelParameters:
 def load_inputs(path: Path | None = None) -> GoatModelParameters:
     """Load inputs from JSON or return bundled defaults."""
 
-    if path is None:
-        return parse_inputs(_default_payload())
+    target = path or DEFAULT_DATA_PATH
+    if target.exists():
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        return parse_inputs(payload)
 
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    payload = _default_payload()
+    if path is None:
+        write_default_inputs(target)
     return parse_inputs(payload)
 
 

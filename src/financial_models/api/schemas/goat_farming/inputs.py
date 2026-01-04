@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
 class GoatScenarioPayload(BaseModel):
@@ -11,13 +11,21 @@ class GoatScenarioPayload(BaseModel):
 
 
 class GoatInputsPayload(BaseModel):
-    schedule: List[Mapping[str, Any]] = Field(description="Financial schedule rows including a Period column.")
-    period_column: Optional[str] = Field(default="Period", description="Column containing period labels.")
+    model_config = ConfigDict(extra="forbid")
+
+    schedule: List[Mapping[str, Any]] = Field(..., description="Financial schedule rows including a Period column.")
+    period_column: str = Field(default="Period", description="Column containing period labels.")
     valuation_inputs: Optional[Dict[str, float]] = Field(default=None, description="Optional valuation assumptions (e.g. WACC, NPV).")
     supplementary_tables: Optional[Mapping[str, List[Mapping[str, Any]]]] = Field(
         default=None, description="Optional supplementary tables (e.g. capex schedule)."
     )
     scenario: Optional[GoatScenarioPayload] = Field(default=None, description="Optional scenario shocks.")
+
+    @field_validator("period_column")
+    def _non_empty_period(cls, value: str) -> str:
+        if not str(value or "").strip():
+            raise ValueError("period_column must be provided.")
+        return str(value).strip()
 
 
 __all__ = ["GoatInputsPayload", "GoatScenarioPayload"]

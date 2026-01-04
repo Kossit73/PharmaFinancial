@@ -38,6 +38,13 @@ All endpoints accept and return JSON.
 ### `POST /model/pharma/run`
 - Auth: required unless auth is disabled
 - Model types: `pharma`, `microbrewery`, `biotech`, `goat_farming`, `cassava_ethanol`, and `broiler_chicken`.
+- Default inputs:
+  - `src/financial_models/pharma/data/default_inputs.json`
+  - `src/financial_models/biotech/data/default_inputs.json`
+  - `src/financial_models/microbrewery/data/default_inputs.json`
+  - `src/financial_models/goat_farming/data/default_inputs.json`
+  - `src/financial_models/cassava_ethanol/data/default_inputs.json`
+  - `src/financial_models/broiler_chicken/data/default_inputs.json`
 - Request body (`ModelRunRequest`):
   - `inputs`: full modelling payload (object). When omitted, server uses bundled defaults (`src/financial_models/data/default_inputs.json`).
 - 200 response (`ModelRunResponse`): financial outputs as tables
@@ -57,6 +64,7 @@ All endpoints accept and return JSON.
     "inputs": { ...full payload... }
   }
   ```
+- Exports (CLI): income_statement.csv, balance_sheet.csv, cash_flow.csv, summary_metrics.csv, break_even.csv, payback.csv, discounted_payback.csv, scenario_*.csv, sensitivity_*.csv, monte_carlo.csv, valuation.{json,csv}
 - Example response (truncated):
   ```json
   {
@@ -90,6 +98,7 @@ All endpoints accept and return JSON.
   - `monthly`, `annual`, `prices`: `TablePayload`
   - `debt_schedules`: object of facility name → `TablePayload`
   - `valuation`: object of valuation metrics (numbers)
+- Exports (CLI): monthly.csv, annual.csv, prices.csv, debt_*.csv, valuation.json, valuation.csv
 - Example request:
   ```http
   POST /model/microbrewery/run
@@ -120,6 +129,7 @@ All endpoints accept and return JSON.
   - `break_even`, `payback`: `TablePayload`
   - `metrics`: object of key metrics
   - `scenario`: string
+- Exports (CLI): income_statement_monthly.csv, income_statement_annual.csv, balance_sheet_monthly.csv, balance_sheet_annual.csv, cash_flow_monthly.csv, cash_flow_annual.csv, break_even.csv, payback.csv, metrics.json, metrics.csv
 
 ### `POST /inputs/cassava_ethanol/validate`
 - Auth: required unless auth is disabled
@@ -134,11 +144,40 @@ All endpoints accept and return JSON.
   - `assumptions_schedule`, `income_statement`, `balance_sheet`, `cash_flow_statement`, `cashflows`, `revenue_summary`: `TablePayload`
   - `valuation`: object with NPV/IRR and timeline metadata
   - `advanced_analytics`: object of analysis name → `TablePayload`
+- Exports (CLI): assumptions_schedule.csv, income_statement.csv, balance_sheet.csv, cash_flow_statement.csv, cashflows.csv, revenue_summary.csv, valuation.json, valuation.csv, advanced_*.csv
 
 ### `POST /inputs/broiler_chicken/validate`
 - Auth: required unless auth is disabled
 - Request (`BroilerValidationRequest`): `{ "inputs": { ...assumption overrides... } }`
 - 200 response (`ValidationResponse`): `{ "valid": true|false, "message": "<detail>" }`
+
+Example requests:
+```http
+POST /model/cassava_ethanol/run
+Content-Type: application/json
+
+{ "inputs": { "scenario": "HYBRID" } }
+```
+
+```http
+POST /model/broiler_chicken/run
+Content-Type: application/json
+
+{
+  "inputs": {
+    "discount_rate": 0.12,
+    "debt_ratio": 0.55,
+    "capex_housing": 1250000,
+    "capex_equipment": 450000
+  }
+}
+```
+
+### `POST /report/{model}/generate`
+- Auth: required unless auth is disabled
+- Available for models that define report builders (pharma, biotech, microbrewery, goat_farming, cassava_ethanol, broiler_chicken).
+- Request: same as the corresponding `/model/{model}/run` body with an added `format` field (`PDF`, `Word`, `Excel`, `CSV`, `JSON`).
+- Response: binary report with `Content-Disposition` set to the suggested filename.
 
 ### `POST /model/goat_farming/run`
 - Auth: required unless auth is disabled
@@ -148,6 +187,7 @@ All endpoints accept and return JSON.
   - `schedule`, `scenario`, `performance`, `cash_flow`, `position`, `kpis`, `break_even`: `TablePayload`
   - `advanced`: object of analysis name → `{ title, description, tables: { table_name: TablePayload } }`
   - `valuation_summary`: object with WACC/NPV/Terminal Value (numbers or null)
+- Exports (CLI): schedule.csv, scenario.csv, performance.csv, cash_flow.csv, position.csv, kpis.csv, break_even.csv, advanced_*_*.csv, valuation_summary.json, valuation_summary.csv
 - Example request:
   ```http
   POST /model/goat_farming/run
@@ -180,6 +220,7 @@ All endpoints accept and return JSON.
   - `dcf_table`: `TablePayload`
   - `per_product`: object of product name → `TablePayload`
   - `per_product_prob`: object of product name → `TablePayload` (probability-weighted)
+- Exports (CLI): consolidated.csv, dcf_table.csv, per_product_*.csv, per_product_prob_*.csv, valuation.json, valuation.csv, rnpv.txt
 - Example request:
   ```http
   POST /model/biotech/run

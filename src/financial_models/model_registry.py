@@ -52,7 +52,7 @@ from .pharma.inputs import ModelInputs, load_inputs as load_pharma_inputs, parse
 from .pharma.model import FinancialModel
 from .core.table import Table
 from .api.schemas.common import AIInsightsPayload
-from .core.report import collect_biotech_report_sections, collect_report_sections
+from .core.report import ReportSection, ReportTable, collect_biotech_report_sections, collect_report_sections
 from .api.schemas.microbrewery import (
     MicrobreweryModelRunRequest,
     MicrobreweryModelRunResponse,
@@ -103,7 +103,7 @@ def _df_payload(df: pd.DataFrame | None, *, index_name: str = "Year") -> TablePa
                 normalised.append(_clean_value(value))
         return normalised
 
-    data = {key: [_clean_value(v) for v in values] for key, values in df.to_dict(orient="list").items()}
+    data = {str(key): [_clean_value(v) for v in values] for key, values in df.to_dict(orient="list").items()}
     return TablePayload(index_name=index_name, index=_normalise_index(df.index), data=data)
 
 
@@ -172,6 +172,10 @@ def _export_pharma(outputs, output_dir: Path) -> None:
         _write_table(output_dir / f"sensitivity_{variable}.csv", df)
 
     _write_table(output_dir / "monte_carlo.csv", outputs.monte_carlo)
+    metrics = outputs.summary_metrics.to_frame().reset_index()
+    metrics.columns = ["Metric", "Value"]
+    metrics.to_csv(output_dir / "valuation.csv", index=False)
+    (output_dir / "valuation.json").write_text(outputs.summary_metrics.to_json(), encoding="utf-8")
 
 
 def _run_biotech_core(inputs: BiotechInputs):
@@ -206,6 +210,8 @@ def _export_biotech(result, output_dir: Path) -> None:
     for name, df in result.per_product_prob.items():
         _write_table(output_dir / f"per_product_prob_{name}.csv", df)
     (output_dir / "rnpv.txt").write_text(str(result.rnpv), encoding="utf-8")
+    (output_dir / "valuation.csv").write_text(f"metric,value\nrnpv,{result.rnpv}", encoding="utf-8")
+    (output_dir / "valuation.json").write_text(json.dumps({"rnpv": result.rnpv}, indent=2), encoding="utf-8")
 
 
 def _run_cassava_core(params: CassavaModelParameters):
@@ -233,16 +239,43 @@ def _build_cassava_response(result) -> CassavaModelRunResponse:
     )
 
 
+def _cassava_report_sections(params: CassavaModelParameters, result) -> list[ReportSection]:
+    financials = result.get("financials")
+    tables: list[ReportTable] = []
+    if financials:
+        tables.extend(
+            [
+                ReportTable("Income Statement (Monthly)", getattr(financials, "income_monthly", None)),
+                ReportTable("Income Statement (Annual)", getattr(financials, "income_annual", None)),
+                ReportTable("Balance Sheet (Monthly)", getattr(financials, "balance_monthly", None)),
+                ReportTable("Balance Sheet (Annual)", getattr(financials, "balance_annual", None)),
+                ReportTable("Cash Flow (Monthly)", getattr(financials, "cashflow_monthly", None)),
+                ReportTable("Cash Flow (Annual)", getattr(financials, "cashflow_annual", None)),
+            ]
+        )
+    break_even = result.get("break_even")
+    payback = result.get("payback")
+    if break_even is not None:
+        tables.append(ReportTable("Break-even", break_even))
+    if payback is not None:
+        tables.append(ReportTable("Payback", payback))
+    metrics = result.get("metrics")
+    if metrics:
+        tables.append(ReportTable("Key Metrics", pd.DataFrame([metrics])))
+    scenario = result.get("scenario", "")
+    return [ReportSection(f"Cassava Bioethanol ({scenario})", tables)]
+
+
 def _export_cassava(result, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     financials = result.get("financials")
     if financials:
-        getattr(financials, "income_monthly", pd.DataFrame()).to_csv(output_dir / "income_monthly.csv")
-        getattr(financials, "income_annual", pd.DataFrame()).to_csv(output_dir / "income_annual.csv")
-        getattr(financials, "balance_monthly", pd.DataFrame()).to_csv(output_dir / "balance_monthly.csv")
-        getattr(financials, "balance_annual", pd.DataFrame()).to_csv(output_dir / "balance_annual.csv")
-        getattr(financials, "cashflow_monthly", pd.DataFrame()).to_csv(output_dir / "cashflow_monthly.csv")
-        getattr(financials, "cashflow_annual", pd.DataFrame()).to_csv(output_dir / "cashflow_annual.csv")
+        getattr(financials, "income_monthly", pd.DataFrame()).to_csv(output_dir / "income_statement_monthly.csv")
+        getattr(financials, "income_annual", pd.DataFrame()).to_csv(output_dir / "income_statement_annual.csv")
+        getattr(financials, "balance_monthly", pd.DataFrame()).to_csv(output_dir / "balance_sheet_monthly.csv")
+        getattr(financials, "balance_annual", pd.DataFrame()).to_csv(output_dir / "balance_sheet_annual.csv")
+        getattr(financials, "cashflow_monthly", pd.DataFrame()).to_csv(output_dir / "cash_flow_monthly.csv")
+        getattr(financials, "cashflow_annual", pd.DataFrame()).to_csv(output_dir / "cash_flow_annual.csv")
     be = result.get("break_even")
     if hasattr(be, "to_csv"):
         be.to_csv(output_dir / "break_even.csv")
@@ -251,6 +284,11 @@ def _export_cassava(result, output_dir: Path) -> None:
         pb.to_csv(output_dir / "payback.csv")
     metrics = result.get("metrics", {})
     (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    if metrics:
+        (output_dir / "metrics.csv").write_text(
+            "metric,value\n" + "\n".join(f"{k},{v}" for k, v in metrics.items()),
+            encoding="utf-8",
+        )
 
 
 def _run_broiler_core(params: BroilerModelParameters):
@@ -294,6 +332,24 @@ def _build_broiler_response(result) -> BroilerModelRunResponse:
     )
 
 
+def _broiler_report_sections(params: BroilerModelParameters, result) -> list[ReportSection]:
+    fs = result.get("financial_statements", {}) or {}
+    tables = [
+        ReportTable("Assumptions Schedule", result.get("assumptions_schedule")),
+        ReportTable("Income Statement", _df_from_rows(fs.get("income_statement", []))),
+        ReportTable("Balance Sheet", _df_from_rows(fs.get("balance_sheet", []))),
+        ReportTable("Cash Flow Statement", _df_from_rows(fs.get("cash_flow_statement", []))),
+        ReportTable("Cashflows", _df_from_rows(result.get("cashflows", []))),
+        ReportTable("Revenue Summary", result.get("revenue_summary")),
+    ]
+    valuation = result.get("valuation")
+    if valuation:
+        tables.append(ReportTable("Valuation", pd.DataFrame([valuation])))
+    advanced = result.get("advanced_analytics", {}) or {}
+    for name, df in advanced.items():
+        tables.append(ReportTable(f"Advanced Analytics – {name}", df))
+    return [ReportSection("Broiler Chicken Summary", tables)]
+
 def _export_broiler(result, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     def _write(name, df):
@@ -309,7 +365,13 @@ def _export_broiler(result, output_dir: Path) -> None:
     _write("revenue_summary", result.get("revenue_summary"))
     for name, df in (result.get("advanced_analytics") or {}).items():
         _write(f"advanced_{name}", df)
-    (output_dir / "valuation.json").write_text(json.dumps(result.get("valuation", {}), indent=2), encoding="utf-8")
+    valuation = result.get("valuation", {})
+    (output_dir / "valuation.json").write_text(json.dumps(valuation, indent=2), encoding="utf-8")
+    if valuation:
+        (output_dir / "valuation.csv").write_text(
+            "metric,value\n" + "\n".join(f"{k},{v}" for k, v in valuation.items()),
+            encoding="utf-8",
+        )
 
 
 @dataclass
@@ -392,6 +454,22 @@ def _build_goat_response(result: GoatRunResult) -> GoatModelRunResponse:
     )
 
 
+def _goat_report_sections(params: GoatModelParameters, result: GoatRunResult) -> list[ReportSection]:
+    tables = [
+        ReportTable("Base Schedule", result.schedule),
+        ReportTable("Scenario (shocked)", result.scenario),
+        ReportTable("Performance", result.performance),
+        ReportTable("Cash Flow", result.cash_flow),
+        ReportTable("Position", result.position),
+        ReportTable("KPIs", result.kpis),
+        ReportTable("Break-even", result.break_even),
+    ]
+    for name, analysis in result.advanced.items():
+        for table_name, df in analysis.get("tables", {}).items():
+            tables.append(ReportTable(f"{name.title()} – {table_name}", df))
+    return [ReportSection("Goat Farming Summary", tables)]
+
+
 def _export_goat(result: GoatRunResult, output_dir: Path) -> None:
     """Write goat outputs to CSV files."""
 
@@ -407,6 +485,14 @@ def _export_goat(result: GoatRunResult, output_dir: Path) -> None:
         for table_name, table in analysis["tables"].items():
             table.to_csv(output_dir / f"{name}_{table_name}.csv")
     (output_dir / "valuation_summary.json").write_text(json.dumps(result.valuation_summary, indent=2), encoding="utf-8")
+    (output_dir / "valuation_summary.csv").write_text(
+        "metric,value\n" + "\n".join(f"{k},{v}" for k, v in result.valuation_summary.items()),
+        encoding="utf-8",
+    )
+    (output_dir / "valuation_summary.csv").write_text(
+        "metric,value\n" + "\n".join(f"{k},{v}" for k, v in result.valuation_summary.items()),
+        encoding="utf-8",
+    )
 
 
 def _run_microbrewery_core(params: MicrobreweryModelParameters) -> MicrobreweryResult:
@@ -436,6 +522,10 @@ def _export_microbrewery(result: MicrobreweryResult, output_dir: Path) -> None:
     for name, df in result.debt_schedules.items():
         _write_table(output_dir / f"debt_{name}.csv", df)
     (output_dir / "valuation.json").write_text(json.dumps(result.valuation, indent=2), encoding="utf-8")
+    (output_dir / "valuation.csv").write_text(
+        "metric,value\n" + "\n".join(f"{k},{v}" for k, v in result.valuation.items()),
+        encoding="utf-8",
+    )
 
 
 MODEL_REGISTRY: Dict[str, ModelSpec] = {
@@ -488,6 +578,9 @@ MODEL_REGISTRY: Dict[str, ModelSpec] = {
         validate_request_model=GoatValidationRequest,
         response_model=GoatModelRunResponse,
         cli_exporter=_export_goat,
+        build_report_sections=lambda _inputs, result: _goat_report_sections(_inputs, result),  # type: ignore[arg-type]
+        report_title="Goat Farming Financial Report",
+        report_name="goat_farming_financial_report",
     ),
     "cassava_ethanol": ModelSpec(
         name="Cassava Bioethanol",
@@ -499,6 +592,9 @@ MODEL_REGISTRY: Dict[str, ModelSpec] = {
         validate_request_model=CassavaValidationRequest,
         response_model=CassavaModelRunResponse,
         cli_exporter=_export_cassava,
+        build_report_sections=lambda _inputs, result: _cassava_report_sections(_inputs, result),  # type: ignore[arg-type]
+        report_title="Cassava Bioethanol Financial Report",
+        report_name="cassava_bioethanol_financial_report",
     ),
     "broiler_chicken": ModelSpec(
         name="Broiler Chicken",
@@ -510,6 +606,9 @@ MODEL_REGISTRY: Dict[str, ModelSpec] = {
         validate_request_model=BroilerValidationRequest,
         response_model=BroilerModelRunResponse,
         cli_exporter=_export_broiler,
+        build_report_sections=lambda _inputs, result: _broiler_report_sections(_inputs, result),  # type: ignore[arg-type]
+        report_title="Broiler Chicken Financial Report",
+        report_name="broiler_chicken_financial_report",
     ),
 }
 
