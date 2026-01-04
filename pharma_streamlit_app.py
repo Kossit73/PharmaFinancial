@@ -1,4 +1,4 @@
-"""Entry point for deploying the financial model on Streamlit Cloud."""
+"""Entry point for deploying the pharmaceuticals model on Streamlit Cloud."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ if SRC.exists() and str(SRC) not in sys.path:  # pragma: no cover - import path 
     sys.path.insert(0, str(SRC))
 
 try:
-    from financial_models.app import main
+    from financial_models.pharma_app import main
 except ModuleNotFoundError as exc:  # pragma: no cover - executed when deps missing
     if exc.name == "streamlit":
         raise SystemExit(
@@ -29,7 +29,7 @@ except ModuleNotFoundError as exc:  # pragma: no cover - executed when deps miss
 def _running_with_streamlit() -> bool:
     """Return ``True`` when executed via ``streamlit run``.
 
-    When the file is executed directly with ``python streamlit_app.py`` the Streamlit
+    When the file is executed directly with ``python pharma_streamlit_app.py`` the Streamlit
     runtime is not initialised which leads to ``st.session_state`` access raising the
     exception reported by the user. Detect that situation early and exit with a clear
     guidance message instead of letting the import stack fail deeper inside the app.
@@ -49,6 +49,6 @@ if __name__ == "__main__":
     else:  # pragma: no cover - executed only when run without ``streamlit run``
         sys.stderr.write(
             "This module is a Streamlit application. Launch it with "
-            "`streamlit run streamlit_app.py` instead of `python streamlit_app.py`.\n"
+            "`streamlit run pharma_streamlit_app.py` instead of `python pharma_streamlit_app.py`.\n"
         )
         sys.stderr.flush()

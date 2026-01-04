@@ -21,7 +21,7 @@ from financial_models.pharma.model import (
 class FinancialModelTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.inputs = load_inputs(Path("src/financial_models/data/default_inputs.json"))
+        cls.inputs = load_inputs(Path("src/financial_models/pharma/data/default_inputs.json"))
         cls.model = FinancialModel(cls.inputs)
         cls.outputs = cls.model.run()
 
@@ -249,7 +249,7 @@ class FinancialModelTest(unittest.TestCase):
 
     def test_custom_projection_years(self):
         payload = json.loads(
-            Path("src/financial_models/data/default_inputs.json").read_text(encoding="utf-8")
+            Path("src/financial_models/pharma/data/default_inputs.json").read_text(encoding="utf-8")
         )
         payload["years"] = [2026, 2027, 2028, 2029]
         parsed = parse_inputs(payload)
@@ -448,7 +448,7 @@ class FinancialModelTest(unittest.TestCase):
         self.assertIn("revenue_growth", self.inputs.monte_carlo.variables)
 
     def test_monte_carlo_handles_multiple_variables(self):
-        payload = json.loads(Path("src/financial_models/data/default_inputs.json").read_text())
+        payload = json.loads(Path("src/financial_models/pharma/data/default_inputs.json").read_text())
         payload["monte_carlo"]["variables"] = [
             "revenue_growth",
             "raw_material_cost",
@@ -483,7 +483,7 @@ class FinancialModelTest(unittest.TestCase):
             self.assertAlmostEqual(actual, expected)
 
     def test_monte_carlo_seed_produces_reproducible_results(self):
-        payload = json.loads(Path("src/financial_models/data/default_inputs.json").read_text())
+        payload = json.loads(Path("src/financial_models/pharma/data/default_inputs.json").read_text())
         payload["monte_carlo"]["seed"] = 42
         inputs = parse_inputs(payload)
         model = FinancialModel(inputs)
@@ -603,7 +603,7 @@ class FinancialModelTest(unittest.TestCase):
             self.assertIn(column, break_even.data)
 
     def test_break_even_overrides_respected(self):
-        default_path = Path("src/financial_models/data/default_inputs.json")
+        default_path = Path("src/financial_models/pharma/data/default_inputs.json")
         raw = json.loads(default_path.read_text(encoding="utf-8"))
         override_row = {
             "product": "Tablets",
@@ -628,7 +628,7 @@ class FinancialModelTest(unittest.TestCase):
         self.assertAlmostEqual(break_even_units, expected_units, places=6)
 
     def test_fixed_variable_cost_overrides(self):
-        default_path = Path("src/financial_models/data/default_inputs.json")
+        default_path = Path("src/financial_models/pharma/data/default_inputs.json")
         raw = json.loads(default_path.read_text(encoding="utf-8"))
         raw["fixed_variable_costs"] = {
             "rows": [
@@ -656,7 +656,7 @@ class FinancialModelTest(unittest.TestCase):
         base_costs = self.outputs.income_statement.column("Cost of Sales")
 
         payload = json.loads(
-            Path("src/financial_models/data/default_inputs.json").read_text(encoding="utf-8")
+            Path("src/financial_models/pharma/data/default_inputs.json").read_text(encoding="utf-8")
         )
         payload.setdefault("fixed_variable_costs", {})["rows"] = [
             {
@@ -673,7 +673,7 @@ class FinancialModelTest(unittest.TestCase):
         self.assertGreater(override_costs[0], base_costs[0])
 
     def test_break_even_fixed_cost_defaults_zero_without_overrides(self):
-        inputs = load_inputs(Path("src/financial_models/data/default_inputs.json"))
+        inputs = load_inputs(Path("src/financial_models/pharma/data/default_inputs.json"))
         model = FinancialModel(inputs)
         break_even = model.break_even_analysis()
         self.assertTrue(break_even.index)

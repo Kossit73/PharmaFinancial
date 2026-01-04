@@ -139,7 +139,10 @@ except Exception:  # pragma: no cover - import guard when package missing
 # Module level caches
 # ---------------------------------------------------------------------------
 
-DEFAULT_INPUT_PATH = Path(__file__).resolve().parent / "data" / "default_inputs.json"
+# Default inputs now live under the pharma package to match model-specific data layout
+DEFAULT_INPUT_PATH = (
+    Path(__file__).resolve().parent / "pharma" / "data" / "default_inputs.json"
+)
 DEFAULT_INPUT_JSON = DEFAULT_INPUT_PATH.read_text(encoding="utf-8")
 DEFAULT_RISK_CATEGORIES = ["inherent", "climate", "political"]
 EXCEL_EXPORT_FILE_NAME = "Ecommerce_Financial_Model.xlsx"
@@ -602,7 +605,7 @@ def main() -> None:
     if not _streamlit_runtime_exists():  # pragma: no cover - requires Streamlit runner
         raise RuntimeError(
             "Streamlit runtime is not initialised. Launch the app with "
-            "`streamlit run streamlit_app.py` to enable interactive inputs."
+            "`streamlit run pharma_streamlit_app.py` to enable interactive inputs."
         )
 
     st.set_page_config(
@@ -8341,7 +8344,7 @@ if __name__ == "__main__":  # pragma: no cover - Streamlit executes the script d
     else:  # pragma: no cover - guidance for incorrect invocation
         raise SystemExit(
             "This module is a Streamlit application. Launch it with "
-            "`streamlit run streamlit_app.py` instead of executing it directly."
+            "`streamlit run pharma_streamlit_app.py` instead of executing it directly."
         )
 @_cache_data(show_spinner=False)
 def _default_payload() -> dict[str, object]:

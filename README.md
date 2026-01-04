@@ -62,7 +62,7 @@ This project provides Python implementations of the Pharmaceuticals, Biotech, Mi
 4. **Launch the Streamlit dashboard (optional if using the API/Angular frontend)**
 
    ```bash
-   streamlit run streamlit_app.py
+   streamlit run pharma_streamlit_app.py
    ```
 
    The Streamlit application includes dedicated tabs for:
@@ -115,7 +115,7 @@ The implementation now lives under `financial_models.services.webhook`, but the 
 
 ## Customising Assumptions
 
-All pharma modelling assumptions are defined in [`src/financial_models/data/default_inputs.json`](src/financial_models/data/default_inputs.json) (mirrored under `financial_models/pharma/data/`). Duplicate this file and pass the new path to the CLI using `--inputs` to evaluate alternative cases. The structure mirrors the specification shared in the project brief, covering production volumes, cost inflation, labour structures, financing, and working capital. Biotech defaults live under [`src/financial_models/biotech/data/default_inputs.json`](src/financial_models/biotech/data/default_inputs.json).
+All pharma modelling assumptions are defined in [`src/financial_models/pharma/data/default_inputs.json`](src/financial_models/pharma/data/default_inputs.json). Duplicate this file and pass the new path to the CLI using `--inputs` to evaluate alternative cases. The structure mirrors the specification shared in the project brief, covering production volumes, cost inflation, labour structures, financing, and working capital. Biotech defaults live under [`src/financial_models/biotech/data/default_inputs.json`](src/financial_models/biotech/data/default_inputs.json).
 
 Microbrewery assumptions are bundled at [`src/financial_models/microbrewery/data/default_inputs.json`](src/financial_models/microbrewery/data/default_inputs.json). They capture SKU/channel pricing, CAPEX, multi-facility debt schedules, equity injections, and dividend policy parameters. Use `--model microbrewery --inputs <path>` with the CLI or the `/model/microbrewery/run` API route to evaluate alternate scenarios.
 
@@ -172,7 +172,7 @@ When no API key is provided, the dashboard falls back to deterministic heuristic
 ```bash
 pip install openai
 export OPENAI_API_KEY="sk-your-key"
-streamlit run streamlit_app.py
+streamlit run pharma_streamlit_app.py
 ```
 
 ## Project Structure
@@ -231,7 +231,7 @@ The printed dictionary lists NPV, IRR, and payback metrics derived from the defa
 You can revise electricity, water, and steam assumptions directly from the **Utility Schedule**
 editor on the Input Landing Page:
 
-1. **Open Streamlit** using `streamlit run streamlit_app.py` and navigate to the Input Landing
+1. **Open Streamlit** using `streamlit run pharma_streamlit_app.py` and navigate to the Input Landing
    Page.
 2. Locate the **Utility Schedule** section. Each row represents a projection year with columns
    for the per-day (or per-hour) quantities and the applicable unit prices.

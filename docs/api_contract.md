@@ -45,8 +45,9 @@ All endpoints accept and return JSON.
   - `src/financial_models/goat_farming/data/default_inputs.json`
   - `src/financial_models/cassava_ethanol/data/default_inputs.json`
   - `src/financial_models/broiler_chicken/data/default_inputs.json`
+- Schema: `financial_models.api.schemas.pharma.PharmaInputsPayload` (validated by `/inputs/pharma/validate`)
 - Request body (`ModelRunRequest`):
-  - `inputs`: full modelling payload (object). When omitted, server uses bundled defaults (`src/financial_models/data/default_inputs.json`).
+  - `inputs`: full modelling payload (object). When omitted, the model uses its bundled defaults.
 - 200 response (`ModelRunResponse`): financial outputs as tables
   - `summary_metrics`, `income_statement`, `balance_sheet`, `cash_flow`, `goal_seek`, `break_even`, `payback`, `discounted_payback`, `monte_carlo`: `TablePayload`
   - `scenario_results`: object of scenario name → `TablePayload`
