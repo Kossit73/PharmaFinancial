@@ -11,6 +11,7 @@ from functools import lru_cache
 from typing import Any, Dict, Mapping, MutableMapping, Sequence
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.openapi.utils import get_openapi
 from jose import JWTError, jwt
@@ -156,6 +157,7 @@ GOOGLE_VALID_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 JWT_SECRET_ENV = "FINANCIAL_MODELS_AUTH_SECRET"
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_SECONDS = 3600
+CORS_ALLOWED_ORIGINS_ENV = "FINANCIAL_MODELS_CORS_ORIGINS"
 SUBSCRIPTION_ACTIVE_TTL_SECONDS = float(os.getenv("SUBSCRIPTION_ACTIVE_TTL_SECONDS", 10 * 60))
 SUBSCRIPTION_INACTIVE_TTL_SECONDS = float(os.getenv("SUBSCRIPTION_INACTIVE_TTL_SECONDS", 2 * 60))
 
@@ -192,6 +194,16 @@ def _google_audiences() -> list[str]:
 def _jwt_secret() -> str | None:
     secret = os.getenv(JWT_SECRET_ENV, "").strip()
     return secret or None
+
+
+def _allowed_origins() -> list[str]:
+    raw = os.getenv(CORS_ALLOWED_ORIGINS_ENV, "")
+    origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    if not origins:
+        return ["http://localhost:4200"]
+    if "*" in origins:
+        return ["*"]
+    return origins
 
 
 def _issue_jwt(user: UserRecord) -> str:
@@ -337,6 +349,16 @@ def create_app() -> FastAPI:
         title="Pharmaceuticals Financial Model API",
         version="1.0.0",
         description="HTTP interface for running the Pharmaceuticals financial engine.",
+    )
+
+    origins = _allowed_origins()
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"]
     )
 
     @app.get("/health")
