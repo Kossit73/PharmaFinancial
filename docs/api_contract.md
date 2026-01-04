@@ -46,9 +46,26 @@ All endpoints accept and return JSON.
   - `src/financial_models/cassava_ethanol/data/default_inputs.json`
   - `src/financial_models/broiler_chicken/data/default_inputs.json`
 - Schema: `financial_models.api.schemas.pharma.PharmaInputsPayload` (validated by `/inputs/pharma/validate`)
+  - Required sections: `years` (array), `production_estimate` (product → yearly units), `unit_costs`, `markup`, `raw_material_cost`, `utility_costs`, `labor`, `depreciation`, `capital_expenditure`, `financing`, `working_capital`, `tax`, `risk`, `scenarios`, `sensitivity`, `monte_carlo`.
+  - Optional: `total_production_units`, `production_capacity`, `inflation_rate`/`inflation_series`, `fixed_variable_costs`, `break_even`, `distributor_commission`, `scenario_tools`, `goal_seek`, `ai`.
+  - Field hints:
+    - `unit_costs`: product → `{ production, price, freight }`
+    - `utility_costs`: per-year rows with electricity/water/steam usage, rates, and days/hours (or scalar defaults)
+    - `labor`: `{ direct: { role: cost }, indirect: { role: cost } }`
+    - `depreciation.rows`: asset rows with `asset_type`, `year`, `acquisition`, `depreciation_rate`, optional `asset_life`, `method`
+    - `capital_expenditure`: `{ initial, contingency, project_reserve, annual_additions }`
+    - `financing`: `{ initial_investment, discount_rate, senior_debt_interest, revolver_interest, cash_interest, dividend_payout, share_capital, senior_debt[], revolver[], overdraft[] }`
+    - `working_capital`: `{ days: { accounts_receivable, inventory, prepaid_expenses, other_assets, accounts_payable, other_liabilities }, calendar_days }`
+    - `tax`: `{ rate, timing_adjustment, schedule[]? }`
+    - `risk`: named risk series aligned to `years`
+    - `scenarios`: `{ name: { inflation: [], interest: [] } }`
+    - `sensitivity`: `{ variables: { name: [floats] } }`
+    - `monte_carlo`: `{ iterations, revenue_growth_range, variables, metrics, seed?, distribution? }`
+    - `goal_seek`: `{ metric, target, source, year? }`
+    - `ai`: `{ enabled, provider, model, forecast_horizon, ml_methods, generative_features, api_key? }`
 - Request body (`ModelRunRequest`):
   - `inputs`: full modelling payload (object). When omitted, the model uses its bundled defaults.
-- 200 response (`ModelRunResponse`): financial outputs as tables
+- 200 response (`ModelRunResponse` from `financial_models.api.schemas.common`): financial outputs as tables
   - `summary_metrics`, `income_statement`, `balance_sheet`, `cash_flow`, `goal_seek`, `break_even`, `payback`, `discounted_payback`, `monte_carlo`: `TablePayload`
   - `scenario_results`: object of scenario name → `TablePayload`
   - `sensitivity_results`: object of sensitivity name → `TablePayload`
@@ -215,6 +232,11 @@ Content-Type: application/json
 - Auth: required unless auth is disabled
 - Request (`BiotechModelRunRequest`):
   - `inputs`: object with `model_config` and `products` list. When omitted, server uses defaults (`src/financial_models/biotech/data/default_inputs.json`).
+- Schema: `financial_models.api.schemas.biotech.BiotechInputsPayload` (validated by `/inputs/biotech/validate`)
+  - `model_config` (aliased as `config`): `{ first_year, n_years, discount_rate, country?, currency?, language?, inflation_rate?, tax_rate?, sales_tax_rate?, working_capital_days?, simulation_years?, simulation_runs? }`
+  - `products`: array of drug candidates, each with common fields like `{ name, phase, success_prob, market_size, price_per_unit, units_sold, cost_per_unit, launch_year, peak_sales_year, peak_penetration, patent_life, tax_rate?, sales_tax_rate?, wacc?, rnpv? }`
+  - Nested/optional product fields: `costs` (R&D/SG&A), `timeline` milestones, `geographies`, `scenarios`, `probability_adjustments`, `price_erosion`, `post_patent_sales`, `manufacturing_costs`, `capital_costs`, `funding_rounds`, `royalties`, `milestone_payments`, `orphan_drug_exclusivity`, `risk_adjustments`.
+  - Validation highlights: at least one product is required; `success_prob` must be between 0 and 1; `n_years` must be positive; product names must be non-empty.
 - 200 response (`BiotechModelRunResponse`):
   - `rnpv`: number
   - `consolidated`: `TablePayload`
