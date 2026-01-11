@@ -1,0 +1,53 @@
+name: financial-models-api
+services:
+  - name: api
+    dockerfile_path: Dockerfile
+    http_port: 8000
+    instance_size_slug: basic-xxs
+    instance_count: 1
+    envs:
+      - key: FINANCIAL_MODELS_USER_DB_URL
+        scope: RUN_AND_BUILD_TIME
+        value: ${FINANCIAL_MODELS_USER_DB_URL}
+      - key: SUBSCRIPTION_STORE_URL
+        scope: RUN_AND_BUILD_TIME
+        value: ${SUBSCRIPTION_STORE_URL}
+      - key: SUBSCRIPTION_CACHE_URL
+        scope: RUN_AND_BUILD_TIME
+        value: ${SUBSCRIPTION_CACHE_URL}
+      - key: FINANCIAL_MODELS_API_TOKEN
+        scope: RUN_AND_BUILD_TIME
+        value: ${FINANCIAL_MODELS_API_TOKEN}
+      - key: FINANCIAL_MODELS_GOOGLE_AUDIENCE
+        scope: RUN_AND_BUILD_TIME
+        value: ${FINANCIAL_MODELS_GOOGLE_AUDIENCE}
+      - key: FINANCIAL_MODELS_AUTH_SECRET
+        scope: RUN_AND_BUILD_TIME
+        value: ${FINANCIAL_MODELS_AUTH_SECRET}
+      - key: FINANCIAL_MODELS_CORS_ORIGINS
+        scope: RUN_AND_BUILD_TIME
+        value: ${FINANCIAL_MODELS_CORS_ORIGINS}
+      - key: PAYSTACK_SECRET_KEY
+        scope: RUN_AND_BUILD_TIME
+        value: ${PAYSTACK_SECRET_KEY}
+      - key: PAYSTACK_PLAN_CODE
+        scope: RUN_AND_BUILD_TIME
+        value: ${PAYSTACK_PLAN_CODE}
+      - key: PAYSTACK_PLAN_AMOUNT_KOBO
+        scope: RUN_AND_BUILD_TIME
+        value: ${PAYSTACK_PLAN_AMOUNT_KOBO}
+      - key: PAYSTACK_CALLBACK_URL
+        scope: RUN_AND_BUILD_TIME
+        value: ${PAYSTACK_CALLBACK_URL}
+      - key: PAYSTACK_CANCEL_ACTION_URL
+        scope: RUN_AND_BUILD_TIME
+        value: ${PAYSTACK_CANCEL_ACTION_URL}
+      - key: PAYSTACK_FETCH_PLAN_AMOUNT
+        scope: RUN_AND_BUILD_TIME
+        value: ${PAYSTACK_FETCH_PLAN_AMOUNT}
+      - key: SUBSCRIPTION_ACTIVE_TTL_SECONDS
+        scope: RUN_AND_BUILD_TIME
+        value: ${SUBSCRIPTION_ACTIVE_TTL_SECONDS}
+      - key: SUBSCRIPTION_INACTIVE_TTL_SECONDS
+        scope: RUN_AND_BUILD_TIME
+        value: ${SUBSCRIPTION_INACTIVE_TTL_SECONDS}

@@ -1,0 +1,9 @@
+name: financial-models-frontend
+static_sites:
+  - name: frontend
+    build_command: npm run build
+    output_dir: dist
+    envs:
+      - key: FINANCIAL_MODELS_API_URL
+        scope: BUILD_TIME
+        value: ${FINANCIAL_MODELS_API_URL}
