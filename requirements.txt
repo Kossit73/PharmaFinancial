@@ -18,3 +18,5 @@ python-jose
 python-multipart
 bcrypt==4.0.1
 email-validator
+psycopg2-binary
+redis

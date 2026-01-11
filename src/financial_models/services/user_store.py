@@ -1,4 +1,4 @@
-"""SQLite-backed user registry for authentication."""
+"""User registry for authentication backed by SQLite or Postgres."""
 from __future__ import annotations
 
 import logging
@@ -17,9 +17,17 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_USER_DB_PATH = Path(
     os.getenv("FINANCIAL_MODELS_USER_DB") or Path.home() / ".financial_models" / "users.db"
 )
+DEFAULT_USER_DB_URL = (os.getenv("FINANCIAL_MODELS_USER_DB_URL") or "").strip() or None
 
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+try:  # pragma: no cover - optional dependency
+    import psycopg2
+    from psycopg2 import extras as psycopg2_extras
+except Exception:  # pragma: no cover - allow importing without psycopg2 installed
+    psycopg2 = None  # type: ignore
+    psycopg2_extras = None  # type: ignore
 
 
 @dataclass
@@ -189,15 +197,185 @@ class UserStore:
             )
 
 
-_GLOBAL_STORE: UserStore | None = None
+class PostgresUserStore:
+    """Thread-safe Postgres-backed user store."""
+
+    def __init__(self, db_url: str) -> None:
+        if psycopg2 is None:
+            raise RuntimeError("psycopg2 is required when FINANCIAL_MODELS_USER_DB_URL is set.")
+        self.db_url = db_url
+        self._lock = threading.Lock()
+        self._conn = psycopg2.connect(self.db_url)
+        self._conn.autocommit = True
+        self._ensure_schema()
+
+    def create_user(self, email: str, password: str, name: str | None = None, provider: str = "local") -> UserRecord:
+        normalized = (email or "").strip().lower()
+        if not normalized:
+            raise ValueError("Email is required.")
+        if provider == "local" and not password:
+            raise ValueError("Password is required for local users.")
+        hashed = pwd_context.hash(password) if provider == "local" else ""
+        created_at = time.time()
+        with self._lock, self._conn:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO users (email, password_hash, name, provider, created_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (normalized, hashed, name, provider, created_at),
+                )
+                user_id = cur.fetchone()[0]
+        return UserRecord(id=int(user_id), email=normalized, name=name, provider=provider, created_at=created_at)
+
+    def get_user(self, email: str) -> Optional[UserRecord]:
+        normalized = (email or "").strip().lower()
+        if not normalized:
+            return None
+        with self._lock:
+            with self._conn.cursor(cursor_factory=psycopg2_extras.DictCursor) as cur:
+                cur.execute(
+                    "SELECT id, email, password_hash, name, provider, created_at FROM users WHERE email = %s",
+                    (normalized,),
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        return UserRecord(
+            id=int(row["id"]),
+            email=row["email"],
+            name=row["name"],
+            provider=row["provider"],
+            created_at=float(row["created_at"]),
+        )
+
+    def verify_user(self, email: str, password: str) -> Optional[UserRecord]:
+        normalized = (email or "").strip().lower()
+        if not normalized:
+            return None
+        with self._lock:
+            with self._conn.cursor(cursor_factory=psycopg2_extras.DictCursor) as cur:
+                cur.execute(
+                    "SELECT id, email, password_hash, name, provider, created_at FROM users WHERE email = %s",
+                    (normalized,),
+                )
+                row = cur.fetchone()
+        if not row or not row["password_hash"]:
+            return None
+        if not pwd_context.verify(password, row["password_hash"]):
+            return None
+        return UserRecord(
+            id=int(row["id"]),
+            email=row["email"],
+            name=row["name"],
+            provider=row["provider"],
+            created_at=float(row["created_at"]),
+        )
+
+    def ensure_user(self, email: str, name: str | None, provider: str) -> UserRecord:
+        """Find or create a user for social login."""
+
+        normalized = (email or "").strip().lower()
+        if not normalized:
+            raise ValueError("Email is required.")
+        existing = self.get_user(normalized)
+        if existing:
+            return existing
+        return self.create_user(email=normalized, password="social-login", name=name, provider=provider)
+
+    def update_user(self, email: str, *, name: str | None = None, password: str | None = None) -> UserRecord:
+        """Update a user's display name and/or password."""
+
+        normalized = (email or "").strip().lower()
+        if not normalized:
+            raise ValueError("Email is required.")
+        hashed = None
+        if password:
+            hashed = pwd_context.hash(password)
+        with self._lock, self._conn:
+            with self._conn.cursor(cursor_factory=psycopg2_extras.DictCursor) as cur:
+                if hashed is not None:
+                    cur.execute(
+                        "UPDATE users SET name = COALESCE(%s, name), password_hash = %s WHERE email = %s",
+                        (name, hashed, normalized),
+                    )
+                else:
+                    cur.execute(
+                        "UPDATE users SET name = COALESCE(%s, name) WHERE email = %s",
+                        (name, normalized),
+                    )
+                cur.execute(
+                    "SELECT id, email, password_hash, name, provider, created_at FROM users WHERE email = %s",
+                    (normalized,),
+                )
+                row = cur.fetchone()
+        if not row:
+            raise ValueError("User not found.")
+        return UserRecord(
+            id=int(row["id"]),
+            email=row["email"],
+            name=row["name"],
+            provider=row["provider"],
+            created_at=float(row["created_at"]),
+        )
+
+    def delete_user(self, email: str) -> None:
+        normalized = (email or "").strip().lower()
+        if not normalized:
+            return
+        with self._lock, self._conn:
+            with self._conn.cursor() as cur:
+                cur.execute("DELETE FROM users WHERE email = %s", (normalized,))
+
+    def list_users(self) -> list[UserRecord]:
+        with self._lock:
+            with self._conn.cursor(cursor_factory=psycopg2_extras.DictCursor) as cur:
+                cur.execute("SELECT id, email, name, provider, created_at FROM users ORDER BY created_at ASC")
+                rows = cur.fetchall()
+        records: list[UserRecord] = []
+        for row in rows:
+            records.append(
+                UserRecord(
+                    id=int(row["id"]),
+                    email=row["email"],
+                    name=row["name"],
+                    provider=row["provider"],
+                    created_at=float(row["created_at"]),
+                )
+            )
+        return records
+
+    def _ensure_schema(self) -> None:
+        with self._lock, self._conn:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS users (
+                        id SERIAL PRIMARY KEY,
+                        email TEXT UNIQUE NOT NULL,
+                        password_hash TEXT,
+                        name TEXT,
+                        provider TEXT NOT NULL,
+                        created_at DOUBLE PRECISION NOT NULL
+                    )
+                    """
+                )
+
+
+_GLOBAL_STORE: UserStore | PostgresUserStore | None = None
 _GLOBAL_LOCK = threading.Lock()
 
 
-def get_user_store(db_path: str | Path | None = None) -> UserStore:
+def get_user_store(db_path: str | Path | None = None) -> UserStore | PostgresUserStore:
     global _GLOBAL_STORE
     if db_path:
         return UserStore(db_path)
     with _GLOBAL_LOCK:
         if _GLOBAL_STORE is None:
-            _GLOBAL_STORE = UserStore()
+            if DEFAULT_USER_DB_URL:
+                _GLOBAL_STORE = PostgresUserStore(DEFAULT_USER_DB_URL)
+            else:
+                _GLOBAL_STORE = UserStore()
         return _GLOBAL_STORE
