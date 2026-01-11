@@ -1,0 +1,46 @@
+version: "3.9"
+
+services:
+  api:
+    image: financial-models-api:latest
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      FINANCIAL_MODELS_USER_DB_URL: postgresql://financial_models:financial_models@db:5432/financial_models
+      SUBSCRIPTION_STORE_URL: postgresql://financial_models:financial_models@db:5432/financial_models
+      SUBSCRIPTION_CACHE_URL: redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+      update_config:
+        order: start-first
+        parallelism: 1
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: financial_models
+      POSTGRES_PASSWORD: financial_models
+      POSTGRES_DB: financial_models
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+
+  redis:
+    image: redis:7-alpine
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+
+volumes:
+  db_data:

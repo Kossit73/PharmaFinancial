@@ -11,6 +11,21 @@ This setup runs the API alongside Postgres (users + subscriptions) and Redis (su
    ```
 3) The API will be available at `http://localhost:8000`.
 
+## Production (Docker Swarm)
+
+1) Build and tag the image on your registry host:
+   ```bash
+   docker build -t financial-models-api:latest .
+   ```
+2) Initialize Swarm (once):
+   ```bash
+   docker swarm init
+   ```
+3) Deploy the stack:
+   ```bash
+   docker stack deploy -c docker-stack.yml financial-models
+   ```
+
 ## Environment variables
 
 The compose file sets:
