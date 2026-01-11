@@ -17,11 +17,13 @@ class SubscriptionGateway:
     """Wraps subscription persistence behind the HTTP API when configured."""
 
     def __init__(self, base_url: str | None = None, timeout: float = 30.0) -> None:
-        self.base_url = (base_url or os.getenv("PHARMA_FINANCIAL_API_URL") or "").strip()
+        self.base_url = (base_url or os.getenv("FINANCIAL_MODELS_API_URL") or "").strip()
         self.timeout = timeout
         if self.use_api:
             if requests is None:
-                raise RuntimeError("The 'requests' package is required when PHARMA_FINANCIAL_API_URL is set.")
+                raise RuntimeError(
+                    "The 'requests' package is required when FINANCIAL_MODELS_API_URL is set."
+                )
             self.session = requests.Session()
         else:
             self.session = None

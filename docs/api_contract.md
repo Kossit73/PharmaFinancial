@@ -192,10 +192,11 @@ Content-Type: application/json
 ```
 
 ### `POST /report/{model}/generate`
-- Auth: required unless auth is disabled
+- Auth: required (must include an auth-bound email via JWT/Google; API token auth is rejected)
 - Available for models that define report builders (pharma, biotech, microbrewery, goat_farming, cassava_ethanol, broiler_chicken).
 - Request: same as the corresponding `/model/{model}/run` body with an added `format` field (`PDF`, `Word`, `Excel`, `CSV`, `JSON`).
 - Response: binary report with `Content-Disposition` set to the suggested filename.
+- Subscription: requires an active subscription for the authenticated user's email (403 when inactive).
 
 ### `POST /model/goat_farming/run`
 - Auth: required unless auth is disabled

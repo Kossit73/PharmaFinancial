@@ -62,7 +62,7 @@ class ModelGateway:
     """Encapsulates the logic for running the financial model."""
 
     def __init__(self, base_url: str | None = None, timeout: float = 60.0) -> None:
-        self.base_url = (base_url or os.getenv("PHARMA_FINANCIAL_API_URL") or "").strip()
+        self.base_url = (base_url or os.getenv("FINANCIAL_MODELS_API_URL") or "").strip()
         self.timeout = timeout
         if self.use_api:
             if requests is None:

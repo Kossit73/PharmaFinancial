@@ -71,6 +71,35 @@ def _resolve_subscription_email(request_email: str | None, context: AuthContext 
     return caller_email
 
 
+def _require_subscription_email(context: AuthContext | None) -> str:
+    if context is None:
+        raise HTTPException(status_code=401, detail="Authentication required for report downloads.")
+    if context.method == "api_token":
+        raise HTTPException(status_code=403, detail="Subscription-bound email required.")
+    email = (context.email or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Authenticated user email missing.")
+    _ensure_user_exists(email)
+    return email
+
+
+def _require_active_subscription(email: str, client: PaystackClient) -> None:
+    cached = _cached_subscription_status(email)
+    if cached:
+        status, _ = cached
+    else:
+        try:
+            status = client.has_active_subscription(email)
+        except PaystackError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if not isinstance(status, SubscriptionStatus):
+            raise HTTPException(status_code=500, detail="Unexpected Paystack response.")
+        _persist_subscription_status(status, source="api:report")
+    if not status.is_active:
+        detail = status.message or "Active subscription required to download reports."
+        raise HTTPException(status_code=403, detail=detail)
+
+
 def _ensure_user_exists(email: str | None) -> None:
     if not email:
         return
@@ -508,8 +537,12 @@ def create_app() -> FastAPI:
                 format: str  # type: ignore[assignment]
 
             def generate_report_versioned(
-                request: ReportRequest, _: AuthContext | None = Depends(require_authorization)
+                request: ReportRequest,
+                context: AuthContext | None = Depends(require_authorization),
+                client: PaystackClient = Depends(get_paystack_client),
             ):
+                email = _require_subscription_email(context)
+                _require_active_subscription(email, client)
                 fmt = (request.format or "").strip().upper()
                 if fmt not in REPORT_FORMATS:
                     raise HTTPException(status_code=400, detail=f"Unsupported report format '{request.format}'.")
