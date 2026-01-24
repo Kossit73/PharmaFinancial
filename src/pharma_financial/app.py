@@ -1016,10 +1016,6 @@ def _render_inputs_tab(
 ) -> None:
     payload = st.session_state["input_payload"]
 
-    st.markdown("### AI & Machine Learning Configuration")
-    _render_ai_settings(payload)
-    _ai_settings_to_payload(st.session_state.get("ai_settings", {}), payload)
-
     st.markdown("### Projection Horizon")
     _render_projection_horizon(payload)
 
@@ -2545,6 +2541,12 @@ def _render_rag_tab(model: FinancialModel, outputs: FinancialOutputs) -> None:
         accept_multiple_files=True,
         key="rag_uploads",
     )
+
+    payload = st.session_state.get("input_payload")
+    if isinstance(payload, dict):
+        st.markdown("### AI & Machine Learning Configuration")
+        _render_ai_settings(payload)
+        _ai_settings_to_payload(st.session_state.get("ai_settings", {}), payload)
 
     documents = st.session_state.get("rag_documents", [])
     if st.button("Index Documents", key="rag_index"):
