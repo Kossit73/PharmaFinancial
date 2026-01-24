@@ -2295,10 +2295,10 @@ def _sanitize_dataframe(frame: "pd.DataFrame") -> "pd.DataFrame":
     elif cleaned.index.dtype == "object":
         cleaned.index = cleaned.index.map(_clean_streamlit_cell)
     elif pd.api.types.is_string_dtype(cleaned.index):
-        cleaned.index = cleaned.index.astype(str)
+        cleaned.index = cleaned.index.astype(object).map(_clean_streamlit_cell)
     for column in cleaned.columns:
         if pd.api.types.is_string_dtype(cleaned[column]):
-            cleaned[column] = cleaned[column].astype(str)
+            cleaned[column] = cleaned[column].astype(object).map(_clean_streamlit_cell)
         elif cleaned[column].dtype == "object":
             cleaned[column] = cleaned[column].map(_clean_streamlit_cell)
     return cleaned
