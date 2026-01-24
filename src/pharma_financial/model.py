@@ -98,6 +98,7 @@ class FinancialModel:
         self.products = inputs.products
         self._inflation = self._build_inflation_factors(inputs.inflation_series)
         self._risk_factors_cache: List[float] | None = None
+        self._risk_cost_factors_cache: List[float] | None = None
         self._depreciation_cache: "tuple[list[dict], dict[int, float], dict[int, float]] | None" = None
         self._senior_interest_cache: List[float] | None = None
         self._senior_outstanding_cache: List[float] | None = None
@@ -107,6 +108,7 @@ class FinancialModel:
         self._overdraft_outstanding_cache: List[float] | None = None
         self._commission_cache: dict[int, dict[str, tuple[float, float, int]]] | None = None
         self._distributor_receivable_cache: List[float] | None = None
+        self._distributor_share_cache: List[float] | None = None
         self._revenue_schedule_cache: Table | None = None
         self._cost_structure_cache: Table | None = None
         self._income_statement_cache: Table | None = None
@@ -136,8 +138,10 @@ class FinancialModel:
         self._summary_metrics_cache = None
         self._irr_result = None
         self._risk_factors_cache = None
+        self._risk_cost_factors_cache = None
         self._risk_factor_diagnostics_cache = None
         self._distributor_receivable_cache = None
+        self._distributor_share_cache = None
 
     def _production(self) -> Dict[str, List[float]]:
         return {name: [float(v) for v in values] for name, values in self.inputs.production_estimate.items()}
@@ -147,6 +151,17 @@ class FinancialModel:
 
     def _unit_costs(self) -> Dict[str, float]:
         return {name: params.production_cost for name, params in self.inputs.unit_costs.items()}
+
+    def _price_adjustments(self) -> Dict[str, List[float]]:
+        adjustments: Dict[str, List[float]] = {}
+        for product in self.products:
+            series = list(self.inputs.price_adjustments.get(product, []))
+            if not series:
+                series = [1.0 for _ in self.years]
+            elif len(series) < len(self.years):
+                series = series + [series[-1] for _ in range(len(self.years) - len(series))]
+            adjustments[product] = [float(value) for value in series[: len(self.years)]]
+        return adjustments
 
     def _commission_parameters(self) -> dict[int, dict[str, tuple[float, float, int]]]:
         if self._commission_cache is not None:
@@ -198,6 +213,7 @@ class FinancialModel:
             return self._revenue_schedule_cache
 
         prices = self._unit_prices()
+        price_adjustments = self._price_adjustments()
         production = self._production()
         commission_params = self._commission_parameters()
         risk_factors = self._risk_factors()
@@ -206,6 +222,7 @@ class FinancialModel:
         commission: List[float] = []
         net_revenue: List[float] = []
         distributor_receivable_weighted: List[float] = [0.0 for _ in self.years]
+        distributor_share_by_year: List[float] = []
 
         columns: MutableMapping[str, List[float]] = {product: [] for product in self.products}
 
@@ -220,6 +237,7 @@ class FinancialModel:
             except IndexError:  # pragma: no cover - defensive guard
                 inflation_factor = self._inflation[-1] if self._inflation else 1.0
             year_rates = commission_params.get(int(year), {})
+            distributor_gross = 0.0
             for product in self.products:
                 product_units = 0.0
                 if product in production:
@@ -229,7 +247,8 @@ class FinancialModel:
                     elif values:
                         product_units = values[-1]
                 price = float(prices.get(product, 0.0))
-                gross_value = product_units * price * inflation_factor * risk
+                price_factor = price_adjustments.get(product, [1.0 for _ in self.years])[idx]
+                gross_value = product_units * price * price_factor * inflation_factor * risk
                 columns[product].append(gross_value)
                 gross_year += gross_value
                 rate, share, payment_days = year_rates.get(product, (0.0, 1.0, 0))
@@ -239,11 +258,17 @@ class FinancialModel:
                 distributor_portion = gross_value * effective_share - commission_amount
                 distributor_receivable_weighted[idx] += distributor_portion * max(payment_days, 0)
                 commission_year += commission_amount
+                distributor_gross += gross_value * effective_share
             gross_totals.append(gross_year)
             commission.append(commission_year)
             net_revenue.append(gross_year - commission_year)
+            if gross_year:
+                distributor_share_by_year.append(distributor_gross / gross_year)
+            else:
+                distributor_share_by_year.append(0.0)
 
         self._distributor_receivable_cache = distributor_receivable_weighted
+        self._distributor_share_cache = distributor_share_by_year
 
         columns["Gross Revenue"] = gross_totals
         columns["Distributors Commission"] = commission
@@ -259,7 +284,7 @@ class FinancialModel:
         production = self._production()
         total_units = [sum(production[product][idx] for product in self.products) for idx in range(len(self.years))]
 
-        risk_factors = self._risk_factors()
+        risk_factors = self._risk_cost_factors()
 
         def _risk_for_index(index: int) -> float:
             if risk_factors:
@@ -322,7 +347,8 @@ class FinancialModel:
             for idx in range(len(self.years))
         ]
 
-        utility_cost_of_sales = [value * 0.8 for value in utilities]
+        utility_cost_share = self.inputs.utility_cost_of_sales_share
+        utility_cost_of_sales = [value * utility_cost_share for value in utilities]
         utility_general_admin = [value - cos_share for value, cos_share in zip(utilities, utility_cost_of_sales)]
 
         cost_of_sales = [
@@ -480,12 +506,23 @@ class FinancialModel:
         ebt = [e - i for e, i in zip(ebit, interest)]
         taxes: List[float] = []
         net_income: List[float] = []
+        nol_balance = 0.0
+        apply_nol = bool(self.inputs.tax_loss_carryforward)
+        nol_limit = float(self.inputs.tax_loss_limit)
         for idx, (value, rate) in enumerate(zip(ebt, self._tax_schedule())):
             if value <= 0:
                 tax = 0.0
                 base_net = value
+                if apply_nol:
+                    nol_balance += abs(value)
             else:
-                tax = value * rate
+                taxable_income = value
+                if apply_nol and nol_balance > 0:
+                    max_offset = value * nol_limit
+                    offset = min(nol_balance, max_offset)
+                    taxable_income = max(value - offset, 0.0)
+                    nol_balance -= offset
+                tax = taxable_income * rate
                 base_net = value - tax
 
             taxes.append(tax)
@@ -605,16 +642,34 @@ class FinancialModel:
     def _risk_factors(self) -> List[float]:
         if self._risk_factors_cache is not None:
             return self._risk_factors_cache
+        self._risk_factor_schedules()
+        return self._risk_factors_cache or [1.0 for _ in self.years]
+
+    def _risk_cost_factors(self) -> List[float]:
+        if self._risk_cost_factors_cache is not None:
+            return self._risk_cost_factors_cache
+        self._risk_factor_schedules()
+        return self._risk_cost_factors_cache or [1.0 for _ in self.years]
+
+    def _risk_factor_schedules(self) -> None:
+        if self._risk_factors_cache is not None and self._risk_cost_factors_cache is not None:
+            return
+
         schedule = getattr(self.inputs, "risk_schedule", {})
-        factor_columns: Dict[str, List[float]] = {}
-        combined: List[float] = []
+        weights = getattr(self.inputs, "risk_weights", {}) or {}
+
+        revenue_factors: List[float] = []
+        cost_factors: List[float] = []
+        diagnostics_columns: Dict[str, List[float]] = {}
 
         if schedule:
             for name in schedule.keys():
-                factor_columns[f"{name} Factor"] = []
+                diagnostics_columns[f"{name} Revenue Factor"] = []
+                diagnostics_columns[f"{name} Cost Factor"] = []
 
         for idx in range(len(self.years)):
-            combined_factor = 1.0
+            revenue_factor = 1.0
+            cost_factor = 1.0
             for name, values in schedule.items():
                 if not values:
                     continue
@@ -624,29 +679,40 @@ class FinancialModel:
                     raise ValueError(
                         f"Risk schedule '{name}' has value {rate} outside the [0, 1] range"
                     )
-                factor = max(0.0, 1.0 - float(rate))
-                factor_columns.setdefault(f"{name} Factor", []).append(factor)
-                combined_factor *= factor
-            combined.append(combined_factor)
+                weight = weights.get(name, {})
+                revenue_weight = float(weight.get("revenue", 1.0)) if weight else 1.0
+                cost_weight = float(weight.get("costs", 1.0)) if weight else 1.0
+                revenue_component = max(0.0, 1.0 - float(rate) * revenue_weight)
+                cost_component = max(0.0, 1.0 - float(rate) * cost_weight)
+                diagnostics_columns.setdefault(f"{name} Revenue Factor", []).append(revenue_component)
+                diagnostics_columns.setdefault(f"{name} Cost Factor", []).append(cost_component)
+                revenue_factor *= revenue_component
+                cost_factor *= cost_component
+            revenue_factors.append(revenue_factor)
+            cost_factors.append(cost_factor)
 
-        if not combined:
-            combined = [1.0 for _ in self.years]
+        if not revenue_factors:
+            revenue_factors = [1.0 for _ in self.years]
+        if not cost_factors:
+            cost_factors = [1.0 for _ in self.years]
 
-        diagnostics_columns: Dict[str, List[float]] = {}
-        diagnostics_columns.update(factor_columns)
-        diagnostics_columns["Combined Factor"] = combined
+        diagnostics_columns["Revenue Factor"] = revenue_factors
+        diagnostics_columns["Cost Factor"] = cost_factors
+        diagnostics_columns["Combined Factor"] = revenue_factors
         diagnostics_columns["Combined Shock (%)"] = [
-            (1.0 - value) * 100.0 for value in combined
+            (1.0 - value) * 100.0 for value in revenue_factors
         ]
         self._risk_factor_diagnostics_cache = build_table(self.years, diagnostics_columns)
-        self._risk_factors_cache = combined
-        return combined
+        self._risk_factors_cache = revenue_factors
+        self._risk_cost_factors_cache = cost_factors
 
     def risk_factor_diagnostics(self) -> Table:
         if self._risk_factor_diagnostics_cache is None:
             self._risk_factors()
         if self._risk_factor_diagnostics_cache is None:
             defaults = {
+                "Revenue Factor": [1.0 for _ in self.years],
+                "Cost Factor": [1.0 for _ in self.years],
                 "Combined Factor": [1.0 for _ in self.years],
                 "Combined Shock (%)": [0.0 for _ in self.years],
             }
@@ -916,6 +982,7 @@ class FinancialModel:
         cost_of_sales: Sequence[float],
         *,
         distributor_weighted: Optional[Sequence[float]] = None,
+        distributor_share: Optional[Sequence[float]] = None,
     ) -> Table:
         days = self.inputs.working_capital_days
 
@@ -957,7 +1024,25 @@ class FinancialModel:
         ap_days = _expand(days.accounts_payable)
         other_liability_days = _expand(days.other_liabilities)
 
-        ar_base = _calc(ar_days, revenue_series)
+        if distributor_share is None:
+            distributor_share_series = [0.0 for _ in self.years]
+        else:
+            distributor_share_series = [float(value) for value in distributor_share]
+            if len(distributor_share_series) < len(self.years):
+                fill = distributor_share_series[-1] if distributor_share_series else 0.0
+                distributor_share_series = distributor_share_series + [
+                    fill for _ in range(len(self.years) - len(distributor_share_series))
+                ]
+            distributor_share_series = distributor_share_series[: len(self.years)]
+
+        direct_share_series = [
+            max(0.0, min(1.0, 1.0 - share)) for share in distributor_share_series
+        ]
+
+        ar_base = _calc(
+            ar_days,
+            [revenue_value * share for revenue_value, share in zip(revenue_series, direct_share_series)],
+        )
         distributor_receivables = self._distributor_receivable_balances(weighted=distributor_weighted)
         ar = [base + dist for base, dist in zip(ar_base, distributor_receivables)]
         inventory = _calc(inventory_days, cost_series)
@@ -1000,10 +1085,12 @@ class FinancialModel:
         revenue = self.revenue_schedule().column("Net Revenue")
         cost_of_sales = self.cost_structure().column("Cost of Sales")
         weighted = self._distributor_receivable_cache or [0.0 for _ in self.years]
+        distributor_share = self._distributor_share_cache or [0.0 for _ in self.years]
         table = self._working_capital_balances_from_series(
             revenue,
             cost_of_sales,
             distributor_weighted=weighted,
+            distributor_share=distributor_share,
         )
         self._working_capital_cache = table
         return table
@@ -1487,6 +1574,7 @@ class FinancialModel:
             if name != "Dividends Paid"
         }
         base_weighted = self._distributor_receivable_cache or [0.0 for _ in self.years]
+        base_distributor_share = self._distributor_share_cache or [0.0 for _ in self.years]
 
         import random
 
@@ -1494,17 +1582,56 @@ class FinancialModel:
         if params.seed is not None:
             rng.seed(params.seed)
         distribution = (params.distribution or "uniform").lower()
+        normal_std = (high - low) / 6 if high != low else max(abs(high), 1.0) / 6
 
-        def _sample() -> float:
+        def _sample(shift: float = 0.0) -> float:
             if distribution == "normal":
                 mean = (low + high) / 2
-                std_dev = (high - low) / 6 if high != low else max(abs(high), 1.0) / 6
-                value = rng.gauss(mean, std_dev)
+                value = rng.gauss(mean + shift, normal_std)
                 return max(min(value, high), low)
             if distribution in {"triangular", "triangle"}:
                 mode = (low + high) / 2
                 return rng.triangular(low, high, mode)
             return rng.uniform(low, high)
+
+        def _correlated_shocks(variable_order: List[str]) -> Dict[str, float]:
+            correlations = params.correlations or {}
+            size = len(variable_order)
+            if size == 0:
+                return {}
+
+            matrix = [[1.0 if i == j else 0.0 for j in range(size)] for i in range(size)]
+            for i, var_i in enumerate(variable_order):
+                for j, var_j in enumerate(variable_order):
+                    if i == j:
+                        continue
+                    value = correlations.get(var_i, {}).get(var_j)
+                    if value is None:
+                        value = correlations.get(var_j, {}).get(var_i)
+                    if value is None:
+                        continue
+                    try:
+                        corr = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                    matrix[i][j] = max(min(corr, 1.0), -1.0)
+
+            cholesky = [[0.0 for _ in range(size)] for _ in range(size)]
+            for i in range(size):
+                for j in range(i + 1):
+                    total = sum(cholesky[i][k] * cholesky[j][k] for k in range(j))
+                    if i == j:
+                        value = matrix[i][i] - total
+                        cholesky[i][j] = value ** 0.5 if value > 0 else 0.0
+                    else:
+                        denominator = cholesky[j][j]
+                        cholesky[i][j] = (matrix[i][j] - total) / denominator if denominator else 0.0
+
+            normals = [rng.gauss(0.0, 1.0) for _ in range(size)]
+            correlated = []
+            for i in range(size):
+                correlated.append(sum(cholesky[i][k] * normals[k] for k in range(i + 1)))
+            return dict(zip(variable_order, correlated))
 
         metric_names = [metric.strip() for metric in params.metrics]
         allowed_metrics = {
@@ -1528,24 +1655,53 @@ class FinancialModel:
             variable_codes.insert(0, "revenue_growth")
 
         results: Dict[str, List[float]] = {metric: [] for metric in metrics_to_track}
+        use_correlated = distribution == "normal" and bool(params.correlations)
+        correlation_variables = [
+            code for code in variable_codes if code in (params.correlations or {})
+        ]
 
         for _ in range(iterations):
+            shocks = _correlated_shocks(correlation_variables) if use_correlated else {}
             if "revenue_growth" in variable_codes:
-                growth_rates = [_sample() for _ in self.years]
+                revenue_shift = shocks.get("revenue_growth", 0.0) * normal_std if use_correlated else 0.0
+                growth_rates = [_sample(revenue_shift) for _ in self.years]
             else:
                 growth_rates = [0.0 for _ in self.years]
 
-            raw_factor = 1.0 + (_sample() if "raw_material_cost" in variable_codes else 0.0)
-            labor_factor = 1.0 + (_sample() if "labor_cost" in variable_codes else 0.0)
-            utility_factor = 1.0 + (_sample() if "utility_cost" in variable_codes else 0.0)
-            interest_factor = 1.0 + (_sample() if "senior_debt" in variable_codes else 0.0)
-            tax_factor = 1.0 + (_sample() if "tax_rate" in variable_codes else 0.0)
+            raw_factor = 1.0 + (
+                _sample(shocks.get("raw_material_cost", 0.0) * normal_std)
+                if "raw_material_cost" in variable_codes
+                else 0.0
+            )
+            labor_factor = 1.0 + (
+                _sample(shocks.get("labor_cost", 0.0) * normal_std)
+                if "labor_cost" in variable_codes
+                else 0.0
+            )
+            utility_factor = 1.0 + (
+                _sample(shocks.get("utility_cost", 0.0) * normal_std)
+                if "utility_cost" in variable_codes
+                else 0.0
+            )
+            interest_factor = 1.0 + (
+                _sample(shocks.get("senior_debt", 0.0) * normal_std)
+                if "senior_debt" in variable_codes
+                else 0.0
+            )
+            tax_factor = 1.0 + (
+                _sample(shocks.get("tax_rate", 0.0) * normal_std)
+                if "tax_rate" in variable_codes
+                else 0.0
+            )
             if tax_factor < 0:
                 tax_factor = 0.0
 
             risk_adjustment = 1.0
             if "other" in variable_codes:
-                risk_adjustment = max(0.0, 1.0 - _sample())
+                risk_adjustment = max(
+                    0.0,
+                    1.0 - _sample(shocks.get("other", 0.0) * normal_std),
+                )
             risk_series = [risk_adjustment for _ in self.years] if "other" in variable_codes else [1.0 for _ in self.years]
 
             simulated_revenue = [
@@ -1558,7 +1714,9 @@ class FinancialModel:
             direct_series = [value * labor_factor * risk_series[idx] for idx, value in enumerate(direct_labor)]
             indirect_series = [value * labor_factor * risk_series[idx] for idx, value in enumerate(indirect_labor)]
 
-            utility_cost_share = [value * 0.8 for value in utility_series]
+            utility_cost_share = [
+                value * self.inputs.utility_cost_of_sales_share for value in utility_series
+            ]
             utility_admin_share = [value - cost_share for value, cost_share in zip(utility_series, utility_cost_share)]
             simulated_cost_of_sales = [
                 raw_series[idx] + utility_cost_share[idx] + direct_series[idx]
@@ -1589,11 +1747,26 @@ class FinancialModel:
                 min(1.0, max(0.0, rate * tax_factor))
                 for rate in tax_schedule
             ] if "tax_rate" in variable_codes else list(tax_schedule)
-            taxes = [
-                ebt[idx] * effective_tax[idx] if ebt[idx] > 0 else 0.0
-                for idx in range(len(self.years))
-            ]
-            net_income = [ebt[idx] - taxes[idx] for idx in range(len(self.years))]
+            taxes: List[float] = []
+            net_income: List[float] = []
+            nol_balance = 0.0
+            apply_nol = bool(self.inputs.tax_loss_carryforward)
+            nol_limit = float(self.inputs.tax_loss_limit)
+            for idx in range(len(self.years)):
+                taxable = ebt[idx]
+                if taxable <= 0:
+                    tax = 0.0
+                    if apply_nol:
+                        nol_balance += abs(taxable)
+                else:
+                    if apply_nol and nol_balance > 0:
+                        max_offset = taxable * nol_limit
+                        offset = min(nol_balance, max_offset)
+                        taxable = max(taxable - offset, 0.0)
+                        nol_balance -= offset
+                    tax = taxable * effective_tax[idx]
+                taxes.append(tax)
+                net_income.append(ebt[idx] - tax)
 
             weighted_adjusted: List[float] = []
             for base_weight, base_rev, sim_rev in zip(base_weighted, base_revenue, simulated_revenue):
@@ -1607,6 +1780,7 @@ class FinancialModel:
                 simulated_revenue,
                 simulated_cost_of_sales,
                 distributor_weighted=weighted_adjusted,
+                distributor_share=base_distributor_share,
             )
 
             inventory_change = _difference(working_balances.column("Inventory"))
@@ -1666,7 +1840,7 @@ class FinancialModel:
             ]
 
             discounted = [
-                cf / (1 + discount_rate) ** (idx + 1)
+                cf / (1 + discount_rate) ** idx
                 for idx, cf in enumerate(net_cash_flow)
             ]
             npv = sum(discounted)
@@ -1691,7 +1865,7 @@ class FinancialModel:
 
         cash_flow = self.cash_flow_statement().column(CASH_FLOW_NET_COLUMN)
         discount_rate = self.inputs.financing.discount_rate
-        discounted = [cf / (1 + discount_rate) ** (idx + 1) for idx, cf in enumerate(cash_flow)]
+        discounted = [cf / (1 + discount_rate) ** idx for idx, cf in enumerate(cash_flow)]
         npv_value = sum(discounted)
         irr_result = npf_irr(cash_flow)
         irr_value = irr_result.value
@@ -1896,7 +2070,16 @@ class FinancialModel:
         cumulative = _cumulative(cash_flows)
         for idx, value in enumerate(cumulative):
             if value >= 0:
-                return float(self.years[idx])
+                if idx == 0:
+                    return float(self.years[idx])
+                previous = cumulative[idx - 1]
+                if value == previous:
+                    return float(self.years[idx])
+                year_before = self.years[idx - 1]
+                year_after = self.years[idx]
+                step = year_after - year_before
+                fraction = (0.0 - previous) / (value - previous)
+                return float(year_before + step * fraction)
         return float("nan")
 
     def payback_schedule(self) -> Table:
@@ -1907,7 +2090,7 @@ class FinancialModel:
     def discounted_payback_schedule(self) -> Table:
         discount_rate = self.inputs.financing.discount_rate
         cash_flows = self.cash_flow_statement().column(CASH_FLOW_NET_COLUMN)
-        discounted = [cf / (1 + discount_rate) ** (idx + 1) for idx, cf in enumerate(cash_flows)]
+        discounted = [cf / (1 + discount_rate) ** idx for idx, cf in enumerate(cash_flows)]
         cumulative = _cumulative(discounted)
         return build_table(self.years, {"Discounted Cash Flow": discounted, "Cumulative": cumulative})
 
@@ -2086,4 +2269,3 @@ __all__ = [
     "npf_irr",
     "IRRResult",
 ]
-
