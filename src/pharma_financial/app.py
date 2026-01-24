@@ -543,7 +543,6 @@ def main() -> None:
     tabs = st.tabs(
         [
             "Input Landing Page",
-            "Key Metrics Dashboard",
             "Financial Performance",
             "Financial Position",
             "Cash Flow Statement",
@@ -552,29 +551,30 @@ def main() -> None:
             "RAG Assistant",
             "Monte Carlo Simulation",
             "Break-even & Payback",
+            "Key Metrics Dashboard",
         ]
     )
 
     with tabs[0]:
         _render_inputs_tab(inputs, model, outputs)
     with tabs[1]:
-        _render_dashboard_tab(model, outputs)
-    with tabs[2]:
         _render_income_statement(model, outputs)
-    with tabs[3]:
+    with tabs[2]:
         _render_statement_tab("Statement of Financial Position", outputs.balance_sheet)
-    with tabs[4]:
+    with tabs[3]:
         _render_statement_tab("Statement of Cash Flows", outputs.cash_flow)
-    with tabs[5]:
+    with tabs[4]:
         _render_sensitivity(outputs)
-    with tabs[6]:
+    with tabs[5]:
         _render_scenarios(outputs)
-    with tabs[7]:
+    with tabs[6]:
         _render_rag_tab(model, outputs)
-    with tabs[8]:
+    with tabs[7]:
         _render_monte_carlo(outputs)
-    with tabs[9]:
+    with tabs[8]:
         _render_break_even(outputs)
+    with tabs[9]:
+        _render_dashboard_tab(model, outputs)
 
 
 def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:
