@@ -15,15 +15,31 @@ SRC = ROOT / "src"
 if SRC.exists() and str(SRC) not in sys.path:  # pragma: no cover - import path fix
     sys.path.insert(0, str(SRC))
 
-try:
-    from pharma_financial.app import main
-except ModuleNotFoundError as exc:  # pragma: no cover - executed when deps missing
-    if exc.name == "streamlit":
-        raise SystemExit(
-            "Streamlit is not installed. Install project dependencies with "
-            "`pip install -r requirements.txt` before running the app."
-        ) from exc
-    raise
+def _load_app_main():
+    try:
+        from pharma_financial.app import main
+    except ModuleNotFoundError as exc:  # pragma: no cover - executed when deps missing
+        if exc.name == "pharma_financial":
+            sys.path.insert(0, str(SRC))
+            try:
+                from pharma_financial.app import main  # type: ignore[redefined-outer-name]
+            except ModuleNotFoundError as retry_exc:
+                raise SystemExit(
+                    "Unable to import `pharma_financial`. Ensure the `src` directory "
+                    "is present alongside streamlit_app.py or install the package with "
+                    "`pip install -e .`."
+                ) from retry_exc
+            return main
+        if exc.name == "streamlit":
+            raise SystemExit(
+                "Streamlit is not installed. Install project dependencies with "
+                "`pip install -r requirements.txt` before running the app."
+            ) from exc
+        raise
+    return main
+
+
+main = _load_app_main()
 
 
 def _running_with_streamlit() -> bool:
