@@ -482,12 +482,20 @@ def _streamlit_runtime_exists() -> bool:
     try:  # pragma: no cover - depends on Streamlit internals
         from streamlit.runtime import exists
     except Exception:  # pragma: no cover - runtime API unavailable
-        return False
+        exists = None  # type: ignore[assignment]
 
-    try:  # pragma: no cover - defensive against older Streamlit versions
-        return bool(exists())
+    if exists is not None:
+        try:  # pragma: no cover - defensive against older Streamlit versions
+            return bool(exists())
+        except Exception:
+            return False
+
+    try:  # pragma: no cover - fallback for older Streamlit versions
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
     except Exception:
         return False
+
+    return get_script_run_ctx() is not None
 
 
 def main() -> None:
