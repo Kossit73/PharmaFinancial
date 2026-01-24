@@ -3261,10 +3261,35 @@ def _render_inventory_inputs(payload: dict) -> None:
             _rerun()
 
 
+def _commission_revenue_estimate(payload: Mapping, year_value: int, product: str) -> float:
+    years = [int(year) for year in payload.get("years", [])] if isinstance(payload, Mapping) else []
+    unit_costs = payload.get("unit_costs", {}) if isinstance(payload, Mapping) else {}
+    factors = _inflation_factors_from_payload(payload)
+    production = payload.get("production_estimate", {}) if isinstance(payload, Mapping) else {}
+
+    try:
+        year_position = years.index(int(year_value)) if years else 0
+    except ValueError:
+        year_position = 0
+
+    units_series = production.get(product, []) if isinstance(production, Mapping) else []
+    units = 0.0
+    if isinstance(units_series, Sequence) and year_position < len(units_series):
+        try:
+            units = float(units_series[year_position])
+        except (TypeError, ValueError):
+            units = 0.0
+
+    price_mapping = unit_costs.get(product, {}) if isinstance(unit_costs, Mapping) else {}
+    price = float(price_mapping.get("price", 0.0) or 0.0)
+    factor = float(factors[year_position]) if year_position < len(factors) and factors[year_position] else 1.0
+    return units * price * factor
+
+
 def _render_distributor_commission(payload: Mapping) -> None:
     st.caption(
-        "Configure distributor commission assumptions for each product and year. "
-        "Use the number inputs to adjust values or remove rows inline."
+        "Configure distributor commission assumptions by year and product. "
+        "Set commission percentages and revenue expectations to model year-over-year adjustments."
     )
 
     rows: list[dict] = st.session_state.get("commission_rows") or []
@@ -3273,6 +3298,9 @@ def _render_distributor_commission(payload: Mapping) -> None:
         st.session_state["commission_rows"] = rows
 
     years = [int(year) for year in payload.get("years", [])] if isinstance(payload, Mapping) else []
+    row_years = [int(row.get("Year", 0)) for row in rows if row.get("Year") is not None]
+    year_catalog = sorted({*years, *row_years}) or [0]
+    year_options = [str(year) for year in year_catalog]
     unit_costs = payload.get("unit_costs", {}) if isinstance(payload, Mapping) else {}
     base_products = (
         {str(name) for name in unit_costs.keys()}
@@ -3297,21 +3325,20 @@ def _render_distributor_commission(payload: Mapping) -> None:
 
     updated_rows: list[dict] = []
 
-    factors = _inflation_factors_from_payload(payload)
-    production = payload.get("production_estimate", {}) if isinstance(payload, Mapping) else {}
-
     for index in range(visible_count):
         row = rows[index]
         container = st.container()
         with container:
-            cols = st.columns([1.0, 2.0, 1.5, 1.5, 1.2, 0.8])
+            cols = st.columns([1.1, 2.0, 1.4, 1.6, 0.8])
             year_default = int(row.get("Year", years[index] if index < len(years) else 0))
-            year_value = cols[0].number_input(
-                "Year",
-                value=year_default,
-                key=f"commission_year_{index}",
-                step=1,
-                min_value=0,
+            year_label = str(year_default) if str(year_default) in year_options else year_options[0]
+            year_value = int(
+                cols[0].selectbox(
+                    "Year",
+                    options=year_options,
+                    index=year_options.index(year_label),
+                    key=f"commission_year_{index}",
+                )
             )
             product_value = _select_or_create_option(
                 cols[1],
@@ -3328,51 +3355,24 @@ def _render_distributor_commission(payload: Mapping) -> None:
                 format="%.4f",
                 key=f"commission_rate_{index}",
             )
-            share_value = cols[3].number_input(
-                "Revenue Share (%)",
-                value=float(row.get("Revenue Share (%)", 100.0)),
-                step=1.0,
+            revenue_estimate = _commission_revenue_estimate(payload, year_value, product_value)
+            revenue_default = float(row.get("Revenue", revenue_estimate))
+            revenue_value = cols[3].number_input(
+                "Revenue",
+                value=float(revenue_default),
+                step=1000.0,
                 min_value=0.0,
-                max_value=100.0,
-                key=f"commission_share_{index}",
+                format="%.2f",
+                key=f"commission_revenue_{index}",
             )
-            payment_value = cols[4].number_input(
-                "Payment Days",
-                value=int(row.get("Payment Days", 30)),
-                step=1,
-                min_value=0,
-                key=f"commission_payment_{index}",
-            )
-
-            try:
-                year_position = years.index(int(year_value)) if years else index
-            except ValueError:
-                year_position = index
-
-            units_series = production.get(product_value, []) if isinstance(production, Mapping) else []
-            units = 0.0
-            if isinstance(units_series, Sequence) and year_position < len(units_series):
-                try:
-                    units = float(units_series[year_position])
-                except (TypeError, ValueError):
-                    units = 0.0
-
-            price_mapping = unit_costs.get(product_value, {}) if isinstance(unit_costs, Mapping) else {}
-            price = float(price_mapping.get("price", 0.0) or 0.0)
-            factor = (
-                float(factors[year_position])
-                if year_position < len(factors) and factors[year_position]
-                else 1.0
-            )
-            revenue_estimate = units * price * factor
-            commission_estimate = revenue_estimate * (rate_value / 100.0) * (share_value / 100.0)
-            cols[5].markdown("&nbsp;")
-            if cols[5].button("Remove", key=f"commission_remove_{index}"):
+            cols[4].markdown("&nbsp;")
+            if cols[4].button("Remove", key=f"commission_remove_{index}"):
                 rows.pop(index)
                 st.session_state["commission_rows"] = rows
                 _commission_rows_to_payload(rows, payload)
                 _rerun()
 
+        commission_estimate = revenue_value * (rate_value / 100.0)
         st.caption(
             f"Estimated revenue for {product_value or 'product'} in {int(year_value)}: "
             f"{revenue_estimate:,.2f}. Commission impact: {commission_estimate:,.2f}."
@@ -3383,8 +3383,8 @@ def _render_distributor_commission(payload: Mapping) -> None:
                 "Year": int(year_value),
                 "Product": product_value.strip(),
                 "Commission (%)": float(rate_value),
-                "Revenue Share (%)": float(share_value),
-                "Payment Days": int(payment_value),
+                "Revenue": float(revenue_value),
+                "Payment Days": int(row.get("Payment Days", 30)),
             }
         )
 
@@ -3409,12 +3409,15 @@ def _render_distributor_commission(payload: Mapping) -> None:
         else:
             default_year = 0
 
-        add_year = st.number_input(
-            "Year",
-            value=int(default_year),
-            step=1,
-            min_value=0,
-            key="commission_new_year",
+        add_year = int(
+            st.selectbox(
+                "Year",
+                options=year_options,
+                index=year_options.index(str(default_year))
+                if str(default_year) in year_options
+                else 0,
+                key="commission_new_year",
+            )
         )
         add_product = _select_or_create_option(
             st,
@@ -3430,20 +3433,15 @@ def _render_distributor_commission(payload: Mapping) -> None:
             format="%.4f",
             key="commission_new_rate",
         )
-        add_share = st.number_input(
-            "Revenue Share (%)",
-            value=100.0,
-            step=1.0,
+        add_revenue = st.number_input(
+            "Revenue",
+            value=float(
+                _commission_revenue_estimate(payload, int(default_year), add_product or "")
+            ),
+            step=1000.0,
             min_value=0.0,
-            max_value=100.0,
-            key="commission_new_share",
-        )
-        add_days = st.number_input(
-            "Payment Days",
-            value=30,
-            step=1,
-            min_value=0,
-            key="commission_new_days",
+            format="%.2f",
+            key="commission_new_revenue",
         )
         submitted = st.form_submit_button("Add distributor commission")
 
@@ -3458,8 +3456,8 @@ def _render_distributor_commission(payload: Mapping) -> None:
                     "Year": int(add_year),
                     "Product": product_clean,
                     "Commission (%)": float(add_rate),
-                    "Revenue Share (%)": float(add_share),
-                    "Payment Days": int(add_days),
+                    "Revenue": float(add_revenue),
+                    "Payment Days": 30,
                 }
             )
             st.session_state["commission_rows"] = new_rows
@@ -3469,8 +3467,7 @@ def _render_distributor_commission(payload: Mapping) -> None:
                 "commission_new_product_select",
                 "commission_new_product_custom",
                 "commission_new_rate",
-                "commission_new_share",
-                "commission_new_days",
+                "commission_new_revenue",
             ):
                 st.session_state.pop(key, None)
             _rerun()
@@ -6182,14 +6179,9 @@ def _sync_commission_rows_from_widgets(rows: Sequence[Mapping]) -> list[dict]:
                     f"commission_rate_{index}", current.get("Commission (%)", 0.0), float
                 )
             )
-            current["Revenue Share (%)"] = float(
+            current["Revenue"] = float(
                 _get_widget_number(
-                    f"commission_share_{index}", current.get("Revenue Share (%)", 100.0), float
-                )
-            )
-            current["Payment Days"] = int(
-                _get_widget_number(
-                    f"commission_payment_{index}", current.get("Payment Days", 30), int
+                    f"commission_revenue_{index}", current.get("Revenue", 0.0), float
                 )
             )
         updated.append(current)
@@ -7201,12 +7193,15 @@ def _payload_to_commission_rows(payload: Mapping) -> list[dict]:
             rate = float(item.get("rate", 0.0) or 0.0) * 100.0
             share = float(item.get("revenue_share", 1.0) or 0.0) * 100.0
             payment_days = int(float(item.get("payment_days", 0) or 0))
+            revenue_estimate = _commission_revenue_estimate(payload, year, product)
+            revenue_value = revenue_estimate * (share / 100.0) if revenue_estimate else 0.0
             rows.append(
                 {
                     "Year": year,
                     "Product": product,
                     "Commission (%)": rate,
                     "Revenue Share (%)": share if share > 0 else 100.0,
+                    "Revenue": revenue_value,
                     "Payment Days": max(payment_days, 0),
                 }
             )
@@ -7223,12 +7218,14 @@ def _payload_to_commission_rows(payload: Mapping) -> list[dict]:
             for product in unit_costs.keys():
                 # Default distributor commission rate: 5%
                 rate = 0.05
+                revenue_estimate = _commission_revenue_estimate(payload, int(year), str(product))
                 fallback.append(
                     {
                         "Year": int(year),
                         "Product": str(product),
                         "Commission (%)": rate * 100.0,
                         "Revenue Share (%)": 100.0,
+                        "Revenue": revenue_estimate,
                         "Payment Days": 30,
                     }
                 )
@@ -7252,15 +7249,25 @@ def _commission_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
             continue
         rate_value = row.get("Commission (%)", row.get("Commission", 0.0))
         share_value = row.get("Revenue Share (%)", row.get("Revenue Share", 100.0))
+        revenue_value = row.get("Revenue")
         payment_value = row.get("Payment Days", 0)
         try:
             rate = max(float(rate_value) / 100.0, 0.0)
         except (TypeError, ValueError):
             rate = 0.0
-        try:
-            share = max(float(share_value) / 100.0, 0.0)
-        except (TypeError, ValueError):
-            share = 1.0
+        share = None
+        if revenue_value is not None:
+            revenue_estimate = _commission_revenue_estimate(payload, year, product)
+            if revenue_estimate > 0:
+                try:
+                    share = max(float(revenue_value) / float(revenue_estimate), 0.0)
+                except (TypeError, ValueError):
+                    share = None
+        if share is None:
+            try:
+                share = max(float(share_value) / 100.0, 0.0)
+            except (TypeError, ValueError):
+                share = 1.0
         try:
             payment_days = max(int(float(payment_value)), 0)
         except (TypeError, ValueError):
