@@ -102,6 +102,9 @@ MAX_VISIBLE_COMMISSION_ROWS = 6
 MAX_VISIBLE_COST_ROWS = 6
 MIN_PROJECTION_YEAR = 1900
 MAX_PROJECTION_YEAR = 2300
+RAG_CHUNK_SIZE = 200
+RAG_CHUNK_OVERLAP = 50
+RAG_TOP_RESULTS = 5
 SCENARIO_TOOL_LABELS = {
     "decision_tree": "Decision Tree Tools",
     "stress_testing": "Stress Testing",
@@ -545,6 +548,7 @@ def main() -> None:
             "Cash Flow Statement",
             "Sensitivity Analysis",
             "Scenario / IFs Analysis",
+            "RAG Assistant",
             "Monte Carlo Simulation",
             "Break-even & Payback",
         ]
@@ -565,8 +569,10 @@ def main() -> None:
     with tabs[6]:
         _render_scenarios(outputs)
     with tabs[7]:
-        _render_monte_carlo(outputs)
+        _render_rag_tab()
     with tabs[8]:
+        _render_monte_carlo(outputs)
+    with tabs[9]:
         _render_break_even(outputs)
 
 
@@ -869,6 +875,73 @@ def _load_payload_from_pdf(data: bytes) -> Mapping[str, object]:
     if not combined:
         raise ValueError("PDF file did not contain any readable text.")
     return _load_payload_from_text(combined)
+
+
+def _extract_text_from_upload(filename: str, data: bytes) -> str:
+    suffix = Path(filename).suffix.lower()
+    if suffix in {".txt", ".md", ".csv"}:
+        return data.decode("utf-8", errors="replace")
+    if suffix == ".docx":
+        if Document is None:
+            raise ValueError("Word support requires the 'python-docx' package to be installed.")
+        document = Document(io.BytesIO(data))
+        text = "\n".join(paragraph.text for paragraph in document.paragraphs).strip()
+        if not text:
+            raise ValueError("Word document did not contain any readable text.")
+        return text
+    if suffix == ".pdf":
+        if PdfReader is None:
+            raise ValueError("PDF support requires the 'PyPDF2' package to be installed.")
+        reader = PdfReader(io.BytesIO(data))
+        text = "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+        if not text:
+            raise ValueError("PDF file did not contain any readable text.")
+        return text
+    raise ValueError("Unsupported file type for RAG. Upload TXT, MD, CSV, DOCX, or PDF files.")
+
+
+def _tokenize(text: str) -> List[str]:
+    return re.findall(r"[A-Za-z0-9']+", text.lower())
+
+
+def _chunk_text(text: str, *, size: int, overlap: int) -> List[str]:
+    words = text.split()
+    if not words:
+        return []
+    chunks: List[str] = []
+    step = max(1, size - overlap)
+    for start in range(0, len(words), step):
+        chunk = " ".join(words[start:start + size]).strip()
+        if chunk:
+            chunks.append(chunk)
+    return chunks
+
+
+def _build_rag_chunks(documents: List[Mapping[str, str]]) -> List[Mapping[str, object]]:
+    chunks: List[Mapping[str, object]] = []
+    for doc in documents:
+        name = str(doc.get("name", "Document"))
+        text = str(doc.get("text", "") or "").strip()
+        for chunk in _chunk_text(text, size=RAG_CHUNK_SIZE, overlap=RAG_CHUNK_OVERLAP):
+            tokens = _tokenize(chunk)
+            chunks.append({"source": name, "text": chunk, "tokens": tokens})
+    return chunks
+
+
+def _score_chunks(query: str, chunks: List[Mapping[str, object]]) -> List[Mapping[str, object]]:
+    query_tokens = set(_tokenize(query))
+    if not query_tokens:
+        return []
+    scored: List[Mapping[str, object]] = []
+    for chunk in chunks:
+        tokens = chunk.get("tokens", [])
+        overlap = sum(1 for token in tokens if token in query_tokens)
+        if overlap == 0:
+            continue
+        score = overlap / max(len(tokens), 1)
+        scored.append({**chunk, "score": score})
+    scored.sort(key=lambda item: item.get("score", 0.0), reverse=True)
+    return scored[:RAG_TOP_RESULTS]
 
 
 def _render_excel_model_download(
@@ -2325,6 +2398,63 @@ def _ensure_dataframe(table) -> "pd.DataFrame | list":
         except Exception:
             pass
     return table
+
+
+def _render_rag_tab() -> None:
+    st.markdown("### Retrieval-Augmented Generation (RAG) Assistant")
+    st.caption(
+        "Upload supporting documents and retrieve the most relevant excerpts for a query."
+    )
+
+    uploads = st.file_uploader(
+        "Upload reference documents",
+        type=["txt", "md", "csv", "pdf", "docx"],
+        accept_multiple_files=True,
+        key="rag_uploads",
+    )
+
+    documents = st.session_state.get("rag_documents", [])
+    if st.button("Index Documents", key="rag_index"):
+        documents = []
+        errors: List[str] = []
+        if uploads:
+            for item in uploads:
+                try:
+                    text = _extract_text_from_upload(item.name, item.getvalue())
+                    documents.append({"name": item.name, "text": text})
+                except Exception as exc:
+                    errors.append(f"{item.name}: {exc}")
+        st.session_state["rag_documents"] = documents
+        st.session_state["rag_chunks"] = _build_rag_chunks(documents)
+        st.session_state.pop("rag_results", None)
+        if errors:
+            st.warning("Some files could not be indexed:\n" + "\n".join(errors))
+
+    if st.button("Clear Indexed Documents", key="rag_clear"):
+        st.session_state.pop("rag_documents", None)
+        st.session_state.pop("rag_chunks", None)
+        st.session_state.pop("rag_results", None)
+
+    chunks = st.session_state.get("rag_chunks", [])
+    if documents:
+        st.success(f"Indexed {len(documents)} document(s), {len(chunks)} chunks.")
+    else:
+        st.info("No documents indexed yet.")
+
+    query = st.text_input("Ask a question", key="rag_query")
+    if st.button("Search", key="rag_search") and query:
+        st.session_state["rag_results"] = _score_chunks(query, chunks)
+
+    results = st.session_state.get("rag_results", [])
+    if query and not results and chunks:
+        st.warning("No relevant passages found. Try a broader query.")
+
+    for idx, result in enumerate(results, start=1):
+        source = result.get("source", "Document")
+        score = float(result.get("score", 0.0))
+        label = f"Result {idx} · {source} · score {score:.2%}"
+        with st.expander(label, expanded=idx == 1):
+            st.write(result.get("text", ""))
 
 
 def _format_number(value: float) -> str:
