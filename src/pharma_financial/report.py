@@ -357,25 +357,26 @@ def _build_pdf(sections: Sequence[ReportSection]) -> bytes:
         pdf.set_auto_page_break(auto=True, margin=15)
         pdf.add_page()
         for kind, text in blocks:
+            safe_text = _safe_pdf_text(text)
             if kind == "title":
                 pdf.set_font("Arial", "B", 16)
-                pdf.cell(0, 10, text, ln=True)
+                pdf.cell(0, 10, safe_text, ln=True)
                 pdf.ln(2)
             elif kind == "subtitle":
                 pdf.set_font("Arial", "", 10)
-                pdf.cell(0, 8, text, ln=True)
+                pdf.cell(0, 8, safe_text, ln=True)
             elif kind == "heading1":
                 pdf.ln(4)
                 pdf.set_font("Arial", "B", 14)
-                pdf.cell(0, 8, text, ln=True)
+                pdf.cell(0, 8, safe_text, ln=True)
                 pdf.line(10, pdf.get_y(), 200, pdf.get_y())
             elif kind == "heading2":
                 pdf.set_font("Arial", "B", 12)
-                pdf.cell(0, 7, text, ln=True)
+                pdf.cell(0, 7, safe_text, ln=True)
             elif kind == "note":
-                _pdf_multiline(pdf, f"• {text}")
+                _pdf_multiline(pdf, f"- {safe_text}")
             else:
-                _pdf_multiline(pdf, text)
+                _pdf_multiline(pdf, safe_text)
         return bytes(pdf.output(dest="S").encode("latin-1"))
 
     return _build_pdf_fallback(blocks)
@@ -420,6 +421,16 @@ def _collect_report_blocks(sections: Sequence[ReportSection]) -> List[Tuple[str,
             blocks.append(("body", ""))
 
     return blocks
+
+
+def _safe_pdf_text(text: str) -> str:
+    """Return text safe for FPDF's Latin-1 encoding."""
+
+    try:
+        text.encode("latin-1")
+        return text
+    except UnicodeEncodeError:
+        return text.encode("latin-1", "replace").decode("latin-1")
 
 
 def _collect_sheet_entries(sections: Sequence[ReportSection]) -> List[dict[str, Any]]:
