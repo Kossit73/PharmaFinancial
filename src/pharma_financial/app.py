@@ -3353,7 +3353,11 @@ def _commission_effective_rate(
 def _render_distributor_commission(payload: Mapping) -> None:
     st.caption(
         "Configure distributor commission assumptions by year and product. "
-        "Set commission percentages and revenue expectations to model year-over-year adjustments."
+        "Yearly Commission % is treated as an incremental change that compounds over time."
+    )
+    st.info(
+        "Yearly Commission % (Increment) applies to the prior year's commission rate. "
+        "The effective rate shown below reflects the compounded result for each year."
     )
 
     rows: list[dict] = st.session_state.get("commission_rows") or []
@@ -3389,11 +3393,13 @@ def _render_distributor_commission(payload: Mapping) -> None:
 
     updated_rows: list[dict] = []
 
+    base_rates = _commission_base_rates(payload)
+
     for index in range(visible_count):
         row = rows[index]
         container = st.container()
         with container:
-            cols = st.columns([1.1, 2.0, 1.4, 1.6, 0.8])
+            cols = st.columns([1.0, 1.8, 1.3, 1.4, 1.4, 1.6, 0.7])
             year_default = int(row.get("Year", years[index] if index < len(years) else 0))
             year_label = str(year_default) if str(year_default) in year_options else year_options[0]
             year_value = int(
@@ -3411,8 +3417,18 @@ def _render_distributor_commission(payload: Mapping) -> None:
                 f"commission_product_{index}",
                 current_value=str(row.get("Product", "")),
             )
-            rate_value = cols[2].number_input(
-                "Yearly Commission %",
+            base_rate = base_rates.get(product_value, 0.05)
+            cols[2].number_input(
+                "Base Rate (%)",
+                value=float(base_rate * 100.0),
+                step=0.1,
+                min_value=0.0,
+                format="%.2f",
+                disabled=True,
+                key=f"commission_base_{index}",
+            )
+            rate_value = cols[3].number_input(
+                "Yearly Commission % (Increment)",
                 value=float(row.get("Yearly Commission %", 0.0)),
                 step=0.05,
                 min_value=0.0,
@@ -3421,7 +3437,27 @@ def _render_distributor_commission(payload: Mapping) -> None:
             )
             revenue_estimate = _commission_revenue_estimate(payload, year_value, product_value)
             revenue_default = float(row.get("Revenue", revenue_estimate))
-            revenue_value = cols[3].number_input(
+            preview_row = {
+                "Year": int(year_value),
+                "Product": product_value.strip(),
+                "Yearly Commission %": float(rate_value),
+            }
+            preview_rows = [dict(item) for item in rows]
+            if index < len(preview_rows):
+                preview_rows[index] = preview_row
+            effective_rate = _commission_effective_rate(
+                preview_rows, payload, product_value, year_value
+            )
+            cols[4].number_input(
+                "Effective Rate (%)",
+                value=float(effective_rate * 100.0),
+                step=0.1,
+                min_value=0.0,
+                format="%.2f",
+                disabled=True,
+                key=f"commission_effective_{index}",
+            )
+            revenue_value = cols[5].number_input(
                 "Revenue",
                 value=float(revenue_default),
                 step=1000.0,
@@ -3429,22 +3465,13 @@ def _render_distributor_commission(payload: Mapping) -> None:
                 format="%.2f",
                 key=f"commission_revenue_{index}",
             )
-            cols[4].markdown("&nbsp;")
-            if cols[4].button("Remove", key=f"commission_remove_{index}"):
+            cols[6].markdown("&nbsp;")
+            if cols[6].button("Remove", key=f"commission_remove_{index}"):
                 rows.pop(index)
                 st.session_state["commission_rows"] = rows
                 _commission_rows_to_payload(rows, payload)
                 _rerun()
 
-        preview_row = {
-            "Year": int(year_value),
-            "Product": product_value.strip(),
-            "Yearly Commission %": float(rate_value),
-        }
-        preview_rows = [dict(item) for item in rows]
-        if index < len(preview_rows):
-            preview_rows[index] = preview_row
-        effective_rate = _commission_effective_rate(preview_rows, payload, product_value, year_value)
         commission_estimate = revenue_value * effective_rate
         st.caption(
             f"Estimated revenue for {product_value or 'product'} in {int(year_value)}: "
@@ -3500,7 +3527,7 @@ def _render_distributor_commission(payload: Mapping) -> None:
             "commission_new_product",
         )
         add_rate = st.number_input(
-            "Yearly Commission %",
+            "Yearly Commission % (Increment)",
             value=0.0,
             step=0.05,
             min_value=0.0,
@@ -3545,6 +3572,33 @@ def _render_distributor_commission(payload: Mapping) -> None:
             ):
                 st.session_state.pop(key, None)
             _rerun()
+
+    if product_options:
+        st.markdown("#### Commission horizon preview")
+        preview_product = st.selectbox(
+            "Preview Product",
+            options=product_options,
+            index=0,
+            key="commission_preview_product",
+        )
+        increments = {
+            int(row.get("Year", 0)): float(row.get("Yearly Commission %", 0.0) or 0.0)
+            for row in rows
+            if str(row.get("Product", "")).strip() == preview_product
+        }
+        preview_rows = []
+        rate = base_rates.get(preview_product, 0.05)
+        for year in year_catalog:
+            increment = increments.get(int(year), 0.0)
+            rate = rate * (1 + increment / 100.0)
+            preview_rows.append(
+                {
+                    "Year": int(year),
+                    "Yearly Commission % (Increment)": float(increment),
+                    "Effective Rate (%)": float(rate * 100.0),
+                }
+            )
+        st.table(preview_rows)
 
 
 def _calculate_depreciation_preview(rows: Sequence[Mapping[str, object]]) -> list[dict]:
