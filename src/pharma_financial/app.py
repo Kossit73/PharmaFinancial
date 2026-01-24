@@ -3606,12 +3606,16 @@ def _render_distributor_commission(payload: Mapping) -> None:
 
     if product_options:
         st.markdown("#### Commission horizon preview")
-        preview_product = st.selectbox(
-            "Preview Product",
-            options=product_options,
-            index=0,
-            key="commission_preview_product",
-        )
+        preview_product = selected_product or product_options[0]
+        if not selected_product:
+            preview_product = st.selectbox(
+                "Preview Product",
+                options=product_options,
+                index=0,
+                key="commission_preview_product",
+            )
+        else:
+            st.caption(f"Previewing horizon for: {preview_product}")
         increments = {
             int(row.get("Year", 0)): float(row.get("Yearly Commission %", 0.0) or 0.0)
             for row in rows
