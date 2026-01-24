@@ -3648,7 +3648,12 @@ def _render_distributor_commission(payload: Mapping) -> None:
                     "Effective Rate (%)": float(rate * 100.0),
                 }
             )
-        st.table(preview_rows)
+        if pd is None:
+            st.table(preview_rows)
+        else:
+            preview_frame = pd.DataFrame(preview_rows)
+            preview_frame = preview_frame.astype(str)
+            st.table(preview_frame)
 
 
 
