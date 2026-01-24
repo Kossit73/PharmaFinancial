@@ -24,6 +24,7 @@ class MachineLearningAdvisor:
 
     def __init__(self, parameters: AIParameters):
         self.parameters = parameters
+        self.diagnostics: dict[str, Mapping[str, float]] = {}
 
     def revenue_forecast(self, years: Sequence[int], revenues: Sequence[float]) -> Optional[Table]:
         horizon = max(int(self.parameters.forecast_horizon or 0), 0)
@@ -35,6 +36,7 @@ class MachineLearningAdvisor:
         if not base_years or not revenue_values:
             return None
 
+        self.diagnostics = {}
         methods = [
             method.strip().lower()
             for method in self.parameters.ml_methods
@@ -50,25 +52,32 @@ class MachineLearningAdvisor:
         columns["Historical Net Revenue"] = revenue_values + [math.nan] * horizon
 
         for method in methods:
-            forecasts = self._forecast(method, base_years, revenue_values, horizon)
+            forecasts, in_sample = self._fit_and_forecast(method, base_years, revenue_values, horizon)
             label = self._label(method)
             columns[label] = [math.nan] * len(base_years) + forecasts
+            diagnostics = self._error_metrics(revenue_values, in_sample)
+            if diagnostics:
+                self.diagnostics[label] = diagnostics
+            else:
+                self.diagnostics[label] = {}
 
         return build_table(full_years, columns)
 
     # ------------------------------------------------------------------ helpers
-    def _forecast(
+    def _fit_and_forecast(
         self,
         method: str,
         years: Sequence[int],
         values: Sequence[float],
         horizon: int,
-    ) -> List[float]:
+    ) -> tuple[List[float], List[float]]:
         method = method.lower()
         if method == "cagr":
             return self._cagr(values, horizon)
         if method in {"moving_average", "rolling_mean"}:
             return self._moving_average(values, horizon)
+        if method in {"seasonal", "seasonal_trend", "seasonality"}:
+            return self._seasonal_trend(years, values, horizon)
         return self._linear_regression(years, values, horizon)
 
     def _linear_regression(
@@ -76,16 +85,17 @@ class MachineLearningAdvisor:
         years: Sequence[int],
         values: Sequence[float],
         horizon: int,
-    ) -> List[float]:
+    ) -> tuple[List[float], List[float]]:
         if not years:
-            return [0.0 for _ in range(horizon)]
+            return [0.0 for _ in range(horizon)], []
         n = len(years)
         if n == 1:
-            return [float(values[-1]) for _ in range(horizon)]
+            repeated = float(values[-1])
+            return [repeated for _ in range(horizon)], [repeated]
 
         mean_x = sum(years) / n
         mean_y = sum(values) / n
-        denominator = sum((x - mean_x) ** 2 for x in years)
+        denominator = sum((x - mean_x) ** 2 for x in years) + max(self.parameters.regularization, 0.0)
         if abs(denominator) < 1e-12:
             slope = 0.0
         else:
@@ -97,11 +107,12 @@ class MachineLearningAdvisor:
         for step in range(1, horizon + 1):
             year = last_year + step
             forecasts.append(intercept + slope * year)
-        return forecasts
+        in_sample = [intercept + slope * year for year in years]
+        return self._clamp_forecasts(forecasts, values), in_sample
 
-    def _cagr(self, values: Sequence[float], horizon: int) -> List[float]:
+    def _cagr(self, values: Sequence[float], horizon: int) -> tuple[List[float], List[float]]:
         if not values:
-            return [0.0 for _ in range(horizon)]
+            return [0.0 for _ in range(horizon)], []
         start = float(values[0])
         end = float(values[-1])
         periods = max(len(values) - 1, 1)
@@ -111,24 +122,138 @@ class MachineLearningAdvisor:
             growth = end / start
             growth = growth ** (1 / periods) - 1
         forecasts: List[float] = []
-        current = float(values[-1])
+        in_sample: List[float] = []
+        current = start
+        for _ in range(len(values)):
+            in_sample.append(current)
+            current *= 1 + growth
+        current = float(values[-1]) if values else 0.0
         for _ in range(horizon):
             current *= 1 + growth
             forecasts.append(current)
-        return forecasts
+        return self._clamp_forecasts(forecasts, values), in_sample
 
-    def _moving_average(self, values: Sequence[float], horizon: int, window: int = 3) -> List[float]:
+    def _moving_average(
+        self, values: Sequence[float], horizon: int, window: int = 3
+    ) -> tuple[List[float], List[float]]:
         history = [float(value) for value in values]
         if not history:
-            return [0.0 for _ in range(horizon)]
+            return [0.0 for _ in range(horizon)], []
         window = max(1, min(window, len(history)))
         forecasts: List[float] = []
+        rolling = history[:]
         for _ in range(horizon):
-            segment = history[-window:]
+            segment = rolling[-window:]
             average = sum(segment) / len(segment)
             forecasts.append(average)
-            history.append(average)
-        return forecasts
+            rolling.append(average)
+
+        in_sample: List[float] = []
+        for idx in range(len(history)):
+            start = max(0, idx - window)
+            segment = history[start:idx]
+            if segment:
+                in_sample.append(sum(segment) / len(segment))
+            else:
+                in_sample.append(history[idx])
+        return self._clamp_forecasts(forecasts, values), in_sample
+
+    def _seasonal_trend(
+        self, years: Sequence[int], values: Sequence[float], horizon: int
+    ) -> tuple[List[float], List[float]]:
+        period = max(int(self.parameters.seasonality_period or 0), 0)
+        if period < 2 or len(values) < period:
+            return self._linear_regression(years, values, horizon)
+
+        indices = list(range(len(values)))
+        slope, intercept = self._trend_coefficients(indices, values)
+        trend = [intercept + slope * idx for idx in indices]
+        residuals = [actual - trend[idx] for idx, actual in enumerate(values)]
+
+        seasonal: List[float] = [0.0 for _ in range(period)]
+        counts: List[int] = [0 for _ in range(period)]
+        for idx, residual in enumerate(residuals):
+            bucket = idx % period
+            seasonal[bucket] += residual
+            counts[bucket] += 1
+        seasonal = [
+            seasonal[idx] / counts[idx] if counts[idx] else 0.0
+            for idx in range(period)
+        ]
+
+        in_sample = [trend[idx] + seasonal[idx % period] for idx in indices]
+
+        forecasts: List[float] = []
+        base_index = len(values) - 1
+        for step in range(1, horizon + 1):
+            future_index = base_index + step
+            trend_value = intercept + slope * future_index
+            seasonal_value = seasonal[future_index % period]
+            forecasts.append(trend_value + seasonal_value)
+        return self._clamp_forecasts(forecasts, values), in_sample
+
+    def _trend_coefficients(
+        self, indices: Sequence[int], values: Sequence[float]
+    ) -> tuple[float, float]:
+        if not indices:
+            return 0.0, float(values[-1]) if values else 0.0
+        n = len(indices)
+        mean_x = sum(indices) / n
+        mean_y = sum(values) / n if values else 0.0
+        denominator = sum((x - mean_x) ** 2 for x in indices) + max(self.parameters.regularization, 0.0)
+        if abs(denominator) < 1e-12:
+            slope = 0.0
+        else:
+            slope = sum((x - mean_x) * (y - mean_y) for x, y in zip(indices, values)) / denominator
+        intercept = mean_y - slope * mean_x
+        return slope, intercept
+
+    def _clamp_forecasts(
+        self, forecasts: Sequence[float], history: Sequence[float]
+    ) -> List[float]:
+        if not forecasts:
+            return []
+        minimum = float(self.parameters.min_forecast)
+        max_multiplier = max(float(self.parameters.max_forecast_multiplier or 0.0), 1.0)
+        anchor = 1.0
+        if history:
+            history_values = [abs(float(value)) for value in history]
+            anchor = max(max(history_values), abs(float(history[-1])), 1.0)
+        max_bound = anchor * max_multiplier
+        clamped: List[float] = []
+        for value in forecasts:
+            clamped.append(min(max(float(value), minimum), max_bound))
+        return clamped
+
+    def _error_metrics(
+        self, actual: Sequence[float], predicted: Sequence[float]
+    ) -> Mapping[str, float]:
+        if not actual or len(actual) != len(predicted):
+            return {}
+        errors = [float(a) - float(p) for a, p in zip(actual, predicted)]
+        if not errors:
+            return {}
+        mae = sum(abs(err) for err in errors) / len(errors)
+        rmse = math.sqrt(sum(err ** 2 for err in errors) / len(errors))
+        mape_values = [
+            abs((a - p) / a) * 100
+            for a, p in zip(actual, predicted)
+            if abs(a) > 1e-9
+        ]
+        mape = sum(mape_values) / len(mape_values) if mape_values else float("nan")
+        mean_actual = sum(actual) / len(actual)
+        sst = sum((float(a) - mean_actual) ** 2 for a in actual)
+        if abs(sst) < 1e-12:
+            r_squared = float("nan")
+        else:
+            sse = sum((float(a) - float(p)) ** 2 for a, p in zip(actual, predicted))
+            r_squared = 1 - sse / sst
+        return {
+            "MAE": mae,
+            "RMSE": rmse,
+            "MAPE (%)": mape,
+            "R^2": r_squared,
+        }
 
     def _label(self, method: str) -> str:
         aliases = {
@@ -136,6 +261,9 @@ class MachineLearningAdvisor:
             "cagr": "CAGR Projection",
             "moving_average": "Moving Average Forecast",
             "rolling_mean": "Moving Average Forecast",
+            "seasonal": "Seasonal Trend Forecast",
+            "seasonality": "Seasonal Trend Forecast",
+            "seasonal_trend": "Seasonal Trend Forecast",
         }
         return aliases.get(method, method.replace("_", " ").title())
 

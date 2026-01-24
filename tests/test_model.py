@@ -1,4 +1,5 @@
 import json
+import math
 import sys
 import unittest
 from pathlib import Path
@@ -12,6 +13,7 @@ from pharma_financial.model import (
     CASH_FLOW_END_COLUMN,
     CASH_FLOW_NET_COLUMN,
     FinancialModel,
+    IRRResult,
     npf_irr,
 )
 
@@ -201,7 +203,10 @@ class FinancialModelTest(unittest.TestCase):
             self.assertTrue(result.interpretation.strip())
 
     def test_npf_irr_handles_short_series(self):
-        self.assertTrue(npf_irr([100]) != float("inf"))
+        result = npf_irr([100])
+        self.assertIsInstance(result, IRRResult)
+        self.assertFalse(result.converged)
+        self.assertTrue(math.isnan(result.value))
 
     def test_utility_costs_feed_total_expenses(self):
         costs = self.model.cost_structure()
@@ -467,6 +472,24 @@ class FinancialModelTest(unittest.TestCase):
         if insights.enabled:
             self.assertIsNotNone(insights.ml_forecast)
             self.assertTrue(insights.generative_summary.strip())
+
+    def test_risk_factor_diagnostics_matches_schedule(self):
+        risk_table = self.outputs.risk_factor_diagnostics
+        self.assertIsNotNone(risk_table)
+        combined = risk_table.column("Combined Factor")
+        risk_series = self.model._risk_factors()
+        self.assertEqual(len(combined), len(risk_series))
+        for actual, expected in zip(combined, risk_series):
+            self.assertAlmostEqual(actual, expected)
+
+    def test_monte_carlo_seed_produces_reproducible_results(self):
+        payload = json.loads(Path("src/pharma_financial/data/default_inputs.json").read_text())
+        payload["monte_carlo"]["seed"] = 42
+        inputs = parse_inputs(payload)
+        model = FinancialModel(inputs)
+        table_a = model.monte_carlo_simulation().as_dict()
+        table_b = model.monte_carlo_simulation().as_dict()
+        self.assertEqual(table_a, table_b)
 
     def test_inventory_schedule_reconciles_to_balance_sheet(self):
         schedule = self.model.inventory_schedule()

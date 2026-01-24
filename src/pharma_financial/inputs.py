@@ -150,6 +150,8 @@ class MonteCarloParameters:
     revenue_growth_range: Iterable[float]
     metrics: List[str] = field(default_factory=lambda: ["NPV"])
     variables: List[str] = field(default_factory=lambda: ["revenue_growth"])
+    seed: Optional[int] = None
+    distribution: str = "uniform"
 
 
 @dataclass
@@ -174,6 +176,10 @@ class AIParameters:
     forecast_horizon: int = 3
     ml_methods: List[str] = field(default_factory=lambda: ["linear_regression"])
     generative_features: List[str] = field(default_factory=lambda: ["summary"])
+    regularization: float = 0.0
+    min_forecast: float = 0.0
+    max_forecast_multiplier: float = 5.0
+    seasonality_period: int = 0
 
 
 @dataclass
@@ -450,6 +456,24 @@ def _parse_ai(data: object) -> AIParameters:
     else:
         api_key = None
 
+    def _float_value(key: str, default: float) -> float:
+        value = data.get(key, default)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    regularization = max(0.0, _float_value("regularization", 0.0))
+    min_forecast = _float_value("min_forecast", 0.0)
+    max_multiplier = _float_value("max_forecast_multiplier", 5.0)
+
+    seasonality_value = data.get("seasonality_period", 0)
+    try:
+        seasonality_period = int(float(seasonality_value))
+    except (TypeError, ValueError):
+        seasonality_period = 0
+    seasonality_period = max(seasonality_period, 0)
+
     return AIParameters(
         enabled=enabled,
         provider=provider,
@@ -458,6 +482,10 @@ def _parse_ai(data: object) -> AIParameters:
         forecast_horizon=forecast_horizon,
         ml_methods=ml_methods,
         generative_features=generative_features,
+        regularization=regularization,
+        min_forecast=min_forecast,
+        max_forecast_multiplier=max_multiplier,
+        seasonality_period=seasonality_period,
     )
 
 
@@ -752,6 +780,14 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         )
 
     monte_source = raw["monte_carlo"]
+    seed_value = monte_source.get("seed") if isinstance(monte_source, Mapping) else None
+    seed: Optional[int]
+    try:
+        seed = int(seed_value) if seed_value is not None else None
+    except (TypeError, ValueError):
+        seed = None
+    distribution = str(monte_source.get("distribution", "uniform")).strip().lower() if isinstance(monte_source, Mapping) else "uniform"
+
     monte_carlo = MonteCarloParameters(
         iterations=int(monte_source["iterations"]),
         revenue_growth_range=monte_source["revenue_growth_range"],
@@ -761,6 +797,8 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
             for value in monte_source.get("variables", ["revenue_growth"])
             if str(value)
         ],
+        seed=seed,
+        distribution=distribution or "uniform",
     )
 
     tax_data = raw["tax"]
