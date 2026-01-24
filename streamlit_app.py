@@ -12,10 +12,13 @@ from pathlib import Path
 # Streamlit Cloud deployments without requiring an editable install.
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
+FALLBACK_SRC = Path.cwd() / "src"
 if str(ROOT) not in sys.path:  # pragma: no cover - import path fix
     sys.path.insert(0, str(ROOT))
 if SRC.exists() and str(SRC) not in sys.path:  # pragma: no cover - import path fix
     sys.path.insert(0, str(SRC))
+if FALLBACK_SRC.exists() and str(FALLBACK_SRC) not in sys.path:  # pragma: no cover
+    sys.path.insert(0, str(FALLBACK_SRC))
 
 def _load_app_main():
     try:
@@ -26,9 +29,11 @@ def _load_app_main():
                 sys.path.insert(0, str(ROOT))
             if str(SRC) not in sys.path:
                 sys.path.insert(0, str(SRC))
+            if str(FALLBACK_SRC) not in sys.path:
+                sys.path.insert(0, str(FALLBACK_SRC))
             try:
                 from pharma_financial.app import main  # type: ignore[redefined-outer-name]
-            except ModuleNotFoundError as retry_exc:
+            except Exception as retry_exc:
                 raise SystemExit(
                     "Unable to import `pharma_financial`. Ensure the `src` directory "
                     "is present alongside streamlit_app.py or install the package with "
@@ -43,6 +48,11 @@ def _load_app_main():
         raise SystemExit(
             f"Unable to import required dependency '{exc.name}'. Ensure the dependency is "
             "installed or add it to requirements.txt."
+        ) from exc
+    except Exception as exc:  # pragma: no cover - unexpected import failure
+        raise SystemExit(
+            "Unable to import the Streamlit application. "
+            "Check dependency installation and module paths."
         ) from exc
     return main
 
