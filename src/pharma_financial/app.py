@@ -52,6 +52,11 @@ try:  # pragma: no cover - executed in environments with pandas available
     import pandas as pd
 except Exception:  # pragma: no cover - fallback for environments without pandas
     pd = None  # type: ignore
+else:  # pragma: no cover - runtime configuration
+    try:
+        pd.set_option("mode.string_storage", "python")
+    except Exception:
+        pass
 
 try:  # pragma: no cover - optional dependency for charting
     import plotly.express as px
@@ -2279,10 +2284,17 @@ def _sanitize_dataframe(frame: "pd.DataFrame") -> "pd.DataFrame":
     elif cleaned.index.dtype == "object":
         cleaned.index = cleaned.index.map(_clean_streamlit_cell)
     elif pd.api.types.is_string_dtype(cleaned.index):
-        cleaned.index = cleaned.index.astype(object).map(_clean_streamlit_cell)
+        cleaned.index = (
+            cleaned.index.astype("string[python]").astype(object).map(_clean_streamlit_cell)
+        )
     for column in cleaned.columns:
         if pd.api.types.is_string_dtype(cleaned[column]):
-            cleaned[column] = cleaned[column].astype(object).map(_clean_streamlit_cell)
+            cleaned[column] = (
+                cleaned[column]
+                .astype("string[python]")
+                .astype(object)
+                .map(_clean_streamlit_cell)
+            )
         elif cleaned[column].dtype == "object":
             cleaned[column] = cleaned[column].map(_clean_streamlit_cell)
     return cleaned
