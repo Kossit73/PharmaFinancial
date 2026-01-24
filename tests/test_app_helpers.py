@@ -208,8 +208,9 @@ class RerunHelperTest(unittest.TestCase):
         rows = self.app._payload_to_commission_rows(payload)
         self.assertTrue(rows)
 
-        rows[0]["Commission (%)"] = float(rows[0]["Commission (%)"]) + 1.5
+        rows[0]["Yearly Commission %"] = float(rows[0]["Yearly Commission %"]) + 1.5
         rows[0]["Revenue Share (%)"] = 80.0
+        rows[0]["Revenue"] = None
         rows[0]["Payment Days"] = int(rows[0]["Payment Days"]) + 10
 
         self.app._commission_rows_to_payload(rows, payload)
@@ -218,7 +219,21 @@ class RerunHelperTest(unittest.TestCase):
         stored_rows = commission_section.get("rows", [])
         self.assertTrue(stored_rows)
         first = stored_rows[0]
-        self.assertAlmostEqual(first["rate"] * 100.0, rows[0]["Commission (%)"], places=6)
+        product = first["product"]
+        target_year = first["year"]
+        base_rates = self.app._commission_base_rates(payload)
+        rate = base_rates.get(product, 0.05)
+        product_rows = [
+            row for row in rows if row.get("Product") == product
+        ]
+        product_rows.sort(key=lambda row: row.get("Year", 0))
+        expected_rate = rate
+        for entry in product_rows:
+            increment = float(entry.get("Yearly Commission %", 0.0))
+            expected_rate = expected_rate * (1 + increment / 100.0)
+            if entry.get("Year") == target_year:
+                break
+        self.assertAlmostEqual(first["rate"], expected_rate, delta=0.002)
         self.assertAlmostEqual(first["revenue_share"] * 100.0, rows[0]["Revenue Share (%)"], places=6)
         self.assertEqual(first["payment_days"], rows[0]["Payment Days"])
 
@@ -439,4 +454,3 @@ class UploadLoaderTests(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
-
