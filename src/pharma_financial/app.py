@@ -12,6 +12,7 @@ from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
 import math
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, cast
+from zipfile import ZipFile
 
 try:  # pragma: no cover - allow importing helper functions without Streamlit installed
     import streamlit as st
@@ -569,7 +570,7 @@ def main() -> None:
     with tabs[6]:
         _render_scenarios(outputs)
     with tabs[7]:
-        _render_rag_tab()
+        _render_rag_tab(model, outputs)
     with tabs[8]:
         _render_monte_carlo(outputs)
     with tabs[9]:
@@ -2400,7 +2401,28 @@ def _ensure_dataframe(table) -> "pd.DataFrame | list":
     return table
 
 
-def _render_rag_tab() -> None:
+def _build_business_plan_bundle(
+    model: FinancialModel, outputs: FinancialOutputs, scenario_name: str
+) -> tuple[dict[str, tuple[bytes, str, str]], bytes]:
+    sections = collect_report_sections(model, outputs)
+    report_name = "business_plan"
+    slug = _scenario_slug(scenario_name)
+    if slug and slug != "base":
+        report_name = f"{report_name}_{slug}"
+
+    formats = ["PDF", "Word", "Excel"]
+    reports: dict[str, tuple[bytes, str, str]] = {}
+    for format_name in formats:
+        reports[format_name] = generate_report(sections, format_name, report_name=report_name)
+
+    bundle_buffer = io.BytesIO()
+    with ZipFile(bundle_buffer, mode="w") as archive:
+        for format_name, (data, _mime, filename) in reports.items():
+            archive.writestr(filename, data)
+    return reports, bundle_buffer.getvalue()
+
+
+def _render_rag_tab(model: FinancialModel, outputs: FinancialOutputs) -> None:
     st.markdown("### Retrieval-Augmented Generation (RAG) Assistant")
     st.caption(
         "Upload supporting documents and retrieve the most relevant excerpts for a query."
@@ -2455,6 +2477,40 @@ def _render_rag_tab() -> None:
         label = f"Result {idx} · {source} · score {score:.2%}"
         with st.expander(label, expanded=idx == 1):
             st.write(result.get("text", ""))
+
+    st.markdown("### Business Plan Downloads")
+    st.caption(
+        "Generate a consolidated business plan bundle that includes the full financial report."
+    )
+
+    scenario_name = st.session_state.get("excel_scenario_selection", "base")
+    if st.button("Prepare Business Plan Bundle", key="prepare_business_plan"):
+        with st.spinner("Building reports..."):
+            reports, bundle = _build_business_plan_bundle(model, outputs, scenario_name)
+        st.session_state["business_plan_reports"] = reports
+        st.session_state["business_plan_bundle"] = bundle
+
+    reports = st.session_state.get("business_plan_reports", {})
+    bundle = st.session_state.get("business_plan_bundle")
+    if reports:
+        pdf_bytes, pdf_mime, pdf_name = reports["PDF"]
+        word_bytes, word_mime, word_name = reports["Word"]
+        excel_bytes, excel_mime, excel_name = reports["Excel"]
+        st.download_button("Download Business Plan (PDF)", pdf_bytes, pdf_name, mime=pdf_mime)
+        st.download_button("Download Business Plan (Word)", word_bytes, word_name, mime=word_mime)
+        st.download_button("Download Business Plan (Excel)", excel_bytes, excel_name, mime=excel_mime)
+        if bundle:
+            st.download_button(
+                "Download Business Plan Bundle (ZIP)",
+                bundle,
+                "business_plan_bundle.zip",
+                mime="application/zip",
+            )
+        if st.button("Clear Prepared Business Plan", key="clear_business_plan"):
+            st.session_state.pop("business_plan_reports", None)
+            st.session_state.pop("business_plan_bundle", None)
+    else:
+        st.info("Click 'Prepare Business Plan Bundle' to enable downloads.")
 
 
 def _format_number(value: float) -> str:
