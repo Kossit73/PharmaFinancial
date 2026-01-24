@@ -3,6 +3,8 @@ pandas
 plotly
 numpy-financial
 streamlit
+altair<5
+standard-imghdr
 openpyxl
 python-docx
 fpdf

@@ -5,7 +5,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from io import BytesIO, StringIO
 from typing import Any, Iterable, List, Mapping, MutableMapping, Sequence, Tuple
 from xml.sax.saxutils import escape as xml_escape
@@ -188,7 +188,7 @@ def generate_report(
     if fmt not in {f.lower() for f in REPORT_FORMATS}:
         raise ReportGenerationError(f"Unsupported report format: {format_name}")
 
-    timestamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
 
     if fmt == "json":
         data = _build_json(sections)
@@ -240,7 +240,10 @@ def _build_json(sections: Sequence[ReportSection]) -> bytes:
                 }
             )
         payload.append(entry)
-    return json.dumps({"generated": datetime.now(UTC).isoformat(), "sections": payload}, indent=2).encode("utf-8")
+    return json.dumps(
+        {"generated": datetime.now(timezone.utc).isoformat(), "sections": payload},
+        indent=2,
+    ).encode("utf-8")
 
 
 def _build_csv(sections: Sequence[ReportSection]) -> bytes:
@@ -361,7 +364,7 @@ def _collect_report_blocks(sections: Sequence[ReportSection]) -> List[Tuple[str,
 
     blocks: List[Tuple[str, str]] = [
         ("title", "Pharmaceuticals Financial Report"),
-        ("subtitle", f"Generated on {datetime.now(UTC).isoformat()} UTC"),
+        ("subtitle", f"Generated on {datetime.now(timezone.utc).isoformat()} UTC"),
     ]
 
     for section in sections:
@@ -610,7 +613,7 @@ def _excel_styles_xml() -> str:
 
 
 def _excel_core_props() -> str:
-    generated = datetime.now(UTC).isoformat()
+    generated = datetime.now(timezone.utc).isoformat()
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
@@ -728,7 +731,7 @@ def _docx_document_rels() -> str:
 
 
 def _docx_core_props() -> str:
-    generated = datetime.now(UTC).isoformat()
+    generated = datetime.now(timezone.utc).isoformat()
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
