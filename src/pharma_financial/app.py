@@ -3384,37 +3384,63 @@ def _render_distributor_commission(payload: Mapping) -> None:
             "No distributor commission assumptions configured. Use the form below to add entries."
         )
 
-    visible_count = min(len(rows), MAX_VISIBLE_COMMISSION_ROWS)
-    if visible_count and len(rows) > MAX_VISIBLE_COMMISSION_ROWS:
+    st.markdown("#### Focused row editor")
+    selected_product = st.selectbox(
+        "Product filter",
+        options=product_options if product_options else [""],
+        index=0,
+        key="commission_filter_product",
+    )
+    selected_year = st.selectbox(
+        "Year filter",
+        options=year_options,
+        index=0,
+        key="commission_filter_year",
+    )
+    if selected_product:
         st.caption(
-            "Showing the first few commission rows. Add additional years or products using the "
-            "form below; existing entries remain saved in the model."
+            "Editing a single product/year entry. Change the filters to view another row."
         )
+
+    filtered_rows: list[tuple[int, dict]] = []
+    for idx, row in enumerate(rows):
+        if selected_product and str(row.get("Product", "")).strip() != selected_product:
+            continue
+        if selected_year and str(row.get("Year", "")) != selected_year:
+            continue
+        filtered_rows.append((idx, row))
+
+    if not filtered_rows:
+        st.caption(
+            "No matching commission row found for the selected filters. "
+            "Use the form below to add a new entry."
+        )
+    visible_count = min(len(filtered_rows), 1)
 
     updated_rows: list[dict] = []
 
     base_rates = _commission_base_rates(payload)
 
-    for index in range(visible_count):
-        row = rows[index]
+    for view_index in range(visible_count):
+        row_index, row = filtered_rows[view_index]
         container = st.container()
         with container:
             cols = st.columns([1.0, 1.8, 1.3, 1.4, 1.4, 1.6, 0.7])
-            year_default = int(row.get("Year", years[index] if index < len(years) else 0))
+            year_default = int(row.get("Year", years[row_index] if row_index < len(years) else 0))
             year_label = str(year_default) if str(year_default) in year_options else year_options[0]
             year_value = int(
                 cols[0].selectbox(
                     "Year",
                     options=year_options,
                     index=year_options.index(year_label),
-                    key=f"commission_year_{index}",
+                    key=f"commission_year_{row_index}",
                 )
             )
             product_value = _select_or_create_option(
                 cols[1],
                 "Product",
                 product_options,
-                f"commission_product_{index}",
+                f"commission_product_{row_index}",
                 current_value=str(row.get("Product", "")),
             )
             base_rate = base_rates.get(product_value, 0.05)
@@ -3425,7 +3451,7 @@ def _render_distributor_commission(payload: Mapping) -> None:
                 min_value=0.0,
                 format="%.2f",
                 disabled=True,
-                key=f"commission_base_{index}",
+                key=f"commission_base_{row_index}",
             )
             rate_value = cols[3].number_input(
                 "Yearly Commission % (Increment)",
@@ -3433,7 +3459,7 @@ def _render_distributor_commission(payload: Mapping) -> None:
                 step=0.05,
                 min_value=0.0,
                 format="%.4f",
-                key=f"commission_increment_{index}",
+                key=f"commission_increment_{row_index}",
             )
             revenue_estimate = _commission_revenue_estimate(payload, year_value, product_value)
             revenue_default = float(row.get("Revenue", revenue_estimate))
@@ -3443,8 +3469,8 @@ def _render_distributor_commission(payload: Mapping) -> None:
                 "Yearly Commission %": float(rate_value),
             }
             preview_rows = [dict(item) for item in rows]
-            if index < len(preview_rows):
-                preview_rows[index] = preview_row
+            if row_index < len(preview_rows):
+                preview_rows[row_index] = preview_row
             effective_rate = _commission_effective_rate(
                 preview_rows, payload, product_value, year_value
             )
@@ -3455,7 +3481,7 @@ def _render_distributor_commission(payload: Mapping) -> None:
                 min_value=0.0,
                 format="%.2f",
                 disabled=True,
-                key=f"commission_effective_{index}",
+                key=f"commission_effective_{row_index}",
             )
             revenue_value = cols[5].number_input(
                 "Revenue",
@@ -3463,11 +3489,11 @@ def _render_distributor_commission(payload: Mapping) -> None:
                 step=1000.0,
                 min_value=0.0,
                 format="%.2f",
-                key=f"commission_revenue_{index}",
+                key=f"commission_revenue_{row_index}",
             )
             cols[6].markdown("&nbsp;")
-            if cols[6].button("Remove", key=f"commission_remove_{index}"):
-                rows.pop(index)
+            if cols[6].button("Remove", key=f"commission_remove_{row_index}"):
+                rows.pop(row_index)
                 st.session_state["commission_rows"] = rows
                 _commission_rows_to_payload(rows, payload)
                 _rerun()
@@ -3480,22 +3506,27 @@ def _render_distributor_commission(payload: Mapping) -> None:
         )
 
         updated_rows.append(
-            {
-                "Year": int(year_value),
-                "Product": product_value.strip(),
-                "Yearly Commission %": float(rate_value),
-                "Revenue": float(revenue_value),
-                "Payment Days": int(row.get("Payment Days", 30)),
-            }
+            (
+                row_index,
+                {
+                    "Year": int(year_value),
+                    "Product": product_value.strip(),
+                    "Yearly Commission %": float(rate_value),
+                    "Revenue": float(revenue_value),
+                    "Payment Days": int(row.get("Payment Days", 30)),
+                },
+            )
         )
 
-    for hidden_row in rows[visible_count:]:
-        updated_rows.append(dict(hidden_row))
+    updated_map = {idx: data for idx, data in updated_rows}
+    merged_rows: list[dict] = []
+    for idx, row in enumerate(rows):
+        merged_rows.append(updated_map.get(idx, dict(row)))
 
-    if updated_rows != rows:
-        st.session_state["commission_rows"] = updated_rows
-        _commission_rows_to_payload(updated_rows, payload)
-        rows = updated_rows
+    if merged_rows != rows:
+        st.session_state["commission_rows"] = merged_rows
+        _commission_rows_to_payload(merged_rows, payload)
+        rows = merged_rows
     else:
         rows = st.session_state.get("commission_rows", rows)
 
