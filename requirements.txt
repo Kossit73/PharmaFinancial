@@ -3,7 +3,7 @@ pandas
 plotly
 numpy-financial
 streamlit
-altair
+altair<5
 openpyxl
 python-docx
 fpdf
