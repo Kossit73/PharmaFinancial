@@ -4,6 +4,7 @@ plotly
 numpy-financial
 streamlit
 altair<5
+imghdr
 openpyxl
 python-docx
 fpdf
