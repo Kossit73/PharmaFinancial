@@ -83,8 +83,24 @@ def _running_with_streamlit() -> bool:
     return get_script_run_ctx() is not None
 
 
+def _show_runtime_diagnostics() -> None:
+    """Render a lightweight diagnostics block in Streamlit Cloud."""
+
+    import platform
+
+    import streamlit as st
+
+    st.sidebar.markdown("#### Runtime Diagnostics")
+    st.sidebar.caption(f"Python: {platform.python_version()}")
+    st.sidebar.caption(f"Working dir: {Path.cwd()}")
+    st.sidebar.caption(f"Repo root: {ROOT}")
+    st.sidebar.caption(f"Src path: {SRC}")
+    st.sidebar.caption(f"Fallback src: {FALLBACK_SRC}")
+
+
 if __name__ == "__main__":
     if _running_with_streamlit():
+        _show_runtime_diagnostics()
         main()
     else:  # pragma: no cover - executed only when run without ``streamlit run``
         sys.stderr.write(
