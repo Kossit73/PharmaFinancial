@@ -12,6 +12,8 @@ from pathlib import Path
 # Streamlit Cloud deployments without requiring an editable install.
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
+if str(ROOT) not in sys.path:  # pragma: no cover - import path fix
+    sys.path.insert(0, str(ROOT))
 if SRC.exists() and str(SRC) not in sys.path:  # pragma: no cover - import path fix
     sys.path.insert(0, str(SRC))
 
@@ -19,8 +21,11 @@ def _load_app_main():
     try:
         from pharma_financial.app import main
     except ModuleNotFoundError as exc:  # pragma: no cover - executed when deps missing
-        if exc.name == "pharma_financial":
-            sys.path.insert(0, str(SRC))
+        if exc.name in {"pharma_financial", "pharma_financial.app"}:
+            if str(ROOT) not in sys.path:
+                sys.path.insert(0, str(ROOT))
+            if str(SRC) not in sys.path:
+                sys.path.insert(0, str(SRC))
             try:
                 from pharma_financial.app import main  # type: ignore[redefined-outer-name]
             except ModuleNotFoundError as retry_exc:
@@ -35,7 +40,10 @@ def _load_app_main():
                 "Streamlit is not installed. Install project dependencies with "
                 "`pip install -r requirements.txt` before running the app."
             ) from exc
-        raise
+        raise SystemExit(
+            f"Unable to import required dependency '{exc.name}'. Ensure the dependency is "
+            "installed or add it to requirements.txt."
+        ) from exc
     return main
 
 
