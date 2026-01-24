@@ -2281,9 +2281,19 @@ def _clean_streamlit_cell(value: object) -> object:
 
 def _sanitize_dataframe(frame: "pd.DataFrame") -> "pd.DataFrame":
     cleaned = frame.copy()
+    cleaned.columns = [_clean_streamlit_cell(column) for column in cleaned.columns]
     cleaned.columns = [str(column) for column in cleaned.columns]
     if cleaned.index.name is not None:
-        cleaned.index.name = str(cleaned.index.name)
+        cleaned.index.name = str(_clean_streamlit_cell(cleaned.index.name))
+    if isinstance(cleaned.index, pd.MultiIndex):
+        cleaned.index = pd.MultiIndex.from_tuples(
+            [
+                tuple(_clean_streamlit_cell(level) for level in levels)
+                for levels in cleaned.index.to_list()
+            ]
+        )
+    elif cleaned.index.dtype == "object":
+        cleaned.index = cleaned.index.map(_clean_streamlit_cell)
     for column in cleaned.columns:
         if cleaned[column].dtype == "object":
             cleaned[column] = cleaned[column].map(_clean_streamlit_cell)
