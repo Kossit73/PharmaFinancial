@@ -325,61 +325,90 @@ def _build_excel(sections: Sequence[ReportSection]) -> bytes:
 
 
 def _build_word(sections: Sequence[ReportSection]) -> bytes:
-    blocks = _collect_report_blocks(sections)
-
     if Document is not None:
         document = Document()
-        for kind, text in blocks:
-            if kind == "title":
-                document.add_heading(text, level=1)
-            elif kind == "subtitle":
-                document.add_paragraph(text, style="Subtitle")
-            elif kind == "heading1":
-                document.add_heading(text, level=2)
-            elif kind == "heading2":
-                document.add_heading(text, level=3)
-            elif kind == "note":
-                document.add_paragraph(text, style="List Bullet")
-            else:
-                document.add_paragraph(text)
+        document.add_heading("Pharmaceuticals Financial Report", level=1)
+        document.add_paragraph(
+            f"Generated on {datetime.now(timezone.utc).isoformat()} UTC",
+            style="Subtitle",
+        )
+        for section in sections:
+            document.add_heading(section.title, level=2)
+            if section.notes:
+                for note in section.notes:
+                    document.add_paragraph(note, style="List Bullet")
+            for table in section.tables:
+                document.add_heading(table.title, level=3)
+                if table.note:
+                    document.add_paragraph(table.note, style="List Bullet")
+                rows = _table_to_rows(table.data)
+                if not rows:
+                    document.add_paragraph("No data available.")
+                    continue
+                columns = _ordered_columns(rows)
+                if not columns:
+                    document.add_paragraph("No data available.")
+                    continue
+                word_table = document.add_table(rows=1, cols=len(columns))
+                word_table.style = "Table Grid"
+                header_cells = word_table.rows[0].cells
+                for idx, column in enumerate(columns):
+                    header_cells[idx].text = str(column)
+                for row in rows:
+                    row_cells = word_table.add_row().cells
+                    for idx, column in enumerate(columns):
+                        row_cells[idx].text = _format_report_value(row.get(column, ""))
         buffer = BytesIO()
         document.save(buffer)
         return buffer.getvalue()
 
-    return _build_word_fallback(blocks)
+    return _build_word_fallback(_collect_report_blocks(sections))
 
 
 def _build_pdf(sections: Sequence[ReportSection]) -> bytes:
-    blocks = _collect_report_blocks(sections)
-
     if FPDF is not None:
         pdf = FPDF()
         pdf.set_auto_page_break(auto=True, margin=15)
         pdf.add_page()
-        for kind, text in blocks:
-            safe_text = _safe_pdf_text(text)
-            if kind == "title":
-                pdf.set_font("Arial", "B", 16)
-                pdf.cell(0, 10, safe_text, ln=True)
-                pdf.ln(2)
-            elif kind == "subtitle":
+        pdf.set_font("Arial", "B", 16)
+        pdf.cell(0, 10, _safe_pdf_text("Pharmaceuticals Financial Report"), ln=True)
+        pdf.set_font("Arial", "", 10)
+        pdf.cell(
+            0,
+            8,
+            _safe_pdf_text(f"Generated on {datetime.now(timezone.utc).isoformat()} UTC"),
+            ln=True,
+        )
+        for section in sections:
+            pdf.ln(4)
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 8, _safe_pdf_text(section.title.upper()), ln=True)
+            pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+            if section.notes:
                 pdf.set_font("Arial", "", 10)
-                pdf.cell(0, 8, safe_text, ln=True)
-            elif kind == "heading1":
-                pdf.ln(4)
-                pdf.set_font("Arial", "B", 14)
-                pdf.cell(0, 8, safe_text, ln=True)
-                pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-            elif kind == "heading2":
-                pdf.set_font("Arial", "B", 12)
-                pdf.cell(0, 7, safe_text, ln=True)
-            elif kind == "note":
-                _pdf_multiline(pdf, f"- {safe_text}")
-            else:
-                _pdf_multiline(pdf, safe_text)
+                for note in section.notes:
+                    _pdf_multiline(pdf, f"- {_safe_pdf_text(note)}")
+            for table in section.tables:
+                pdf.ln(2)
+                pdf.set_font("Arial", "B", 11)
+                pdf.cell(0, 7, _safe_pdf_text(table.title), ln=True)
+                if table.note:
+                    pdf.set_font("Arial", "", 9)
+                    _pdf_multiline(pdf, f"Note: {_safe_pdf_text(table.note)}")
+                rows = _table_to_rows(table.data)
+                if not rows:
+                    pdf.set_font("Arial", "", 9)
+                    _pdf_multiline(pdf, "No data available.")
+                    continue
+                columns = _ordered_columns(rows)
+                if not columns:
+                    pdf.set_font("Arial", "", 9)
+                    _pdf_multiline(pdf, "No data available.")
+                    continue
+                _render_pdf_table(pdf, columns, rows)
         return bytes(pdf.output(dest="S").encode("latin-1"))
 
-    return _build_pdf_fallback(blocks)
+    return _build_pdf_fallback(_collect_report_blocks(sections))
 
 
 # ---------------------------------------------------------------------------
@@ -431,6 +460,61 @@ def _safe_pdf_text(text: str) -> str:
         return text
     except UnicodeEncodeError:
         return text.encode("latin-1", "replace").decode("latin-1")
+
+
+def _format_report_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        if math.isnan(value):
+            return ""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        absolute = abs(float(value))
+        formatted = f"{absolute:,.4f}" if absolute < 1 else f"{absolute:,.2f}"
+        return f"({formatted})" if value < 0 else formatted
+    return str(value)
+
+
+def _truncate_text(pdf: "FPDF", text: str, width: float) -> str:
+    if pdf.get_string_width(text) <= width:
+        return text
+    trimmed = text
+    while trimmed and pdf.get_string_width(f"{trimmed}…") > width:
+        trimmed = trimmed[:-1]
+    return f"{trimmed}…" if trimmed else text[:1]
+
+
+def _render_pdf_table(
+    pdf: "FPDF",
+    columns: Sequence[str],
+    rows: Sequence[Mapping[str, Any]],
+) -> None:
+    page_width = pdf.w - pdf.l_margin - pdf.r_margin
+    if not columns:
+        return
+    first_width = page_width * 0.45 if len(columns) > 1 else page_width
+    other_width = (
+        (page_width - first_width) / max(len(columns) - 1, 1) if len(columns) > 1 else 0
+    )
+    widths = [first_width] + [other_width] * (len(columns) - 1)
+
+    pdf.set_font("Arial", "B", 9)
+    pdf.set_fill_color(230, 230, 230)
+    for idx, column in enumerate(columns):
+        text = _truncate_text(pdf, _safe_pdf_text(str(column)), widths[idx])
+        align = "L" if idx == 0 else "R"
+        pdf.cell(widths[idx], 7, text, border="B", align=align, fill=True)
+    pdf.ln(7)
+
+    pdf.set_font("Arial", "", 9)
+    for row in rows:
+        for idx, column in enumerate(columns):
+            raw = row.get(column, "")
+            value = _format_report_value(raw)
+            align = "L" if idx == 0 else "R"
+            text = _truncate_text(pdf, _safe_pdf_text(value), widths[idx])
+            pdf.cell(widths[idx], 6, text, border="B", align=align)
+        pdf.ln(6)
 
 
 def _collect_sheet_entries(sections: Sequence[ReportSection]) -> List[dict[str, Any]]:

@@ -46,7 +46,7 @@ from .model import (
     FinancialModel,
     FinancialOutputs,
 )
-from .report import ReportSection, collect_report_sections, generate_report
+from .report import ReportSection, ReportTable, collect_report_sections, generate_report
 from .table import Table
 
 try:  # pragma: no cover - executed in environments with pandas available
@@ -2433,6 +2433,114 @@ def _final_value(table: Table, column: str) -> Optional[float]:
     return float(values[-1]) if values else None
 
 
+def _report_rows(table: Any) -> List[Mapping[str, Any]]:
+    if table is None:
+        return []
+    if isinstance(table, list):
+        if table and isinstance(table[0], Mapping):
+            return [dict(row) for row in table]
+        return [{"Value": item} for item in table]
+    if isinstance(table, Table):
+        mapping = table.as_dict()
+        rows: List[Dict[str, Any]] = []
+        for position, idx in enumerate(table.index):
+            row: Dict[str, Any] = {table.index_name: idx}
+            for column, values in mapping.items():
+                row[column] = values[position]
+            rows.append(row)
+        return rows
+    if pd is not None and isinstance(table, pd.DataFrame):
+        return table.reset_index().to_dict(orient="records")
+    if isinstance(table, Mapping):
+        return [{"Metric": key, "Value": value} for key, value in table.items()]
+    return []
+
+
+def _ordered_columns(rows: Sequence[Mapping[str, Any]]) -> List[str]:
+    seen: List[str] = []
+    for row in rows:
+        for key in row.keys():
+            if key not in seen:
+                seen.append(key)
+    return seen
+
+
+def _parse_float(value: Any) -> Optional[float]:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if isinstance(value, float) and math.isnan(value):
+            return None
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_writeup_value(value: float) -> str:
+    formatted = f"{abs(value):,.2f}" if abs(value) >= 1 else f"{abs(value):,.4f}"
+    return f"({formatted})" if value < 0 else formatted
+
+
+def _table_writeup(table: ReportTable) -> List[str]:
+    rows = _report_rows(table.data)
+    if not rows:
+        return []
+    columns = _ordered_columns(rows)
+    if not columns:
+        return []
+
+    label_key = columns[0]
+    numeric_columns = [col for col in columns[1:] if any(_parse_float(row.get(col)) is not None for row in rows)]
+    if not numeric_columns:
+        return []
+
+    def _sort_key(column: str) -> int:
+        try:
+            return int(str(column))
+        except (TypeError, ValueError):
+            return 0
+
+    numeric_columns.sort(key=_sort_key)
+    first_col, last_col = numeric_columns[0], numeric_columns[-1]
+    sentences: List[str] = []
+
+    candidates: List[Tuple[str, float, float]] = []
+    for row in rows:
+        label = str(row.get(label_key, "")).strip()
+        first_value = _parse_float(row.get(first_col))
+        last_value = _parse_float(row.get(last_col))
+        if label and first_value is not None and last_value is not None:
+            candidates.append((label, first_value, last_value))
+
+    if not candidates:
+        return []
+
+    candidates.sort(key=lambda item: abs(item[2]), reverse=True)
+    for label, first_value, last_value in candidates[:3]:
+        change = last_value - first_value
+        if abs(first_value) > 0.0001:
+            pct = change / abs(first_value) * 100.0
+            sentences.append(
+                f"{label} moved from {_format_writeup_value(first_value)} to "
+                f"{_format_writeup_value(last_value)} (Δ {_format_writeup_value(change)}, {pct:.1f}%)."
+            )
+        else:
+            sentences.append(
+                f"{label} ended at {_format_writeup_value(last_value)} (change {_format_writeup_value(change)})."
+            )
+
+    if sentences:
+        return [f"{table.title}: " + " ".join(sentences)]
+    return []
+
+
+def _section_writeup(section: ReportSection) -> List[str]:
+    notes: List[str] = []
+    for table in section.tables:
+        notes.extend(_table_writeup(table))
+    return notes
+
+
 def _apply_section_writeups(
     sections: List[ReportSection],
     outputs: FinancialOutputs,
@@ -2514,6 +2622,7 @@ def _apply_section_writeups(
     for section in sections:
         notes = list(section.notes or [])
         notes.extend(summary_notes.get(section.title, []))
+        notes.extend(_section_writeup(section))
         rag_hits = _score_chunks(section.title, rag_chunks)
         if rag_hits:
             highlights = " ".join(
