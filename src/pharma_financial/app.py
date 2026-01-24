@@ -46,7 +46,7 @@ from .model import (
     FinancialModel,
     FinancialOutputs,
 )
-from .report import collect_report_sections, generate_report
+from .report import ReportSection, collect_report_sections, generate_report
 from .table import Table
 
 try:  # pragma: no cover - executed in environments with pandas available
@@ -2405,6 +2405,8 @@ def _build_business_plan_bundle(
     model: FinancialModel, outputs: FinancialOutputs, scenario_name: str
 ) -> tuple[dict[str, tuple[bytes, str, str]], bytes]:
     sections = collect_report_sections(model, outputs)
+    rag_chunks = st.session_state.get("rag_chunks", [])
+    sections = _apply_section_writeups(sections, outputs, rag_chunks)
     report_name = "business_plan"
     slug = _scenario_slug(scenario_name)
     if slug and slug != "base":
@@ -2420,6 +2422,115 @@ def _build_business_plan_bundle(
         for format_name, (data, _mime, filename) in reports.items():
             archive.writestr(filename, data)
     return reports, bundle_buffer.getvalue()
+
+
+def _summary_metric(outputs: FinancialOutputs, name: str) -> Optional[float]:
+    table = outputs.summary_metrics
+    if name in table.index:
+        position = table.index.index(name)
+        return float(table.data["Value"][position])
+    return None
+
+
+def _final_value(table: Table, column: str) -> Optional[float]:
+    if column not in table.data:
+        return None
+    values = table.column(column)
+    return float(values[-1]) if values else None
+
+
+def _apply_section_writeups(
+    sections: List[ReportSection],
+    outputs: FinancialOutputs,
+    rag_chunks: List[Mapping[str, object]],
+) -> List[ReportSection]:
+    summary_notes: Dict[str, List[str]] = {}
+
+    npv = _summary_metric(outputs, "NPV")
+    irr = _summary_metric(outputs, "IRR")
+    payback = _summary_metric(outputs, "Payback Period")
+    discounted_payback = _summary_metric(outputs, "Discounted Payback")
+    if npv is not None:
+        summary = (
+            f"NPV of {npv:,.2f} with IRR {irr:.2%} and payback year {payback:.1f} "
+            f"(discounted payback {discounted_payback:.1f})."
+            if irr is not None and payback is not None and discounted_payback is not None
+            else f"NPV of {npv:,.2f}."
+        )
+        summary_notes.setdefault("Key Metrics Dashboard", []).append(summary)
+
+    income = outputs.income_statement
+    net_revenue = _final_value(income, "Net Revenue")
+    ebitda = _final_value(income, "EBITDA")
+    ebitda_margin = _final_value(income, "EBITDA Margin")
+    if net_revenue is not None:
+        summary_notes.setdefault("Financial Performance", []).append(
+            f"Latest net revenue {net_revenue:,.2f} with EBITDA {ebitda:,.2f} "
+            f"and EBITDA margin {ebitda_margin:.2%}."
+            if ebitda is not None and ebitda_margin is not None
+            else f"Latest net revenue {net_revenue:,.2f}."
+        )
+
+    balance = outputs.balance_sheet
+    cash = _final_value(balance, "Cash")
+    assets = _final_value(balance, "Total Assets")
+    liabilities = _final_value(balance, "Total Liabilities")
+    if assets is not None:
+        summary_notes.setdefault("Financial Position", []).append(
+            f"Ending assets {assets:,.2f}, liabilities {liabilities:,.2f}, "
+            f"and cash {cash:,.2f}."
+        )
+
+    cash_flow = outputs.cash_flow
+    net_cash = _final_value(cash_flow, CASH_FLOW_NET_COLUMN)
+    if net_cash is not None:
+        summary_notes.setdefault("Cash Flow Statement", []).append(
+            f"Final period net cash flow {net_cash:,.2f}."
+        )
+
+    if outputs.sensitivity_results:
+        summary_notes.setdefault("Sensitivity Analysis", []).append(
+            f"Sensitivity runs: {len(outputs.sensitivity_results)} variables tested."
+        )
+
+    if outputs.scenario_results:
+        summary_notes.setdefault("Scenario / IFs Analysis", []).append(
+            f"Scenario set includes {len(outputs.scenario_results)} cases."
+        )
+
+    if outputs.monte_carlo.index:
+        iterations = len(outputs.monte_carlo.index)
+        npv_series = outputs.monte_carlo.column("NPV") if "NPV" in outputs.monte_carlo.data else []
+        if npv_series:
+            average_npv = sum(npv_series) / len(npv_series)
+            summary_notes.setdefault("Monte Carlo Simulation", []).append(
+                f"Monte Carlo runs: {iterations}, average NPV {average_npv:,.2f}."
+            )
+        else:
+            summary_notes.setdefault("Monte Carlo Simulation", []).append(
+                f"Monte Carlo runs: {iterations}."
+            )
+
+    if outputs.break_even.index:
+        summary_notes.setdefault("Break-even & Payback", []).append(
+            f"Break-even analysis covers {len(outputs.break_even.index)} product(s)."
+        )
+
+    updated_sections: List[ReportSection] = []
+    for section in sections:
+        notes = list(section.notes or [])
+        notes.extend(summary_notes.get(section.title, []))
+        rag_hits = _score_chunks(section.title, rag_chunks)
+        if rag_hits:
+            highlights = " ".join(
+                f"{hit.get('source', 'Document')}: {hit.get('text', '')}"
+                for hit in rag_hits[:2]
+            )
+            notes.append(f"RAG highlights: {highlights}")
+        updated_sections.append(
+            ReportSection(section.title, section.tables, notes=notes or None)
+        )
+    return updated_sections
 
 
 def _render_rag_tab(model: FinancialModel, outputs: FinancialOutputs) -> None:

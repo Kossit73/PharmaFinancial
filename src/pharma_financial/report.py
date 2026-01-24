@@ -29,6 +29,15 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover - FPDF may not be installed
     FPDF = None  # type: ignore
 
+try:  # pragma: no cover - optional dependency for Excel styling
+    from openpyxl.styles import Alignment, Font, PatternFill  # type: ignore
+    from openpyxl.utils import get_column_letter  # type: ignore
+except Exception:  # pragma: no cover - optional dependency for styling
+    Alignment = None  # type: ignore
+    Font = None  # type: ignore
+    PatternFill = None  # type: ignore
+    get_column_letter = None  # type: ignore
+
 JSON_MIME = "application/json"
 CSV_MIME = "text/csv"
 EXCEL_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -292,6 +301,22 @@ def _build_excel(sections: Sequence[ReportSection]) -> bytes:
                                 frame[note_col] = ""
                             frame.iloc[0, frame.columns.get_loc(note_col)] = note
                     frame.to_excel(writer, sheet_name=entry["sheet_name"], index=False)
+                    sheet = writer.sheets.get(entry["sheet_name"])
+                    if sheet and Font and PatternFill and Alignment and get_column_letter:
+                        header_fill = PatternFill(fill_type="solid", fgColor="1F4E78")
+                        header_font = Font(color="FFFFFF", bold=True)
+                        for cell in sheet[1]:
+                            cell.font = header_font
+                            cell.fill = header_fill
+                            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                        sheet.freeze_panes = "A2"
+                        for idx, column_cells in enumerate(sheet.columns, start=1):
+                            max_length = 0
+                            for cell in column_cells[: min(len(column_cells), 50)]:
+                                value = "" if cell.value is None else str(cell.value)
+                                max_length = max(max_length, len(value))
+                            adjusted = min(max_length + 2, 60)
+                            sheet.column_dimensions[get_column_letter(idx)].width = adjusted
             return buffer.getvalue()
         except Exception:  # pragma: no cover - fall back to pure-Python writer
             pass
@@ -314,7 +339,7 @@ def _build_word(sections: Sequence[ReportSection]) -> bytes:
             elif kind == "heading2":
                 document.add_heading(text, level=3)
             elif kind == "note":
-                document.add_paragraph(text, style="Intense Quote")
+                document.add_paragraph(text, style="List Bullet")
             else:
                 document.add_paragraph(text)
         buffer = BytesIO()
@@ -335,6 +360,7 @@ def _build_pdf(sections: Sequence[ReportSection]) -> bytes:
             if kind == "title":
                 pdf.set_font("Arial", "B", 16)
                 pdf.cell(0, 10, text, ln=True)
+                pdf.ln(2)
             elif kind == "subtitle":
                 pdf.set_font("Arial", "", 10)
                 pdf.cell(0, 8, text, ln=True)
@@ -342,11 +368,12 @@ def _build_pdf(sections: Sequence[ReportSection]) -> bytes:
                 pdf.ln(4)
                 pdf.set_font("Arial", "B", 14)
                 pdf.cell(0, 8, text, ln=True)
+                pdf.line(10, pdf.get_y(), 200, pdf.get_y())
             elif kind == "heading2":
                 pdf.set_font("Arial", "B", 12)
                 pdf.cell(0, 7, text, ln=True)
             elif kind == "note":
-                _pdf_multiline(pdf, text)
+                _pdf_multiline(pdf, f"• {text}")
             else:
                 _pdf_multiline(pdf, text)
         return bytes(pdf.output(dest="S").encode("latin-1"))
@@ -390,6 +417,7 @@ def _collect_report_blocks(sections: Sequence[ReportSection]) -> List[Tuple[str,
                 for row in rows:
                     values = [_stringify(value) for value in row.values()]
                     blocks.append(("body", " | ".join(values) or "No data available."))
+            blocks.append(("body", ""))
 
     return blocks
 
