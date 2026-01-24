@@ -533,12 +533,9 @@ def main() -> None:
     )
 
     config_container = st.container()
-    download_container = st.container()
 
     inputs, digest = _resolve_inputs(config_container)
     model, outputs = _cached_model_run(inputs, digest)
-
-    _render_excel_model_download(download_container, model, outputs)
 
     tabs = st.tabs(
         [
@@ -574,6 +571,7 @@ def main() -> None:
     with tabs[8]:
         _render_break_even(outputs)
     with tabs[9]:
+        _render_excel_model_download(st.container(), model, outputs)
         _render_dashboard_tab(model, outputs)
 
 
