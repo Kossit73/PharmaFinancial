@@ -38,7 +38,13 @@ def _running_with_streamlit() -> bool:
     try:  # pragma: no cover - depends on Streamlit internals
         from streamlit.runtime.scriptrunner import get_script_run_ctx
     except Exception:  # pragma: no cover - older Streamlit versions
-        return False
+        get_script_run_ctx = None  # type: ignore[assignment]
+
+    if get_script_run_ctx is None:
+        try:  # pragma: no cover - Streamlit < 1.18
+            from streamlit.scriptrunner import get_script_run_ctx
+        except Exception:
+            return False
 
     return get_script_run_ctx() is not None
 

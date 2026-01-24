@@ -493,7 +493,13 @@ def _streamlit_runtime_exists() -> bool:
     try:  # pragma: no cover - fallback for older Streamlit versions
         from streamlit.runtime.scriptrunner import get_script_run_ctx
     except Exception:
-        return False
+        get_script_run_ctx = None  # type: ignore[assignment]
+
+    if get_script_run_ctx is None:
+        try:  # pragma: no cover - older Streamlit versions
+            from streamlit.scriptrunner import get_script_run_ctx
+        except Exception:
+            return False
 
     return get_script_run_ctx() is not None
 
