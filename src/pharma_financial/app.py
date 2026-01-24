@@ -504,20 +504,6 @@ def _streamlit_runtime_exists() -> bool:
     return get_script_run_ctx() is not None
 
 
-def _render_runtime_diagnostics() -> None:
-    """Render a lightweight diagnostics block in Streamlit Cloud."""
-
-    try:  # pragma: no cover - runtime specific
-        import platform
-
-        st.sidebar.markdown("#### Runtime Diagnostics")
-        st.sidebar.caption(f"Python: {platform.python_version()}")
-        st.sidebar.caption(f"Working dir: {Path.cwd()}")
-        st.sidebar.caption(f"App root: {Path(__file__).resolve().parent}")
-    except Exception:
-        return
-
-
 def main() -> None:
     if not _streamlit_runtime_exists():  # pragma: no cover - requires Streamlit runner
         raise RuntimeError(
@@ -530,8 +516,6 @@ def main() -> None:
         page_icon="💊",
         layout="wide",
     )
-
-    _render_runtime_diagnostics()
 
     st.title("Pharmaceuticals Financial Model")
     st.caption(
