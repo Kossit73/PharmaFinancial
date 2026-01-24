@@ -2271,11 +2271,30 @@ def _with_year(table) -> "pd.DataFrame | Table | list":
     return result.reset_index(drop=True)
 
 
+def _clean_streamlit_cell(value: object) -> object:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, (dict, list, tuple, set)):
+        return json.dumps(value, default=_json_default)
+    return value
+
+
+def _sanitize_dataframe(frame: "pd.DataFrame") -> "pd.DataFrame":
+    cleaned = frame.copy()
+    cleaned.columns = [str(column) for column in cleaned.columns]
+    if cleaned.index.name is not None:
+        cleaned.index.name = str(cleaned.index.name)
+    for column in cleaned.columns:
+        if cleaned[column].dtype == "object":
+            cleaned[column] = cleaned[column].map(_clean_streamlit_cell)
+    return cleaned
+
+
 def _ensure_dataframe(table) -> "pd.DataFrame | list":
     if isinstance(table, list):
         if pd is None:
             return table
-        return pd.DataFrame(table)
+        return _sanitize_dataframe(pd.DataFrame(table))
     if isinstance(table, Table):
         if pd is None:
             rows = []
@@ -2286,10 +2305,13 @@ def _ensure_dataframe(table) -> "pd.DataFrame | list":
                     row[column] = values[idx]
                 rows.append(row)
             return rows
-        return table.to_frame()
+        return _sanitize_dataframe(table.to_frame())
     if hasattr(table, "to_frame"):
         try:
-            return table.to_frame()
+            frame = table.to_frame()
+            if pd is not None and isinstance(frame, pd.DataFrame):
+                return _sanitize_dataframe(frame)
+            return frame
         except Exception:
             pass
     return table
