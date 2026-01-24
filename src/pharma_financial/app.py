@@ -2579,31 +2579,40 @@ def _render_utility_schedule(payload: dict) -> None:
     if not year_catalog:
         year_catalog = [f"Year {idx + 1}" for idx in range(len(rows) or 1)]
 
-    for index, row in enumerate(rows):
-        entry = _normalise_utility_entry(row, index)
+    st.markdown("#### Focused utility editor")
+    selected_label = st.selectbox(
+        "Utility year",
+        options=year_catalog,
+        index=0,
+        key="utility_row_selector",
+    )
+    st.caption("Editing a single utility year entry. Change the selector to view another year.")
+
+    filtered_rows: list[tuple[int, dict]] = []
+    for idx, row in enumerate(rows):
+        label = str(row.get("label") or row.get("Year") or row.get("year") or "")
+        if label == selected_label:
+            filtered_rows.append((idx, row))
+
+    if not filtered_rows:
+        st.caption(
+            "No matching utility entry found for the selected year. "
+            "Use the form below to add a new entry."
+        )
+
+    for slot in range(min(len(filtered_rows), 1)):
+        row_index, row = filtered_rows[slot]
+        entry = _normalise_utility_entry(row, row_index)
         container = st.container()
         with container:
             cols = st.columns([2.0, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 0.8])
 
-            default_label = None
-            if (
-                isinstance(payload_years, Sequence)
-                and index < len(payload_years)
-                and payload_years[index] is not None
-            ):
-                default_label = str(payload_years[index])
-            else:
-                candidate = entry.get("year")
-                if isinstance(candidate, (int, float)):
-                    default_label = str(int(candidate))
-            if not default_label:
-                default_label = str(entry.get("label") or f"Year {index + 1}")
-
+            default_label = str(entry.get("label") or selected_label or f"Year {row_index + 1}")
             label_value = _select_or_create_option(
                 cols[0],
                 "Year",
                 year_catalog,
-                f"utility_label_{index}",
+                f"utility_label_{row_index}",
                 current_value=default_label,
             )
             if label_value and label_value not in year_catalog:
@@ -2615,13 +2624,13 @@ def _render_utility_schedule(payload: dict) -> None:
                 label_value,
                 entry.get("year")
                 if isinstance(entry.get("year"), int)
-                else index + 1,
+                else row_index + 1,
             )
 
             electricity_per_day = cols[1].number_input(
                 "Electricity per day",
                 value=float(entry.get("electricity_per_day", 0.0)),
-                key=f"utility_elec_per_day_{index}",
+                key=f"utility_elec_per_day_{row_index}",
                 min_value=0.0,
                 step=0.1,
                 format="%.4f",
@@ -2629,7 +2638,7 @@ def _render_utility_schedule(payload: dict) -> None:
             electricity_rate = cols[2].number_input(
                 "Price per kWh",
                 value=float(entry.get("electricity_rate", 0.0)),
-                key=f"utility_elec_rate_{index}",
+                key=f"utility_elec_rate_{row_index}",
                 min_value=0.0,
                 step=0.01,
                 format="%.4f",
@@ -2637,7 +2646,7 @@ def _render_utility_schedule(payload: dict) -> None:
             electricity_days = cols[3].number_input(
                 "Electricity operating days",
                 value=int(entry.get("electricity_days", 0)),
-                key=f"utility_elec_days_{index}",
+                key=f"utility_elec_days_{row_index}",
                 min_value=0,
                 step=1,
             )
@@ -2645,7 +2654,7 @@ def _render_utility_schedule(payload: dict) -> None:
             water_per_day = cols[4].number_input(
                 "Water per day",
                 value=float(entry.get("water_per_day", 0.0)),
-                key=f"utility_water_per_day_{index}",
+                key=f"utility_water_per_day_{row_index}",
                 min_value=0.0,
                 step=0.1,
                 format="%.4f",
@@ -2653,7 +2662,7 @@ def _render_utility_schedule(payload: dict) -> None:
             water_rate = cols[5].number_input(
                 "Price per cubic meter",
                 value=float(entry.get("water_rate", 0.0)),
-                key=f"utility_water_rate_{index}",
+                key=f"utility_water_rate_{row_index}",
                 min_value=0.0,
                 step=0.01,
                 format="%.4f",
@@ -2661,7 +2670,7 @@ def _render_utility_schedule(payload: dict) -> None:
             water_days = cols[6].number_input(
                 "Water operating days",
                 value=int(entry.get("water_days", 0)),
-                key=f"utility_water_days_{index}",
+                key=f"utility_water_days_{row_index}",
                 min_value=0,
                 step=1,
             )
@@ -2669,7 +2678,7 @@ def _render_utility_schedule(payload: dict) -> None:
             steam_per_hour = cols[7].number_input(
                 "Steam per hour",
                 value=float(entry.get("steam_per_hour", 0.0)),
-                key=f"utility_steam_per_hour_{index}",
+                key=f"utility_steam_per_hour_{row_index}",
                 min_value=0.0,
                 step=0.1,
                 format="%.4f",
@@ -2677,7 +2686,7 @@ def _render_utility_schedule(payload: dict) -> None:
             steam_rate = cols[8].number_input(
                 "Price per steam hour",
                 value=float(entry.get("steam_rate", 0.0)),
-                key=f"utility_steam_rate_{index}",
+                key=f"utility_steam_rate_{row_index}",
                 min_value=0.0,
                 step=0.01,
                 format="%.4f",
@@ -2685,52 +2694,60 @@ def _render_utility_schedule(payload: dict) -> None:
             steam_days = cols[9].number_input(
                 "Steam operating days",
                 value=int(entry.get("steam_days", 0)),
-                key=f"utility_steam_days_{index}",
+                key=f"utility_steam_days_{row_index}",
                 min_value=0,
                 step=1,
             )
 
             remove_clicked = cols[10].button(
-                "Remove", key=f"utility_remove_{index}", help="Delete this utility row"
+                "Remove", key=f"utility_remove_{row_index}", help="Delete this utility row"
             )
 
             steam_hours = st.number_input(
                 "Steam operating hours",
                 value=int(entry.get("steam_hours", 0)),
-                key=f"utility_steam_hours_{index}",
+                key=f"utility_steam_hours_{row_index}",
                 min_value=0,
                 step=1,
             )
 
         if remove_clicked and len(rows) > 1:
-            del rows[index]
+            del rows[row_index]
             st.session_state["utility_entries"] = rows
             _utility_entries_to_payload(rows, payload)
             _rerun()
 
         updated_rows.append(
-            _normalise_utility_entry(
-                {
-                    "label": label_value,
-                    "year": parsed_year,
-                    "electricity_per_day": electricity_per_day,
-                    "electricity_rate": electricity_rate,
-                    "electricity_days": electricity_days,
-                    "water_per_day": water_per_day,
-                    "water_rate": water_rate,
-                    "water_days": water_days,
-                    "steam_per_hour": steam_per_hour,
-                    "steam_rate": steam_rate,
-                    "steam_days": steam_days,
-                    "steam_hours": steam_hours,
-                },
-                index,
+            (
+                row_index,
+                _normalise_utility_entry(
+                    {
+                        "label": label_value,
+                        "year": parsed_year,
+                        "electricity_per_day": electricity_per_day,
+                        "electricity_rate": electricity_rate,
+                        "electricity_days": electricity_days,
+                        "water_per_day": water_per_day,
+                        "water_rate": water_rate,
+                        "water_days": water_days,
+                        "steam_per_hour": steam_per_hour,
+                        "steam_rate": steam_rate,
+                        "steam_days": steam_days,
+                        "steam_hours": steam_hours,
+                    },
+                    row_index,
+                ),
             )
         )
 
-    if updated_rows != rows:
-        st.session_state["utility_entries"] = updated_rows
-        rows = updated_rows
+    updated_map = {idx: data for idx, data in updated_rows}
+    merged_rows: list[dict] = []
+    for idx, row in enumerate(rows):
+        merged_rows.append(updated_map.get(idx, dict(row)))
+
+    if merged_rows != rows:
+        st.session_state["utility_entries"] = merged_rows
+        rows = merged_rows
 
     _utility_entries_to_payload(rows, payload)
 
