@@ -7141,7 +7141,8 @@ def _render_ai_summary(payload: Mapping) -> None:
     ]
 
     if pd is not None:
-        st.table(pd.DataFrame(rows))
+        summary_frame = pd.DataFrame(rows).astype(str)
+        st.table(summary_frame)
     else:
         for row in rows:
             st.write(f"**{row['Setting']}**: {row['Value']}")
