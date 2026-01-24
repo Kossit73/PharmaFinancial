@@ -3578,36 +3578,7 @@ def _render_distributor_commission(payload: Mapping) -> None:
         submitted = st.form_submit_button("Add distributor commission")
 
     if submitted:
-        product_clean = (add_product or "").strip()
-        if not product_clean:
-            st.warning("Product is required to add a distributor commission entry.")
-        else:
-            new_rows = st.session_state.get("commission_rows", []) or []
-            new_rows.append(
-                {
-                    "Year": int(add_year),
-                    "Product": product_clean,
-                    "Yearly Commission %": float(add_rate),
-                    "Revenue": float(add_revenue),
-                    "Payment Days": 30,
-                }
-            )
-            st.session_state["commission_rows"] = new_rows
-            _commission_rows_to_payload(new_rows, payload)
-            for key in (
-                "commission_new_year",
-                "commission_new_product_select",
-                "commission_new_product_custom",
-                "commission_new_increment",
-                "commission_new_revenue",
-            ):
-                st.session_state.pop(key, None)
-            _rerun()
 
-    if product_options:
-        st.markdown("#### Commission horizon preview")
-        preview_product = selected_product or product_options[0]
-        if not selected_product:
             preview_product = st.selectbox(
                 "Preview Product",
                 options=product_options,
