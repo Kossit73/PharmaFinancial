@@ -1356,6 +1356,10 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
         else:
             st.dataframe(goal_data, use_container_width=True)
 
+    payload = st.session_state.get("input_payload")
+    if isinstance(payload, dict):
+        _render_commission_horizon_preview(payload)
+
     st.markdown("### Working Capital Schedule")
     try:
         working_capital = model.working_capital_schedule()
@@ -4074,44 +4078,59 @@ def _render_distributor_commission(payload: Mapping) -> None:
                 st.session_state.pop(key, None)
             _rerun()
 
-    if product_options:
-        st.markdown("#### Commission horizon preview")
-        preview_product = selected_product or product_options[0]
-        if not selected_product:
-            preview_product = st.selectbox(
-                "Preview Product",
-                options=product_options,
-                index=0,
-                key="commission_preview_product",
-            )
-        else:
-            st.caption(f"Previewing horizon for: {preview_product}")
-        increments = {
-            int(row.get("Year", 0)): float(row.get("Yearly Commission %", 0.0) or 0.0)
-            for row in rows
-            if str(row.get("Product", "")).strip() == preview_product
-        }
-        preview_rows = []
-        rate = base_rates.get(preview_product, 0.05)
-        for year in year_catalog:
-            increment = increments.get(int(year), 0.0)
-            rate = rate * (1 + increment / 100.0)
-            preview_rows.append(
-                {
-                    "Year": int(year),
-                    "Yearly Commission % (Increment)": float(increment),
-                    "Effective Rate (%)": float(rate * 100.0),
-                }
-            )
-        if pd is None:
-            st.table(preview_rows)
-        else:
-            preview_frame = pd.DataFrame(preview_rows)
-            preview_frame = preview_frame.astype(str)
-            st.table(preview_frame)
 
+def _render_commission_horizon_preview(payload: Mapping) -> None:
+    rows: list[dict] = st.session_state.get("commission_rows") or []
+    if not rows:
+        rows = _payload_to_commission_rows(payload)
 
+    unit_costs = payload.get("unit_costs", {}) if isinstance(payload, Mapping) else {}
+    base_products = (
+        {str(name) for name in unit_costs.keys()}
+        if isinstance(unit_costs, Mapping)
+        else set()
+    )
+    product_options = sorted(
+        base_products | {str(row.get("Product", "")) for row in rows if row.get("Product")}
+    )
+    if not product_options:
+        return
 
+    years = [int(year) for year in payload.get("years", [])] if isinstance(payload, Mapping) else []
+    row_years = [int(row.get("Year", 0)) for row in rows if row.get("Year") is not None]
+    year_catalog = sorted({*years, *row_years}) or [0]
+
+    st.markdown("### Commission horizon preview")
+    preview_product = st.selectbox(
+        "Preview Product",
+        options=product_options,
+        index=0,
+        key="commission_preview_product",
+    )
+    increments = {
+        int(row.get("Year", 0)): float(row.get("Yearly Commission %", 0.0) or 0.0)
+        for row in rows
+        if str(row.get("Product", "")).strip() == preview_product
+    }
+    preview_rows = []
+    base_rates = _commission_base_rates(payload)
+    rate = base_rates.get(preview_product, 0.05)
+    for year in year_catalog:
+        increment = increments.get(int(year), 0.0)
+        rate = rate * (1 + increment / 100.0)
+        preview_rows.append(
+            {
+                "Year": int(year),
+                "Yearly Commission % (Increment)": float(increment),
+                "Effective Rate (%)": float(rate * 100.0),
+            }
+        )
+    if pd is None:
+        st.table(preview_rows)
+    else:
+        preview_frame = pd.DataFrame(preview_rows)
+        preview_frame = preview_frame.astype(str)
+        st.table(preview_frame)
 
 def _calculate_depreciation_preview(rows: Sequence[Mapping[str, object]]) -> list[dict]:
     """Return derived depreciation metrics for each configured asset row.
