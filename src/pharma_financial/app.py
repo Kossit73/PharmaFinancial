@@ -4523,15 +4523,27 @@ def _render_cost_and_financing(payload: dict) -> None:
         format="%.4f",
         key="raw_material_per_unit",
     )
-    annual_text = st.text_area(
-        "Annual raw material spend (comma separated, optional)",
-        value=_format_float_list(raw.get("annual", [])),
-        key="raw_material_annual",
-    )
-    try:
-        raw["annual"] = _parse_float_list(annual_text)
-    except ValueError as exc:
-        st.warning(f"Raw material schedule ignored: {exc}")
+    years = payload.get("years", [])
+    annual_values = raw.get("annual", [])
+    if not isinstance(annual_values, Sequence):
+        annual_values = []
+    raw_rows = []
+    for idx, year in enumerate(years):
+        value = float(annual_values[idx]) if idx < len(annual_values) else 0.0
+        raw_rows.append({"Year": int(year), "Annual Spend": value})
+    if raw_rows:
+        st.markdown("#### Annual raw material spend (optional)")
+        updated = st.data_editor(
+            raw_rows,
+            use_container_width=True,
+            hide_index=True,
+            key="raw_material_annual_table",
+            column_config={
+                "Year": st.column_config.NumberColumn(disabled=True),
+                "Annual Spend": st.column_config.NumberColumn(format="%.2f"),
+            },
+        )
+        raw["annual"] = [float(row.get("Annual Spend", 0.0)) for row in updated]
 
     financing = payload.setdefault("financing", {})
     finance_cols = st.columns(3)
