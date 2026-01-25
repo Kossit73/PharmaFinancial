@@ -5035,240 +5035,282 @@ def _render_inflation_schedule(payload: dict) -> None:
     rows: list[dict] = st.session_state.get("inflation_rows", [])
     payload_years = payload.get("years", [])
 
+    base_rate = float(payload.get("inflation_rate", 0.0))
+    base_rate = st.number_input(
+        "Base inflation rate",
+        value=base_rate,
+        step=0.001,
+        format="%.4f",
+        key="inflation_base_rate",
+    )
+    payload["inflation_rate"] = float(base_rate)
+
     if not rows:
-        st.info("No inflation assumptions configured. Use the form below to add entries.")
+        payload["inflation_series"] = [base_rate for _ in payload_years]
+        st.session_state["inflation_rows"] = _payload_to_inflation_rows(payload)
+        rows = st.session_state.get("inflation_rows", [])
 
-    def _build_year_catalog(current_rows: Sequence[Mapping]) -> list[str]:
-        base_years = [str(year) for year in payload_years if year is not None]
-        existing = [
-            str(row.get("Year", "")).strip() for row in current_rows if row.get("Year")
-        ]
-        catalog = list(dict.fromkeys([*base_years, *existing]))
-        if not catalog:
-            max_length = max(len(current_rows), len(payload_years), 1)
-            catalog = [f"Year {index + 1}" for index in range(max_length)]
-        return catalog
+    with st.expander("Advanced: year-by-year inflation schedule"):
+        if not rows:
+            st.info("No inflation assumptions configured. Use the form below to add entries.")
 
-    updated_rows: list[dict] = []
-    removal_index: int | None = None
-    year_catalog = _build_year_catalog(rows)
+        def _build_year_catalog(current_rows: Sequence[Mapping]) -> list[str]:
+            base_years = [str(year) for year in payload_years if year is not None]
+            existing = [
+                str(row.get("Year", "")).strip() for row in current_rows if row.get("Year")
+            ]
+            catalog = list(dict.fromkeys([*base_years, *existing]))
+            if not catalog:
+                max_length = max(len(current_rows), len(payload_years), 1)
+                catalog = [f"Year {index + 1}" for index in range(max_length)]
+            return catalog
 
-    for index, row in enumerate(rows):
-        cols = st.columns([2.0, 1.2, 0.7])
-        current_label = str(
-            row.get("Year")
-            or (year_catalog[index] if index < len(year_catalog) else f"Year {index + 1}")
-        )
-        selected_label = _select_or_create_option(
-            cols[0],
-            "Year",
-            year_catalog,
-            f"inflation_label_{index}",
-            current_value=current_label,
-        )
-        if selected_label and selected_label not in year_catalog:
-            year_catalog.append(selected_label)
+        updated_rows: list[dict] = []
+        removal_index: int | None = None
+        year_catalog = _build_year_catalog(rows)
 
-        label = (selected_label or current_label).strip() or f"Year {index + 1}"
-        rate_value = cols[1].number_input(
-            "Rate",
-            value=float(row.get("Rate", 0.0)),
-            min_value=0.0,
-            step=0.001,
-            format="%.4f",
-            key=f"inflation_rate_{index}",
-        )
+        for index, row in enumerate(rows):
+            cols = st.columns([2.0, 1.2, 0.7])
+            current_label = str(
+                row.get("Year")
+                or (year_catalog[index] if index < len(year_catalog) else f"Year {index + 1}")
+            )
+            selected_label = _select_or_create_option(
+                cols[0],
+                "Year",
+                year_catalog,
+                f"inflation_label_{index}",
+                current_value=current_label,
+            )
+            if selected_label and selected_label not in year_catalog:
+                year_catalog.append(selected_label)
 
-        remove_clicked = cols[2].button(
-            "Remove", key=f"inflation_remove_{index}", help="Delete this inflation row"
-        )
+            label = (selected_label or current_label).strip() or f"Year {index + 1}"
+            rate_value = cols[1].number_input(
+                "Rate",
+                value=float(row.get("Rate", base_rate)),
+                min_value=0.0,
+                step=0.001,
+                format="%.4f",
+                key=f"inflation_rate_{index}",
+            )
 
-        if remove_clicked and len(rows) > 0:
-            removal_index = index
-            continue
+            remove_clicked = cols[2].button(
+                "Remove", key=f"inflation_remove_{index}", help="Delete this inflation row"
+            )
 
-        updated_rows.append({"Year": label, "Rate": float(rate_value)})
+            if remove_clicked and len(rows) > 0:
+                removal_index = index
+                continue
 
-    if removal_index is not None:
-        del rows[removal_index]
-        st.session_state["inflation_rows"] = rows
-        _rerun()
-        return
+            updated_rows.append({"Year": label, "Rate": float(rate_value)})
 
-    if updated_rows != rows:
-        st.session_state["inflation_rows"] = updated_rows
-        rows = updated_rows
+        if removal_index is not None:
+            del rows[removal_index]
+            st.session_state["inflation_rows"] = rows
+            _rerun()
+            return
 
-    year_catalog = _build_year_catalog(rows)
-    reference = rows[-1] if rows else {"Year": year_catalog[0] if year_catalog else "Year 1"}
+        if updated_rows != rows:
+            st.session_state["inflation_rows"] = updated_rows
+            rows = updated_rows
 
-    st.markdown("#### Add inflation entry")
-    with st.form("add_inflation_row"):
-        if len(year_catalog) > len(rows):
-            fallback_label = year_catalog[len(rows)]
-        elif year_catalog:
-            fallback_label = year_catalog[-1]
-        else:
-            fallback_label = f"Year {len(rows) + 1}"
+        year_catalog = _build_year_catalog(rows)
+        reference = rows[-1] if rows else {"Year": year_catalog[0] if year_catalog else "Year 1"}
 
-        new_label = _select_or_create_option(
-            st,
-            "Year",
-            year_catalog,
-            "inflation_new_label",
-            current_value=str(reference.get("Year", fallback_label)),
-        )
-        if new_label and new_label not in year_catalog:
-            year_catalog.append(new_label)
+        st.markdown("#### Add inflation entry")
+        with st.form("add_inflation_row"):
+            if len(year_catalog) > len(rows):
+                fallback_label = year_catalog[len(rows)]
+            elif year_catalog:
+                fallback_label = year_catalog[-1]
+            else:
+                fallback_label = f"Year {len(rows) + 1}"
 
-        new_rate = st.number_input(
-            "Rate",
-            value=float(reference.get("Rate", 0.0)),
-            min_value=0.0,
-            step=0.001,
-            format="%.4f",
-            key="inflation_new_rate",
-        )
-        submitted = st.form_submit_button("Add")
+            new_label = _select_or_create_option(
+                st,
+                "Year",
+                year_catalog,
+                "inflation_new_label",
+                current_value=str(reference.get("Year", fallback_label)),
+            )
+            if new_label and new_label not in year_catalog:
+                year_catalog.append(new_label)
 
-    if submitted:
-        clean_label = (new_label or "").strip() or f"Year {len(rows) + 1}"
-        updated_rows = list(rows)
-        updated_rows.append({"Year": clean_label, "Rate": float(new_rate)})
-        st.session_state["inflation_rows"] = updated_rows
-        for key in (
-            "inflation_new_label",
-            "inflation_new_label_select",
-            "inflation_new_label_custom",
-            "inflation_new_rate",
-        ):
-            st.session_state.pop(key, None)
-        _rerun()
+            new_rate = st.number_input(
+                "Rate",
+                value=float(reference.get("Rate", base_rate)),
+                min_value=0.0,
+                step=0.001,
+                format="%.4f",
+                key="inflation_new_rate",
+            )
+            submitted = st.form_submit_button("Add")
+
+        if submitted:
+            clean_label = (new_label or "").strip() or f"Year {len(rows) + 1}"
+            updated_rows = list(rows)
+            updated_rows.append({"Year": clean_label, "Rate": float(new_rate)})
+            st.session_state["inflation_rows"] = updated_rows
+            for key in (
+                "inflation_new_label",
+                "inflation_new_label_select",
+                "inflation_new_label_custom",
+                "inflation_new_rate",
+            ):
+                st.session_state.pop(key, None)
+            _rerun()
 
 
 def _render_risk_schedule(payload: dict) -> None:
     rows: list[dict] = st.session_state.get("risk_rows", [])
     categories = _risk_categories(payload, rows)
 
-    if not rows:
-        st.info("No risk assumptions configured. Use the form below to add entries.")
-
-    def _build_year_catalog(current_rows: Sequence[Mapping]) -> list[str]:
-        payload_years = payload.get("years") or []
-        base_years = [str(year) for year in payload_years if year is not None]
-        existing = [
-            str(row.get("Year", "")).strip() for row in current_rows if row.get("Year")
-        ]
-        catalog = list(dict.fromkeys([*base_years, *existing]))
-        if not catalog:
-            max_length = max(len(current_rows), len(payload_years), 1)
-            catalog = [f"Year {index + 1}" for index in range(max_length)]
-        return catalog
-
-    updated_rows: list[dict] = []
-    removal_index: int | None = None
-    year_catalog = _build_year_catalog(rows)
-
-    for index, row in enumerate(rows):
-        column_widths = [2.0] + [1.0 for _ in categories] + [0.7]
-        cols = st.columns(column_widths)
-
-        current_label = str(
-            row.get("Year")
-            or (year_catalog[index] if index < len(year_catalog) else f"Year {index + 1}")
-        )
-        selected_label = _select_or_create_option(
-            cols[0],
-            "Year",
-            year_catalog,
-            f"risk_label_{index}",
-            current_value=current_label,
-        )
-        if selected_label and selected_label not in year_catalog:
-            year_catalog.append(selected_label)
-
-        label = (selected_label or current_label).strip() or f"Year {index + 1}"
-        cleaned_row = {"Year": label}
-        for position, category in enumerate(categories, start=1):
-            cleaned_row[category] = cols[position].number_input(
-                f"{category.title()} Risk",
-                value=float(row.get(category, 0.0)),
+    if categories:
+        risk_defaults = payload.get("risk", {}) if isinstance(payload, Mapping) else {}
+        base_cols = st.columns(len(categories))
+        base_values: dict[str, float] = {}
+        for col, category in zip(base_cols, categories):
+            series = risk_defaults.get(category, []) if isinstance(risk_defaults, Mapping) else []
+            default_value = float(series[0]) if series else 0.0
+            base_values[category] = col.number_input(
+                f"{category.title()} base risk",
+                value=default_value,
                 min_value=0.0,
                 max_value=1.0,
                 step=0.01,
                 format="%.4f",
-                key=f"risk_{category}_{index}",
+                key=f"risk_base_{category}",
+            )
+        if not rows:
+            years = payload.get("years", []) if isinstance(payload, Mapping) else []
+            payload["risk"] = {
+                category: [float(value) for _ in years]
+                for category, value in base_values.items()
+            }
+            st.session_state["risk_rows"] = _payload_to_risk_rows(payload)
+            rows = st.session_state.get("risk_rows", [])
+
+    with st.expander("Advanced: year-by-year risk schedule"):
+        if not rows:
+            st.info("No risk assumptions configured. Use the form below to add entries.")
+
+        def _build_year_catalog(current_rows: Sequence[Mapping]) -> list[str]:
+            payload_years = payload.get("years") or []
+            base_years = [str(year) for year in payload_years if year is not None]
+            existing = [
+                str(row.get("Year", "")).strip() for row in current_rows if row.get("Year")
+            ]
+            catalog = list(dict.fromkeys([*base_years, *existing]))
+            if not catalog:
+                max_length = max(len(current_rows), len(payload_years), 1)
+                catalog = [f"Year {index + 1}" for index in range(max_length)]
+            return catalog
+
+        updated_rows: list[dict] = []
+        removal_index: int | None = None
+        year_catalog = _build_year_catalog(rows)
+
+        for index, row in enumerate(rows):
+            column_widths = [2.0] + [1.0 for _ in categories] + [0.7]
+            cols = st.columns(column_widths)
+
+            current_label = str(
+                row.get("Year")
+                or (year_catalog[index] if index < len(year_catalog) else f"Year {index + 1}")
+            )
+            selected_label = _select_or_create_option(
+                cols[0],
+                "Year",
+                year_catalog,
+                f"risk_label_{index}",
+                current_value=current_label,
+            )
+            if selected_label and selected_label not in year_catalog:
+                year_catalog.append(selected_label)
+
+            label = (selected_label or current_label).strip() or f"Year {index + 1}"
+            cleaned_row = {"Year": label}
+            for position, category in enumerate(categories, start=1):
+                cleaned_row[category] = cols[position].number_input(
+                    f"{category.title()} Risk",
+                    value=float(row.get(category, 0.0)),
+                    min_value=0.0,
+                    max_value=1.0,
+                    step=0.01,
+                    format="%.4f",
+                    key=f"risk_{category}_{index}",
+                )
+
+            remove_clicked = cols[-1].button(
+                "Remove", key=f"risk_remove_{index}", help="Delete this risk row"
             )
 
-        remove_clicked = cols[-1].button(
-            "Remove", key=f"risk_remove_{index}", help="Delete this risk row"
-        )
+            if remove_clicked and len(rows) > 0:
+                removal_index = index
+                continue
 
-        if remove_clicked and len(rows) > 0:
-            removal_index = index
-            continue
+            updated_rows.append(cleaned_row)
 
-        updated_rows.append(cleaned_row)
+        if removal_index is not None:
+            del rows[removal_index]
+            st.session_state["risk_rows"] = rows
+            _rerun()
+            return
 
-    if removal_index is not None:
-        del rows[removal_index]
-        st.session_state["risk_rows"] = rows
-        _rerun()
-        return
+        if updated_rows != rows:
+            st.session_state["risk_rows"] = updated_rows
+            rows = updated_rows
 
-    if updated_rows != rows:
-        st.session_state["risk_rows"] = updated_rows
-        rows = updated_rows
+        year_catalog = _build_year_catalog(rows)
+        reference = rows[-1] if rows else {"Year": year_catalog[0] if year_catalog else "Year 1"}
 
-    year_catalog = _build_year_catalog(rows)
-    reference = rows[-1] if rows else {"Year": year_catalog[0] if year_catalog else "Year 1"}
+        with st.form("add_risk_row"):
+            st.markdown("#### Add risk entry")
+            if len(year_catalog) > len(rows):
+                fallback_label = year_catalog[len(rows)]
+            elif year_catalog:
+                fallback_label = year_catalog[-1]
+            else:
+                fallback_label = f"Year {len(rows) + 1}"
 
-    with st.form("add_risk_row"):
-        st.markdown("#### Add risk entry")
-        if len(year_catalog) > len(rows):
-            fallback_label = year_catalog[len(rows)]
-        elif year_catalog:
-            fallback_label = year_catalog[-1]
-        else:
-            fallback_label = f"Year {len(rows) + 1}"
-
-        new_label = _select_or_create_option(
-            st,
-            "Year",
-            year_catalog,
-            "risk_new_label",
-            current_value=str(reference.get("Year", fallback_label)),
-        )
-        if new_label and new_label not in year_catalog:
-            year_catalog.append(new_label)
-
-        new_values: dict[str, float] = {}
-        for category in categories:
-            new_values[category] = st.number_input(
-                f"{category.title()} Risk",
-                value=float(reference.get(category, 0.0)),
-                min_value=0.0,
-                max_value=1.0,
-                step=0.01,
-                format="%.4f",
-                key=f"risk_new_{category}",
+            new_label = _select_or_create_option(
+                st,
+                "Year",
+                year_catalog,
+                "risk_new_label",
+                current_value=str(reference.get("Year", fallback_label)),
             )
-        submitted = st.form_submit_button("Add")
+            if new_label and new_label not in year_catalog:
+                year_catalog.append(new_label)
 
-    if submitted:
-        clean_label = (new_label or "").strip() or f"Year {len(rows) + 1}"
-        updated_rows = list(rows)
-        updated_rows.append({"Year": clean_label, **new_values})
-        st.session_state["risk_rows"] = updated_rows
-        for key in (
-            "risk_new_label",
-            "risk_new_label_select",
-            "risk_new_label_custom",
-        ):
-            st.session_state.pop(key, None)
-        for category in categories:
-            st.session_state.pop(f"risk_new_{category}", None)
-        _rerun()
+            new_values: dict[str, float] = {}
+            for category in categories:
+                new_values[category] = st.number_input(
+                    f"{category.title()} Risk",
+                    value=float(reference.get(category, 0.0)),
+                    min_value=0.0,
+                    max_value=1.0,
+                    step=0.01,
+                    format="%.4f",
+                    key=f"risk_new_{category}",
+                )
+            submitted = st.form_submit_button("Add")
+
+        if submitted:
+            clean_label = (new_label or "").strip() or f"Year {len(rows) + 1}"
+            updated_rows = list(rows)
+            updated_rows.append({"Year": clean_label, **new_values})
+            st.session_state["risk_rows"] = updated_rows
+            for key in (
+                "risk_new_label",
+                "risk_new_label_select",
+                "risk_new_label_custom",
+            ):
+                st.session_state.pop(key, None)
+            for category in categories:
+                st.session_state.pop(f"risk_new_{category}", None)
+            _rerun()
 
 
 def _render_goal_seek(payload: dict) -> None:
