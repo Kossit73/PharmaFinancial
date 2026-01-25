@@ -118,6 +118,8 @@ class FinancialModel:
         self._commission_cache: dict[int, dict[str, tuple[float, float, int]]] | None = None
         self._distributor_receivable_cache: List[float] | None = None
         self._distributor_share_cache: List[float] | None = None
+        self._interest_schedule_cache: List[float] | None = None
+        self._tax_schedule_cache: List[float] | None = None
         self._revenue_schedule_cache: Table | None = None
         self._cost_structure_cache: Table | None = None
         self._income_statement_cache: Table | None = None
@@ -165,6 +167,8 @@ class FinancialModel:
         self._risk_factor_diagnostics_cache = None
         self._distributor_receivable_cache = None
         self._distributor_share_cache = None
+        self._interest_schedule_cache = None
+        self._tax_schedule_cache = None
 
     def _production(self) -> Dict[str, List[float]]:
         if self._production_cache is not None:
@@ -544,11 +548,19 @@ class FinancialModel:
         cost_of_sales = costs.column("Cost of Sales")
         general_admin = costs.column("General & Admin")
 
-        gross_profit = [rev - cost for rev, cost in zip(net_revenue, cost_of_sales)]
-        ebitda = [gp - ga for gp, ga in zip(gross_profit, general_admin)]
-        ebit = [eb - dep for eb, dep in zip(ebitda, depreciation)]
+        net_revenue_array = np.array(net_revenue, dtype=float)
+        cost_of_sales_array = np.array(cost_of_sales, dtype=float)
+        general_admin_array = np.array(general_admin, dtype=float)
+        depreciation_array = np.array(depreciation, dtype=float)
+
+        gross_profit = (net_revenue_array - cost_of_sales_array).tolist()
+        ebitda_array = net_revenue_array - cost_of_sales_array - general_admin_array
+        ebitda = ebitda_array.tolist()
+        ebit_array = ebitda_array - depreciation_array
+        ebit = ebit_array.tolist()
         interest = self._interest_schedule()
-        ebt = [e - i for e, i in zip(ebit, interest)]
+        interest_array = np.array(interest, dtype=float)
+        ebt = (ebit_array - interest_array).tolist()
         taxes: List[float] = []
         net_income: List[float] = []
         nol_balance = 0.0
@@ -664,6 +676,8 @@ class FinancialModel:
         return interest_schedule, outstanding_schedule
 
     def _interest_schedule(self) -> List[float]:
+        if self._interest_schedule_cache is not None:
+            return self._interest_schedule_cache
         financing = self.inputs.financing
         senior_interest, _ = self._senior_debt_schedules()
         revolver_interest, _ = self._revolver_schedules()
@@ -677,12 +691,17 @@ class FinancialModel:
                 + overdraft_interest[idx]
             )
             interest.append(total_interest)
+        self._interest_schedule_cache = interest
         return interest
 
     def _tax_schedule(self) -> List[float]:
+        if self._tax_schedule_cache is not None:
+            return self._tax_schedule_cache
         if getattr(self.inputs, "tax_rates", None):
-            return list(self.inputs.tax_rates)
-        return [self.inputs.tax_rate for _ in self.years]
+            self._tax_schedule_cache = list(self.inputs.tax_rates)
+        else:
+            self._tax_schedule_cache = [self.inputs.tax_rate for _ in self.years]
+        return self._tax_schedule_cache
 
     def _risk_factors(self) -> List[float]:
         if self._risk_factors_cache is not None:
