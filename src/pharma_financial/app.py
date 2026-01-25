@@ -535,7 +535,7 @@ def main() -> None:
     config_container = st.container()
 
     inputs, digest = _resolve_inputs(config_container)
-    run_requested = bool(st.session_state.get("run_requested"))
+    run_requested = bool(st.session_state.pop("run_requested", False))
     last_digest = st.session_state.get("last_run_digest")
     model = st.session_state.get("last_model")
     outputs = st.session_state.get("last_outputs")
@@ -544,7 +544,6 @@ def main() -> None:
         st.session_state["last_model"] = model
         st.session_state["last_outputs"] = outputs
         st.session_state["last_run_digest"] = digest
-        st.session_state["run_requested"] = False
     elif last_digest != digest:
         model = None
         outputs = None
