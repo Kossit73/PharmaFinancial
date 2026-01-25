@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
+from tempfile import NamedTemporaryFile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO, StringIO
@@ -13,6 +15,9 @@ from zipfile import ZipFile
 
 from .model import FinancialModel, FinancialOutputs
 from .table import Table
+from openpyxl.chart import LineChart, Reference
+import plotly.graph_objects as go
+import plotly.io as pio
 
 try:  # pragma: no cover - optional dependency
     import pandas as pd  # type: ignore
@@ -287,7 +292,8 @@ def _build_excel(sections: Sequence[ReportSection]) -> bytes:
         try:
             with pd.ExcelWriter(buffer) as writer:  # type: ignore[arg-type]
                 for entry in entries:
-                    frame = _rows_to_dataframe(entry["rows"])
+                    rows = entry["rows"]
+                    frame = _rows_to_dataframe(rows)
                     if frame is None:
                         raise ValueError("pandas unavailable")
                     frame = frame.copy()
@@ -317,6 +323,7 @@ def _build_excel(sections: Sequence[ReportSection]) -> bytes:
                                 max_length = max(max_length, len(value))
                             adjusted = min(max_length + 2, 60)
                             sheet.column_dimensions[get_column_letter(idx)].width = adjusted
+                        _add_excel_chart(sheet, rows)
             return buffer.getvalue()
         except Exception:  # pragma: no cover - fall back to pure-Python writer
             pass
@@ -358,6 +365,9 @@ def _build_word(sections: Sequence[ReportSection]) -> bytes:
                     row_cells = word_table.add_row().cells
                     for idx, column in enumerate(columns):
                         row_cells[idx].text = _format_report_value(row.get(column, ""))
+                chart_bytes = _build_chart_image(rows, table.title)
+                if chart_bytes:
+                    document.add_picture(BytesIO(chart_bytes))
         buffer = BytesIO()
         document.save(buffer)
         return buffer.getvalue()
@@ -406,6 +416,18 @@ def _build_pdf(sections: Sequence[ReportSection]) -> bytes:
                     _pdf_multiline(pdf, "No data available.")
                     continue
                 _render_pdf_table(pdf, columns, rows)
+                chart_bytes = _build_chart_image(rows, table.title)
+                if chart_bytes:
+                    with NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                        tmp.write(chart_bytes)
+                        tmp_path = tmp.name
+                    try:
+                        pdf.image(tmp_path, w=pdf.w - pdf.l_margin - pdf.r_margin)
+                    finally:
+                        try:
+                            os.unlink(tmp_path)
+                        except OSError:  # pragma: no cover - best effort cleanup
+                            pass
         return bytes(pdf.output(dest="S").encode("latin-1"))
 
     return _build_pdf_fallback(_collect_report_blocks(sections))
@@ -473,6 +495,93 @@ def _format_report_value(value: Any) -> str:
         formatted = f"{absolute:,.4f}" if absolute < 1 else f"{absolute:,.2f}"
         return f"({formatted})" if value < 0 else formatted
     return str(value)
+
+
+def _extract_chart_series(rows: Sequence[Mapping[str, Any]]) -> tuple[list[Any], list[str], list[list[float]]]:
+    if not rows:
+        return [], [], []
+    columns = _ordered_columns(rows)
+    if not columns:
+        return [], [], []
+    if "Year" in columns:
+        x_key = "Year"
+    else:
+        x_key = columns[0]
+    numeric_columns: list[str] = []
+    for column in columns:
+        if column == x_key:
+            continue
+        for row in rows:
+            value = row.get(column)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                numeric_columns.append(column)
+                break
+    if not numeric_columns:
+        return [], [], []
+    x_values = [row.get(x_key) for row in rows]
+    series_values: list[list[float]] = []
+    for column in numeric_columns[:4]:
+        values: list[float] = []
+        for row in rows:
+            value = row.get(column)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                values.append(float(value))
+            else:
+                values.append(0.0)
+        series_values.append(values)
+    return x_values, numeric_columns[:4], series_values
+
+
+def _build_chart_image(rows: Sequence[Mapping[str, Any]], title: str) -> bytes | None:
+    x_values, labels, series_values = _extract_chart_series(rows)
+    if not labels or not x_values:
+        return None
+    fig = go.Figure()
+    for label, values in zip(labels, series_values):
+        fig.add_trace(go.Scatter(x=x_values, y=values, mode="lines+markers", name=str(label)))
+    fig.update_layout(
+        title=title,
+        xaxis_title="Year",
+        yaxis_title="Value",
+        template="plotly_white",
+        height=360,
+        margin=dict(l=40, r=20, t=40, b=40),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    try:
+        return pio.to_image(fig, format="png", scale=2)
+    except Exception:  # pragma: no cover - image rendering optional
+        return None
+
+
+def _add_excel_chart(sheet, rows: Sequence[Mapping[str, Any]]) -> None:
+    if not rows:
+        return
+    columns = _ordered_columns(rows)
+    if not columns or "Year" not in columns:
+        return
+    year_col = columns.index("Year") + 1
+    numeric_cols: list[int] = []
+    for idx, column in enumerate(columns, start=1):
+        if idx == year_col:
+            continue
+        for row in rows:
+            value = row.get(column)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                numeric_cols.append(idx)
+                break
+    if not numeric_cols:
+        return
+    chart = LineChart()
+    chart.title = "Trend"
+    chart.y_axis.title = "Value"
+    chart.x_axis.title = "Year"
+    data = Reference(sheet, min_col=min(numeric_cols), max_col=max(numeric_cols), min_row=1, max_row=sheet.max_row)
+    chart.add_data(data, titles_from_data=True)
+    categories = Reference(sheet, min_col=year_col, min_row=2, max_row=sheet.max_row)
+    chart.set_categories(categories)
+    anchor_row = sheet.max_row + 2
+    sheet.add_chart(chart, f"A{anchor_row}")
 
 
 def _truncate_text(pdf: "FPDF", text: str, width: float) -> str:
