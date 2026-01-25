@@ -4533,17 +4533,20 @@ def _render_cost_and_financing(payload: dict) -> None:
         raw_rows.append({"Year": int(year), "Annual Spend": value})
     if raw_rows:
         st.markdown("#### Annual raw material spend (optional)")
-        updated = st.data_editor(
-            raw_rows,
-            use_container_width=True,
-            hide_index=True,
-            key="raw_material_annual_table",
-            column_config={
-                "Year": st.column_config.NumberColumn(disabled=True),
-                "Annual Spend": st.column_config.NumberColumn(format="%.2f"),
-            },
-        )
-        raw["annual"] = [float(row.get("Annual Spend", 0.0)) for row in updated]
+        if hasattr(st, "data_editor"):
+            updated = st.data_editor(
+                raw_rows,
+                use_container_width=True,
+                hide_index=True,
+                key="raw_material_annual_table",
+                column_config={
+                    "Year": st.column_config.NumberColumn(disabled=True),
+                    "Annual Spend": st.column_config.NumberColumn(format="%.2f"),
+                },
+            )
+            raw["annual"] = [float(row.get("Annual Spend", 0.0)) for row in updated]
+        else:
+            st.table(raw_rows)
 
     financing = payload.setdefault("financing", {})
     finance_cols = st.columns(3)
