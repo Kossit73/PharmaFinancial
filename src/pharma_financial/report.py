@@ -600,9 +600,10 @@ def _truncate_text(pdf: "FPDF", text: str, width: float) -> str:
     if pdf.get_string_width(text) <= width:
         return text
     trimmed = text
-    while trimmed and pdf.get_string_width(f"{trimmed}…") > width:
+    ellipsis = "..."
+    while trimmed and pdf.get_string_width(f"{trimmed}{ellipsis}") > width:
         trimmed = trimmed[:-1]
-    return f"{trimmed}…" if trimmed else text[:1]
+    return f"{trimmed}{ellipsis}" if trimmed else text[:1]
 
 
 def _render_pdf_table(
