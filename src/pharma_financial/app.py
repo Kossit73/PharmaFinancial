@@ -1048,6 +1048,10 @@ def _render_excel_model_download(
                 st.info("Click 'Prepare Excel Model' to generate the workbook for download.")
 
 
+def _request_model_run() -> None:
+    st.session_state["run_requested"] = True
+
+
 def _render_inputs_tab(
     inputs: ModelInputs,
     base_model: FinancialModel | None,
@@ -1055,8 +1059,7 @@ def _render_inputs_tab(
 ) -> None:
     payload = st.session_state["input_payload"]
 
-    if st.button("Run Model", key="run_model"):
-        st.session_state["run_requested"] = True
+    st.button("Run Model", key="run_model", on_click=_request_model_run)
 
     st.markdown("### Projection Horizon")
     _render_projection_horizon(payload)
