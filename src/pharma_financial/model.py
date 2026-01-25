@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
+import numpy as np
+
 from .ai import AIInsights, GenerativeAdvisor, MachineLearningAdvisor
 from .debt import amortise_entries
 from .inputs import BreakEvenRow, DebtEntry, ModelInputs, ProductParameters
@@ -97,6 +99,13 @@ class FinancialModel:
         self.years = inputs.years
         self.products = inputs.products
         self._inflation = self._build_inflation_factors(inputs.inflation_series)
+        self._production_cache: Dict[str, List[float]] | None = None
+        self._unit_prices_cache: Dict[str, float] | None = None
+        self._unit_costs_cache: Dict[str, float] | None = None
+        self._price_adjustments_cache: Dict[str, List[float]] | None = None
+        self._variable_costs_cache: Dict[str, float] | None = None
+        self._freight_costs_cache: Dict[str, float] | None = None
+        self._total_units_cache: List[float] | None = None
         self._risk_factors_cache: List[float] | None = None
         self._risk_cost_factors_cache: List[float] | None = None
         self._depreciation_cache: "tuple[list[dict], dict[int, float], dict[int, float]] | None" = None
@@ -128,6 +137,20 @@ class FinancialModel:
             factors.append(running)
         return factors
 
+    def _pad_series(
+        self,
+        series: Sequence[Number],
+        length: int,
+        *,
+        fill: float,
+    ) -> List[float]:
+        if not series:
+            return [float(fill) for _ in range(length)]
+        values = [float(value) for value in series]
+        if len(values) < length:
+            values.extend([values[-1] for _ in range(length - len(values))])
+        return values[:length]
+
     def _invalidate_statement_caches(self) -> None:
         self._revenue_schedule_cache = None
         self._cost_structure_cache = None
@@ -144,23 +167,44 @@ class FinancialModel:
         self._distributor_share_cache = None
 
     def _production(self) -> Dict[str, List[float]]:
-        return {name: [float(v) for v in values] for name, values in self.inputs.production_estimate.items()}
+        if self._production_cache is not None:
+            return self._production_cache
+        production: Dict[str, List[float]] = {}
+        year_count = len(self.years)
+        for product in self.products:
+            values = self.inputs.production_estimate.get(product, [])
+            production[product] = self._pad_series(values, year_count, fill=0.0)
+        self._production_cache = production
+        return production
 
     def _unit_prices(self) -> Dict[str, float]:
-        return {name: params.selling_price for name, params in self.inputs.unit_costs.items()}
+        if self._unit_prices_cache is not None:
+            return self._unit_prices_cache
+        self._unit_prices_cache = {
+            name: params.selling_price for name, params in self.inputs.unit_costs.items()
+        }
+        return self._unit_prices_cache
 
     def _unit_costs(self) -> Dict[str, float]:
-        return {name: params.production_cost for name, params in self.inputs.unit_costs.items()}
+        if self._unit_costs_cache is not None:
+            return self._unit_costs_cache
+        self._unit_costs_cache = {
+            name: params.production_cost for name, params in self.inputs.unit_costs.items()
+        }
+        return self._unit_costs_cache
 
     def _price_adjustments(self) -> Dict[str, List[float]]:
+        if self._price_adjustments_cache is not None:
+            return self._price_adjustments_cache
         adjustments: Dict[str, List[float]] = {}
+        year_count = len(self.years)
         for product in self.products:
             series = list(self.inputs.price_adjustments.get(product, []))
             if not series:
-                series = [1.0 for _ in self.years]
-            elif len(series) < len(self.years):
-                series = series + [series[-1] for _ in range(len(self.years) - len(series))]
-            adjustments[product] = [float(value) for value in series[: len(self.years)]]
+                adjustments[product] = [1.0 for _ in range(year_count)]
+                continue
+            adjustments[product] = self._pad_series(series, year_count, fill=float(series[-1]))
+        self._price_adjustments_cache = adjustments
         return adjustments
 
     def _commission_parameters(self) -> dict[int, dict[str, tuple[float, float, int]]]:
@@ -196,14 +240,34 @@ class FinancialModel:
         return schedule
 
     def _freight_costs(self) -> Dict[str, float]:
-        return {name: params.freight_cost for name, params in self.inputs.unit_costs.items()}
+        if self._freight_costs_cache is not None:
+            return self._freight_costs_cache
+        self._freight_costs_cache = {
+            name: params.freight_cost for name, params in self.inputs.unit_costs.items()
+        }
+        return self._freight_costs_cache
 
     def _variable_costs(self) -> Dict[str, float]:
+        if self._variable_costs_cache is not None:
+            return self._variable_costs_cache
         overrides = getattr(self.inputs, "variable_cost_overrides", {})
-        return {product: float(overrides.get(product, 0.0)) for product in self.products}
+        self._variable_costs_cache = {
+            product: float(overrides.get(product, 0.0)) for product in self.products
+        }
+        return self._variable_costs_cache
 
     def _total_units(self) -> Dict[str, float]:
         return {name: float(value) for name, value in self.inputs.total_production_units.items()}
+
+    def _total_units_by_year(self) -> List[float]:
+        if self._total_units_cache is not None:
+            return self._total_units_cache
+        year_count = len(self.years)
+        totals = np.zeros(year_count, dtype=float)
+        for values in self._production().values():
+            totals += np.array(values, dtype=float)
+        self._total_units_cache = totals.tolist()
+        return self._total_units_cache
 
     # -------------------------------------------------------------- schedules
     def revenue_schedule(self) -> Table:
@@ -216,41 +280,37 @@ class FinancialModel:
         price_adjustments = self._price_adjustments()
         production = self._production()
         commission_params = self._commission_parameters()
-        risk_factors = self._risk_factors()
+        year_count = len(self.years)
+        risk_factors = self._pad_series(self._risk_factors(), year_count, fill=1.0)
+        inflation = self._pad_series(self._inflation, year_count, fill=1.0)
 
-        gross_totals: List[float] = []
+        risk_array = np.array(risk_factors, dtype=float)
+        inflation_array = np.array(inflation, dtype=float)
+
+        gross_totals_array = np.zeros(year_count, dtype=float)
+        columns: MutableMapping[str, List[float]] = {}
+
+        for product in self.products:
+            units = np.array(production.get(product, [0.0 for _ in range(year_count)]), dtype=float)
+            price = float(prices.get(product, 0.0))
+            adjustment = np.array(price_adjustments.get(product, [1.0 for _ in range(year_count)]), dtype=float)
+            gross_values = units * price * adjustment * inflation_array * risk_array
+            columns[product] = gross_values.tolist()
+            gross_totals_array += gross_values
+
+        gross_totals = gross_totals_array.tolist()
         commission: List[float] = []
         net_revenue: List[float] = []
         distributor_receivable_weighted: List[float] = [0.0 for _ in self.years]
         distributor_share_by_year: List[float] = []
 
-        columns: MutableMapping[str, List[float]] = {product: [] for product in self.products}
-
         for idx, year in enumerate(self.years):
-            gross_year = 0.0
+            gross_year = gross_totals[idx]
             commission_year = 0.0
-            risk = risk_factors[idx] if idx < len(risk_factors) else (
-                risk_factors[-1] if risk_factors else 1.0
-            )
-            try:
-                inflation_factor = self._inflation[idx]
-            except IndexError:  # pragma: no cover - defensive guard
-                inflation_factor = self._inflation[-1] if self._inflation else 1.0
             year_rates = commission_params.get(int(year), {})
             distributor_gross = 0.0
             for product in self.products:
-                product_units = 0.0
-                if product in production:
-                    values = production[product]
-                    if idx < len(values):
-                        product_units = values[idx]
-                    elif values:
-                        product_units = values[-1]
-                price = float(prices.get(product, 0.0))
-                price_factor = price_adjustments.get(product, [1.0 for _ in self.years])[idx]
-                gross_value = product_units * price * price_factor * inflation_factor * risk
-                columns[product].append(gross_value)
-                gross_year += gross_value
+                gross_value = columns[product][idx]
                 rate, share, payment_days = year_rates.get(product, (0.0, 1.0, 0))
                 effective_share = max(share, 0.0)
                 commission_rate = max(rate, 0.0)
@@ -259,7 +319,6 @@ class FinancialModel:
                 distributor_receivable_weighted[idx] += distributor_portion * max(payment_days, 0)
                 commission_year += commission_amount
                 distributor_gross += gross_value * effective_share
-            gross_totals.append(gross_year)
             commission.append(commission_year)
             net_revenue.append(gross_year - commission_year)
             if gross_year:
@@ -282,70 +341,56 @@ class FinancialModel:
             return self._cost_structure_cache
 
         production = self._production()
-        total_units = [sum(production[product][idx] for product in self.products) for idx in range(len(self.years))]
+        year_count = len(self.years)
+        total_units = self._total_units_by_year()
 
-        risk_factors = self._risk_cost_factors()
-
-        def _risk_for_index(index: int) -> float:
-            if risk_factors:
-                if index < len(risk_factors):
-                    return risk_factors[index]
-                return risk_factors[-1]
-            return 1.0
+        risk_factors = self._pad_series(self._risk_cost_factors(), year_count, fill=1.0)
+        inflation = self._pad_series(self._inflation, year_count, fill=1.0)
 
         variable_lookup = self._variable_costs()
 
-        raw_material_cost: List[float] = []
-        for idx in range(len(self.years)):
-            risk = _risk_for_index(idx)
-            try:
-                inflation = self._inflation[idx]
-            except IndexError:  # pragma: no cover - defensive guard
-                inflation = self._inflation[-1] if self._inflation else 1.0
+        risk_array = np.array(risk_factors, dtype=float)
+        inflation_array = np.array(inflation, dtype=float)
 
-            total = 0.0
-            for product in self.products:
-                product_units = production[product][idx]
-                variable_cost = variable_lookup.get(product, 0.0)
-                total += product_units * variable_cost * inflation * risk
-            raw_material_cost.append(total)
+        raw_material_cost_array = np.zeros(year_count, dtype=float)
+        for product in self.products:
+            product_units = np.array(production[product], dtype=float)
+            variable_cost = variable_lookup.get(product, 0.0)
+            raw_material_cost_array += product_units * variable_cost
+        raw_material_cost_array = raw_material_cost_array * inflation_array * risk_array
+        raw_material_cost = raw_material_cost_array.tolist()
 
         utility = self.inputs.utility_schedule
-        utilities: List[float] = []
-        for idx in range(len(self.years)):
-            electricity = (
-                utility.electricity_per_day[idx]
-                * utility.electricity_rate[idx]
-                * utility.electricity_days[idx]
-            )
-            water = (
-                utility.water_per_day[idx]
-                * utility.water_rate[idx]
-                * utility.water_days[idx]
-            )
-            steam = (
-                utility.steam_per_hour[idx]
-                * utility.steam_rate[idx]
-                * utility.steam_days[idx]
-                * utility.steam_hours[idx]
-            )
-            utilities.append(electricity + water + steam)
+        electricity = (
+            np.array(self._pad_series(utility.electricity_per_day, year_count, fill=0.0), dtype=float)
+            * np.array(self._pad_series(utility.electricity_rate, year_count, fill=0.0), dtype=float)
+            * np.array(self._pad_series(utility.electricity_days, year_count, fill=0.0), dtype=float)
+        )
+        water = (
+            np.array(self._pad_series(utility.water_per_day, year_count, fill=0.0), dtype=float)
+            * np.array(self._pad_series(utility.water_rate, year_count, fill=0.0), dtype=float)
+            * np.array(self._pad_series(utility.water_days, year_count, fill=0.0), dtype=float)
+        )
+        steam = (
+            np.array(self._pad_series(utility.steam_per_hour, year_count, fill=0.0), dtype=float)
+            * np.array(self._pad_series(utility.steam_rate, year_count, fill=0.0), dtype=float)
+            * np.array(self._pad_series(utility.steam_days, year_count, fill=0.0), dtype=float)
+            * np.array(self._pad_series(utility.steam_hours, year_count, fill=0.0), dtype=float)
+        )
+        utilities = (electricity + water + steam).tolist()
 
         base_direct = sum(self.inputs.direct_labor_costs.values())
         baseline_units = total_units[0] or 1.0
-        direct_labor = [
+        total_units_array = np.array(total_units, dtype=float)
+        direct_labor = (
             base_direct
-            * (units / baseline_units)
-            * self._inflation[idx]
-            * _risk_for_index(idx)
-            for idx, units in enumerate(total_units)
-        ]
+            * (total_units_array / baseline_units)
+            * inflation_array
+            * risk_array
+        ).tolist()
 
         base_indirect = sum(self.inputs.indirect_labor_costs.values())
-        indirect_labor = [
-            base_indirect * self._inflation[idx] * _risk_for_index(idx)
-            for idx in range(len(self.years))
-        ]
+        indirect_labor = (base_indirect * inflation_array * risk_array).tolist()
 
         utility_cost_share = self.inputs.utility_cost_of_sales_share
         utility_cost_of_sales = [value * utility_cost_share for value in utilities]
