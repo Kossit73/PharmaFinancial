@@ -535,7 +535,19 @@ def main() -> None:
     config_container = st.container()
 
     inputs, digest = _resolve_inputs(config_container)
-    model, outputs = _cached_model_run(inputs, digest)
+    run_requested = bool(st.session_state.get("run_requested"))
+    last_digest = st.session_state.get("last_run_digest")
+    model = st.session_state.get("last_model")
+    outputs = st.session_state.get("last_outputs")
+    if run_requested:
+        model, outputs = _cached_model_run(inputs, digest)
+        st.session_state["last_model"] = model
+        st.session_state["last_outputs"] = outputs
+        st.session_state["last_run_digest"] = digest
+        st.session_state["run_requested"] = False
+    elif last_digest != digest:
+        model = None
+        outputs = None
 
     tabs = st.tabs(
         [
@@ -555,24 +567,51 @@ def main() -> None:
     with tabs[0]:
         _render_inputs_tab(inputs, model, outputs)
     with tabs[1]:
-        _render_income_statement(model, outputs)
+        if outputs is None or model is None:
+            st.info("Press Run on the Input Landing Page to generate results.")
+        else:
+            _render_income_statement(model, outputs)
     with tabs[2]:
-        _render_statement_tab("Statement of Financial Position", outputs.balance_sheet)
+        if outputs is None:
+            st.info("Press Run on the Input Landing Page to generate results.")
+        else:
+            _render_statement_tab("Statement of Financial Position", outputs.balance_sheet)
     with tabs[3]:
-        _render_statement_tab("Statement of Cash Flows", outputs.cash_flow)
+        if outputs is None:
+            st.info("Press Run on the Input Landing Page to generate results.")
+        else:
+            _render_statement_tab("Statement of Cash Flows", outputs.cash_flow)
     with tabs[4]:
-        _render_sensitivity(outputs)
+        if outputs is None:
+            st.info("Press Run on the Input Landing Page to generate results.")
+        else:
+            _render_sensitivity(outputs)
     with tabs[5]:
-        _render_scenarios(outputs)
+        if outputs is None:
+            st.info("Press Run on the Input Landing Page to generate results.")
+        else:
+            _render_scenarios(outputs)
     with tabs[6]:
-        _render_rag_tab(model, outputs)
+        if outputs is None or model is None:
+            st.info("Press Run on the Input Landing Page to generate results.")
+        else:
+            _render_rag_tab(model, outputs)
     with tabs[7]:
-        _render_monte_carlo(outputs)
+        if outputs is None:
+            st.info("Press Run on the Input Landing Page to generate results.")
+        else:
+            _render_monte_carlo(outputs)
     with tabs[8]:
-        _render_break_even(outputs)
+        if outputs is None:
+            st.info("Press Run on the Input Landing Page to generate results.")
+        else:
+            _render_break_even(outputs)
     with tabs[9]:
-        _render_excel_model_download(st.container(), model, outputs)
-        _render_dashboard_tab(model, outputs)
+        if outputs is None or model is None:
+            st.info("Press Run on the Input Landing Page to generate results.")
+        else:
+            _render_excel_model_download(st.container(), model, outputs)
+            _render_dashboard_tab(model, outputs)
 
 
 def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:
@@ -1010,9 +1049,14 @@ def _render_excel_model_download(
 
 
 def _render_inputs_tab(
-    inputs: ModelInputs, base_model: FinancialModel, base_outputs: FinancialOutputs
+    inputs: ModelInputs,
+    base_model: FinancialModel | None,
+    base_outputs: FinancialOutputs | None,
 ) -> None:
     payload = st.session_state["input_payload"]
+
+    if st.button("Run Model", key="run_model"):
+        st.session_state["run_requested"] = True
 
     st.markdown("### Projection Horizon")
     _render_projection_horizon(payload)
