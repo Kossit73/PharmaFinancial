@@ -2133,6 +2133,34 @@ class FinancialModel:
         return build_table(self.years, {"Discounted Cash Flow": discounted, "Cumulative": cumulative})
 
     def run(self) -> FinancialOutputs:
+        core = self.run_core()
+        scenarios = self.scenario_analysis()
+        scenario_tools = self.scenario_toolkit(scenarios)
+        sensitivity = self.sensitivity_analysis()
+        monte_carlo = self.monte_carlo_simulation()
+        ai_insights = self.ai_enhancements(
+            income=core.income_statement,
+            summary=core.summary_metrics,
+            cash_flow=core.cash_flow,
+        )
+        return FinancialOutputs(
+            income_statement=core.income_statement,
+            balance_sheet=core.balance_sheet,
+            cash_flow=core.cash_flow,
+            summary_metrics=core.summary_metrics,
+            goal_seek=core.goal_seek,
+            break_even=core.break_even,
+            payback=core.payback,
+            discounted_payback=core.discounted_payback,
+            scenario_results=scenarios,
+            sensitivity_results=sensitivity,
+            monte_carlo=monte_carlo,
+            scenario_tool_results=scenario_tools,
+            risk_factor_diagnostics=core.risk_factor_diagnostics,
+            ai_insights=ai_insights,
+        )
+
+    def run_core(self) -> FinancialOutputs:
         income = self.income_statement()
         balance = self.balance_sheet()
         cash_flow = self.cash_flow_statement()
@@ -2141,15 +2169,7 @@ class FinancialModel:
         break_even = self.break_even_analysis()
         payback = self.payback_schedule()
         discounted_payback = self.discounted_payback_schedule()
-        scenarios = self.scenario_analysis()
-        scenario_tools = self.scenario_toolkit(scenarios)
-        sensitivity = self.sensitivity_analysis()
-        monte_carlo = self.monte_carlo_simulation()
-        ai_insights = self.ai_enhancements(
-            income=income,
-            summary=summary,
-            cash_flow=cash_flow,
-        )
+        empty_monte_carlo = build_table([], {"NPV": []}, index_name="Iteration")
         return FinancialOutputs(
             income_statement=income,
             balance_sheet=balance,
@@ -2159,13 +2179,15 @@ class FinancialModel:
             break_even=break_even,
             payback=payback,
             discounted_payback=discounted_payback,
-            scenario_results=scenarios,
-            sensitivity_results=sensitivity,
-            monte_carlo=monte_carlo,
-            scenario_tool_results=scenario_tools,
+            scenario_results={},
+            sensitivity_results={},
+            monte_carlo=empty_monte_carlo,
+            scenario_tool_results={},
             risk_factor_diagnostics=self.risk_factor_diagnostics(),
-            ai_insights=ai_insights,
+            ai_insights=None,
         )
+
+
 @dataclass
 class IRRResult:
     value: float

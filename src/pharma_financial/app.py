@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import re
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
@@ -136,6 +137,7 @@ GEN_AI_LABEL_TO_CODE = {label: code for code, label in GEN_AI_FEATURE_LABELS.ite
 
 _INPUT_CACHE: dict[str, ModelInputs] = {}
 _MODEL_CACHE: dict[str, tuple["FinancialModel", "FinancialOutputs"]] = {}
+_ANALYSIS_CACHE_KEYS = ("sensitivity_results", "monte_carlo_results", "ai_insights")
 
 
 def _rerun() -> None:
@@ -256,9 +258,43 @@ def _cached_model_run(inputs: ModelInputs, digest: str) -> tuple[FinancialModel,
         return cached
 
     model = FinancialModel(inputs)
-    outputs = model.run()
+    outputs = model.run_core()
     _MODEL_CACHE[digest] = (model, outputs)
     return model, outputs
+
+
+def _clear_analysis_cache() -> None:
+    for key in _ANALYSIS_CACHE_KEYS:
+        st.session_state.pop(key, None)
+        st.session_state.pop(f"{key}_digest", None)
+
+
+def _analysis_cache_value(key: str, digest: str, fallback):
+    cached = st.session_state.get(key)
+    cached_digest = st.session_state.get(f"{key}_digest")
+    if cached is None or cached_digest != digest:
+        return fallback
+    return cached
+
+
+def _store_analysis_cache(key: str, digest: str, value) -> None:
+    st.session_state[key] = value
+    st.session_state[f"{key}_digest"] = digest
+
+
+def _merge_analysis_outputs(outputs: FinancialOutputs, digest: str) -> FinancialOutputs:
+    return replace(
+        outputs,
+        sensitivity_results=_analysis_cache_value(
+            "sensitivity_results", digest, outputs.sensitivity_results
+        ),
+        monte_carlo=_analysis_cache_value(
+            "monte_carlo_results", digest, outputs.monte_carlo
+        ),
+        ai_insights=_analysis_cache_value(
+            "ai_insights", digest, outputs.ai_insights
+        ),
+    )
 
 
 def _scenario_options(payload: Mapping[str, object]) -> List[str]:
@@ -544,9 +580,11 @@ def main() -> None:
         st.session_state["last_model"] = model
         st.session_state["last_outputs"] = outputs
         st.session_state["last_run_digest"] = digest
+        _clear_analysis_cache()
     elif last_digest != digest:
         model = None
         outputs = None
+        _clear_analysis_cache()
 
     tabs = st.tabs(
         [
@@ -584,7 +622,7 @@ def main() -> None:
         if outputs is None:
             st.info("Press Run on the Input Landing Page to generate results.")
         else:
-            _render_sensitivity(outputs)
+            _render_sensitivity(model, outputs, digest)
     with tabs[5]:
         if outputs is None:
             st.info("Press Run on the Input Landing Page to generate results.")
@@ -594,12 +632,12 @@ def main() -> None:
         if outputs is None or model is None:
             st.info("Press Run on the Input Landing Page to generate results.")
         else:
-            _render_rag_tab(model, outputs)
+            _render_rag_tab(model, outputs, digest)
     with tabs[7]:
         if outputs is None:
             st.info("Press Run on the Input Landing Page to generate results.")
         else:
-            _render_monte_carlo(outputs)
+            _render_monte_carlo(model, outputs, digest)
     with tabs[8]:
         if outputs is None:
             st.info("Press Run on the Input Landing Page to generate results.")
@@ -610,7 +648,7 @@ def main() -> None:
             st.info("Press Run on the Input Landing Page to generate results.")
         else:
             _render_excel_model_download(st.container(), model, outputs)
-            _render_dashboard_tab(model, outputs)
+            _render_dashboard_tab(model, outputs, digest)
 
 
 def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:
@@ -1343,8 +1381,11 @@ def _render_inputs_tab(
     st.session_state["input_payload"] = payload
 
 
-def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> None:
-    income = _with_year(outputs.income_statement)
+def _render_dashboard_tab(
+    model: FinancialModel, outputs: FinancialOutputs, digest: str
+) -> None:
+    merged_outputs = _merge_analysis_outputs(outputs, digest)
+    income = _with_year(merged_outputs.income_statement)
     supports_plotly = px is not None and pd is not None
 
     if not supports_plotly:
@@ -1362,7 +1403,7 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
             st.plotly_chart(fig_ebitda, use_container_width=True)
 
     st.markdown("### Investment Metrics")
-    metric_pairs = _extract_metric_pairs(outputs.summary_metrics)
+    metric_pairs = _extract_metric_pairs(merged_outputs.summary_metrics)
     if not metric_pairs:
         st.info("No investment metrics were generated for the current assumptions.")
     else:
@@ -1373,7 +1414,7 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
                 st.metric(label=name, value=formatted)
 
     st.markdown("### Goal Seek Metric")
-    goal_data = _ensure_dataframe(outputs.goal_seek)
+    goal_data = _ensure_dataframe(merged_outputs.goal_seek)
     if isinstance(goal_data, list):
         if not goal_data:
             st.caption("No goal seek configuration provided in the assumptions.")
@@ -1437,38 +1478,43 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
         )
 
         st.markdown("#### Sensitivity Analysis")
-        if outputs.sensitivity_results:
-            for variable, table in outputs.sensitivity_results.items():
+        if merged_outputs.sensitivity_results:
+            for variable, table in merged_outputs.sensitivity_results.items():
                 st.markdown(f"- **{variable}**")
                 st.dataframe(_ensure_dataframe(table), use_container_width=True)
+        elif model.inputs.sensitivity.variables:
+            st.caption("Sensitivity results not generated yet. Run Sensitivity Analysis to compute.")
         else:
             st.caption("No sensitivity configurations provided.")
 
         st.markdown("#### Scenario / IFs Analysis")
-        if outputs.scenario_results:
-            for name, table in outputs.scenario_results.items():
+        if merged_outputs.scenario_results:
+            for name, table in merged_outputs.scenario_results.items():
                 st.markdown(f"- **{name}**")
                 st.dataframe(_with_year(table), use_container_width=True)
         else:
             st.caption("No scenarios configured in the assumptions.")
 
         st.markdown("#### Break-even Analysis")
-        st.dataframe(_ensure_dataframe(outputs.break_even), use_container_width=True)
+        st.dataframe(_ensure_dataframe(merged_outputs.break_even), use_container_width=True)
 
         st.markdown("#### Payback Schedule")
-        st.dataframe(_with_year(outputs.payback), use_container_width=True)
+        st.dataframe(_with_year(merged_outputs.payback), use_container_width=True)
 
         st.markdown("#### Discounted Payback Schedule")
-        st.dataframe(_with_year(outputs.discounted_payback), use_container_width=True)
+        st.dataframe(_with_year(merged_outputs.discounted_payback), use_container_width=True)
 
         st.markdown("#### AI & Machine Learning Insights")
-        _render_ai_dashboard(outputs.ai_insights)
+        _render_ai_dashboard(
+            merged_outputs.ai_insights,
+            ai_configured=bool(model.inputs.ai),
+        )
         return
 
     # Sensitivity Analysis charts
-    if outputs.sensitivity_results:
+    if merged_outputs.sensitivity_results:
         st.markdown("#### Sensitivity Analysis")
-        for variable, table in outputs.sensitivity_results.items():
+        for variable, table in merged_outputs.sensitivity_results.items():
             frame = _ensure_dataframe(table)
             if isinstance(frame, pd.DataFrame):
                 frame = frame.reset_index()
@@ -1492,14 +1538,16 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
                 title=title,
             )
             st.plotly_chart(fig, use_container_width=True)
+    elif model.inputs.sensitivity.variables:
+        st.caption("Sensitivity results not generated yet. Run Sensitivity Analysis to compute.")
     else:
         st.caption("No sensitivity configurations provided.")
 
     # Scenario / IFs Analysis charts
-    if outputs.scenario_results:
+    if merged_outputs.scenario_results:
         st.markdown("#### Scenario / IFs Analysis")
         scenario_frames: list[pd.DataFrame] = []
-        for name, table in outputs.scenario_results.items():
+        for name, table in merged_outputs.scenario_results.items():
             frame = _with_year(table)
             if isinstance(frame, pd.DataFrame):
                 scenario_frame = frame.copy()
@@ -1537,7 +1585,7 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
 
     # Break-even chart
     st.markdown("#### Break-even Analysis")
-    break_even_df = _ensure_dataframe(outputs.break_even)
+    break_even_df = _ensure_dataframe(merged_outputs.break_even)
     if isinstance(break_even_df, pd.DataFrame):
         break_even_frame = break_even_df.reset_index().rename(columns={"index": "Product"})
     else:
@@ -1553,7 +1601,7 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
 
     # Payback charts
     st.markdown("#### Payback Schedule")
-    payback_df = _with_year(outputs.payback)
+    payback_df = _with_year(merged_outputs.payback)
     if isinstance(payback_df, pd.DataFrame):
         payback_frame = payback_df
     else:
@@ -1567,7 +1615,7 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
     )
     st.plotly_chart(fig_payback, use_container_width=True)
 
-    discounted_df = _with_year(outputs.discounted_payback)
+    discounted_df = _with_year(merged_outputs.discounted_payback)
     if isinstance(discounted_df, pd.DataFrame):
         discounted_frame = discounted_df
     else:
@@ -1582,7 +1630,10 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
     st.plotly_chart(fig_discounted, use_container_width=True)
 
     st.markdown("#### AI & Machine Learning Insights")
-    _render_ai_dashboard(outputs.ai_insights)
+    _render_ai_dashboard(
+        merged_outputs.ai_insights,
+        ai_configured=bool(model.inputs.ai),
+    )
 
 
 def _render_statement_tab(title: str, table) -> None:
@@ -1782,12 +1833,15 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
             st.plotly_chart(fig_expense, use_container_width=True)
 
 
-def _render_ai_dashboard(ai_insights: Optional[AIInsights]) -> None:
+def _render_ai_dashboard(ai_insights: Optional[AIInsights], *, ai_configured: bool) -> None:
     if ai_insights is None:
-        st.caption(
-            "AI configuration not available. Enable AI enhancements on the Input Landing Page "
-            "to unlock machine-generated commentary."
-        )
+        if ai_configured:
+            st.caption("AI insights have not been generated yet. Run AI Insights to view results.")
+        else:
+            st.caption(
+                "AI configuration not available. Enable AI enhancements on the Input Landing Page "
+                "to unlock machine-generated commentary."
+            )
         return
 
     if ai_insights.ml_forecast is not None:
@@ -1809,7 +1863,9 @@ def _render_ai_dashboard(ai_insights: Optional[AIInsights]) -> None:
             st.json(ai_insights.metadata)
 
 
-def _render_sensitivity(outputs: FinancialOutputs) -> None:
+def _render_sensitivity(
+    model: FinancialModel, outputs: FinancialOutputs, digest: str
+) -> None:
     st.subheader("Sensitivity Analysis")
     payload = st.session_state.get("input_payload")
     if payload is None:
@@ -1819,13 +1875,26 @@ def _render_sensitivity(outputs: FinancialOutputs) -> None:
     _render_sensitivity_inputs(payload)
     st.session_state["input_payload"] = payload
 
-    if not outputs.sensitivity_results:
+    cached_results = _analysis_cache_value(
+        "sensitivity_results", digest, outputs.sensitivity_results
+    )
+
+    if st.button("Run Sensitivity Analysis", key="run_sensitivity"):
+        with st.spinner("Running sensitivity analysis..."):
+            cached_results = model.sensitivity_analysis()
+        _store_analysis_cache("sensitivity_results", digest, cached_results)
+
+    if not model.inputs.sensitivity.variables:
         st.info("No sensitivity configurations provided in the assumptions file.")
         return
 
     supports_plotly = px is not None and pd is not None
 
-    for variable, df in outputs.sensitivity_results.items():
+    if not cached_results:
+        st.info("Run Sensitivity Analysis to generate results.")
+        return
+
+    for variable, df in cached_results.items():
         st.markdown(f"#### {variable}")
         frame = _with_year(df)
         st.dataframe(frame, use_container_width=True)
@@ -1928,7 +1997,9 @@ def _render_scenarios(outputs: FinancialOutputs) -> None:
         st.caption("No scenario tools have been configured.")
 
 
-def _render_monte_carlo(outputs: FinancialOutputs) -> None:
+def _render_monte_carlo(
+    model: FinancialModel, outputs: FinancialOutputs, digest: str
+) -> None:
     st.subheader("Monte Carlo Simulation")
     payload = st.session_state.get("input_payload")
     if payload is None:
@@ -1938,7 +2009,24 @@ def _render_monte_carlo(outputs: FinancialOutputs) -> None:
     _render_monte_carlo_inputs(payload)
     st.session_state["input_payload"] = payload
 
-    monte_carlo_df = _ensure_dataframe(outputs.monte_carlo)
+    monte_carlo_results = _analysis_cache_value(
+        "monte_carlo_results", digest, outputs.monte_carlo
+    )
+
+    if st.button("Run Monte Carlo Simulation", key="run_monte_carlo"):
+        with st.spinner("Running Monte Carlo simulation..."):
+            monte_carlo_results = model.monte_carlo_simulation()
+        _store_analysis_cache("monte_carlo_results", digest, monte_carlo_results)
+
+    if model.inputs.monte_carlo.iterations <= 0:
+        st.info("Monte Carlo iterations are set to 0. Increase iterations to run.")
+        return
+
+    if not getattr(monte_carlo_results, "index", []):
+        st.info("Run Monte Carlo Simulation to generate results.")
+        return
+
+    monte_carlo_df = _ensure_dataframe(monte_carlo_results)
     if px is None or pd is None:
         st.warning("Plotly unavailable. Displaying Monte Carlo results in tabular form.")
         st.dataframe(monte_carlo_df, use_container_width=True)
@@ -2448,9 +2536,11 @@ def _ensure_dataframe(table) -> "pd.DataFrame | list":
 def _build_business_plan_bundle(
     model: FinancialModel, outputs: FinancialOutputs, scenario_name: str
 ) -> tuple[dict[str, tuple[bytes, str, str]], bytes]:
-    sections = collect_report_sections(model, outputs)
+    digest = st.session_state.get("last_run_digest", "")
+    merged_outputs = _merge_analysis_outputs(outputs, digest)
+    sections = collect_report_sections(model, merged_outputs)
     rag_chunks = st.session_state.get("rag_chunks", [])
-    sections = _apply_section_writeups(sections, outputs, rag_chunks)
+    sections = _apply_section_writeups(sections, merged_outputs, rag_chunks)
     report_name = "business_plan"
     slug = _scenario_slug(scenario_name)
     if slug and slug != "base":
@@ -2686,7 +2776,9 @@ def _apply_section_writeups(
     return updated_sections
 
 
-def _render_rag_tab(model: FinancialModel, outputs: FinancialOutputs) -> None:
+def _render_rag_tab(
+    model: FinancialModel, outputs: FinancialOutputs, digest: str
+) -> None:
     st.markdown("### Retrieval-Augmented Generation (RAG) Assistant")
     st.caption(
         "Upload supporting documents and retrieve the most relevant excerpts for a query."
@@ -2704,6 +2796,19 @@ def _render_rag_tab(model: FinancialModel, outputs: FinancialOutputs) -> None:
         st.markdown("### AI & Machine Learning Configuration")
         _render_ai_settings(payload)
         _ai_settings_to_payload(st.session_state.get("ai_settings", {}), payload)
+
+    ai_configured = bool(model.inputs.ai)
+    st.markdown("### AI Insights")
+    ai_insights = _analysis_cache_value("ai_insights", digest, outputs.ai_insights)
+    if st.button("Run AI Insights", key="run_ai_insights"):
+        with st.spinner("Generating AI insights..."):
+            ai_insights = model.ai_enhancements(
+                income=outputs.income_statement,
+                summary=outputs.summary_metrics,
+                cash_flow=outputs.cash_flow,
+            )
+        _store_analysis_cache("ai_insights", digest, ai_insights)
+    _render_ai_dashboard(ai_insights, ai_configured=ai_configured)
 
     documents = st.session_state.get("rag_documents", [])
     if st.button("Index Documents", key="rag_index"):
