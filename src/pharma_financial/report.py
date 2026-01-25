@@ -15,9 +15,19 @@ from zipfile import ZipFile
 
 from .model import FinancialModel, FinancialOutputs
 from .table import Table
-from openpyxl.chart import LineChart, Reference
-import plotly.graph_objects as go
-import plotly.io as pio
+
+try:  # pragma: no cover - optional dependency for charts
+    from openpyxl.chart import LineChart, Reference  # type: ignore
+except Exception:  # pragma: no cover - openpyxl may be missing
+    LineChart = None  # type: ignore
+    Reference = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency for plot rendering
+    import plotly.graph_objects as go  # type: ignore
+    import plotly.io as pio  # type: ignore
+except Exception:  # pragma: no cover - plotly optional
+    go = None  # type: ignore
+    pio = None  # type: ignore
 
 try:  # pragma: no cover - optional dependency
     import pandas as pd  # type: ignore
@@ -533,6 +543,8 @@ def _extract_chart_series(rows: Sequence[Mapping[str, Any]]) -> tuple[list[Any],
 
 
 def _build_chart_image(rows: Sequence[Mapping[str, Any]], title: str) -> bytes | None:
+    if go is None or pio is None:
+        return None
     x_values, labels, series_values = _extract_chart_series(rows)
     if not labels or not x_values:
         return None
@@ -555,7 +567,7 @@ def _build_chart_image(rows: Sequence[Mapping[str, Any]], title: str) -> bytes |
 
 
 def _add_excel_chart(sheet, rows: Sequence[Mapping[str, Any]]) -> None:
-    if not rows:
+    if not rows or LineChart is None or Reference is None:
         return
     columns = _ordered_columns(rows)
     if not columns or "Year" not in columns:

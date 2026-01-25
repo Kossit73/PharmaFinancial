@@ -796,14 +796,14 @@ class FinancialModel:
         interest_expense = income.column("Interest")
         depreciation_expense = list(depreciation)
 
-        operating_profit = [
-            ni + tax + interest
-            for ni, tax, interest in zip(
-                net_income,
-                tax_expense,
-                interest_expense,
-            )
-        ]
+        net_income_array = np.array(net_income, dtype=float)
+        tax_expense_array = np.array(tax_expense, dtype=float)
+        interest_expense_array = np.array(interest_expense, dtype=float)
+        depreciation_array = np.array(depreciation_expense, dtype=float)
+
+        operating_profit = (
+            net_income_array + tax_expense_array + interest_expense_array
+        ).tolist()
 
         inventory_change = _difference(working_balances.column("Inventory"))
         receivable_change = _difference(working_balances.column("Accounts Receivable"))
@@ -812,67 +812,49 @@ class FinancialModel:
         other_asset_change = _difference(working_balances.column("Other Assets"))
         other_liability_change = _difference(working_balances.column("Other Liabilities"))
 
-        inventory_adjustment = [-value for value in inventory_change]
-        receivable_adjustment = [-value for value in receivable_change]
-        payable_adjustment = [value for value in payable_change]
-        prepaid_adjustment = [-value for value in prepaid_change]
-        other_asset_adjustment = [-value for value in other_asset_change]
-        other_liability_adjustment = [value for value in other_liability_change]
+        inventory_adjustment = -np.array(inventory_change, dtype=float)
+        receivable_adjustment = -np.array(receivable_change, dtype=float)
+        payable_adjustment = np.array(payable_change, dtype=float)
+        prepaid_adjustment = -np.array(prepaid_change, dtype=float)
+        other_asset_adjustment = -np.array(other_asset_change, dtype=float)
+        other_liability_adjustment = np.array(other_liability_change, dtype=float)
 
-        cash_flow_from_operations = [
-            op
-            + dep
-            + inv
-            + ar
-            + ap
-            + pre
-            + other_asset_adj
-            + other_liab
-            for op, dep, inv, ar, ap, pre, other_asset_adj, other_liab in zip(
-                operating_profit,
-                depreciation_expense,
-                inventory_adjustment,
-                receivable_adjustment,
-                payable_adjustment,
-                prepaid_adjustment,
-                other_asset_adjustment,
-                other_liability_adjustment,
-                strict=False,
-            )
-        ]
+        cash_flow_from_operations = (
+            np.array(operating_profit, dtype=float)
+            + depreciation_array
+            + inventory_adjustment
+            + receivable_adjustment
+            + payable_adjustment
+            + prepaid_adjustment
+            + other_asset_adjustment
+            + other_liability_adjustment
+        ).tolist()
 
-        interest_paid = [-value for value in interest_expense]
-        taxes_paid = [-value for value in tax_expense]
+        interest_paid = -interest_expense_array
+        taxes_paid = -tax_expense_array
 
-        net_cash_from_operations = [
-            cfo + interest + tax
-            for cfo, interest, tax in zip(
-                cash_flow_from_operations,
-                interest_paid,
-                taxes_paid,
-                strict=False,
-            )
-        ]
+        net_cash_from_operations = (
+            np.array(cash_flow_from_operations, dtype=float) + interest_paid + taxes_paid
+        ).tolist()
 
         capex = self._capex_series()
-        capital_expenditure = [-value for value in capex]
-        net_cash_from_investing = list(capital_expenditure)
+        capital_expenditure = -np.array(capex, dtype=float)
+        net_cash_from_investing = capital_expenditure.tolist()
 
         financing_components = self._financing_cash_flow_components()
-        net_cash_from_financing = [
-            sum(values)
-            for values in zip(*financing_components.values(), strict=False)
-        ]
+        if financing_components:
+            financing_arrays = [
+                np.array(series, dtype=float) for series in financing_components.values()
+            ]
+            net_cash_from_financing = np.sum(financing_arrays, axis=0).tolist()
+        else:
+            net_cash_from_financing = [0.0 for _ in self.years]
 
-        net_cash_flow = [
-            op + inv + fin
-            for op, inv, fin in zip(
-                net_cash_from_operations,
-                net_cash_from_investing,
-                net_cash_from_financing,
-                strict=False,
-            )
-        ]
+        net_cash_flow = (
+            np.array(net_cash_from_operations, dtype=float)
+            + np.array(net_cash_from_investing, dtype=float)
+            + np.array(net_cash_from_financing, dtype=float)
+        ).tolist()
 
         beginning_cash = _shift(_cumulative(net_cash_flow), fill_value=0.0)
         ending_cash = [begin + change for begin, change in zip(beginning_cash, net_cash_flow)]
@@ -906,54 +888,46 @@ class FinancialModel:
         _, revolver_outstanding = self._revolver_schedules()
         _, overdraft_outstanding = self._overdraft_schedules()
 
-        total_current_assets = [
-            cash + ar + inv + pre + other
-            for cash, ar, inv, pre, other in zip(
-                cash_flow.column(CASH_FLOW_END_COLUMN),
-                working_capital.column("Accounts Receivable"),
-                working_capital.column("Inventory"),
-                working_capital.column("Prepaid Expenses"),
-                working_capital.column("Other Assets"),
-            )
-        ]
-        total_assets = [tca + ppe for tca, ppe in zip(total_current_assets, net_ppe)]
+        cash_array = np.array(cash_flow.column(CASH_FLOW_END_COLUMN), dtype=float)
+        ar_array = np.array(working_capital.column("Accounts Receivable"), dtype=float)
+        inventory_array = np.array(working_capital.column("Inventory"), dtype=float)
+        prepaid_array = np.array(working_capital.column("Prepaid Expenses"), dtype=float)
+        other_assets_array = np.array(working_capital.column("Other Assets"), dtype=float)
+        net_ppe_array = np.array(net_ppe, dtype=float)
 
-        total_liabilities = [
-            ap
-            + other
-            + senior
-            + revolver
-            + overdraft
-            for ap, other, senior, revolver, overdraft in zip(
-                accounts_payable,
-                other_liabilities,
-                senior_outstanding,
-                revolver_outstanding,
-                overdraft_outstanding,
-            )
-        ]
-        shareholders_equity = [
-            total_asset - total_liability
-            for total_asset, total_liability in zip(total_assets, total_liabilities)
-        ]
-        total_liabilities_equity = [l + e for l, e in zip(total_liabilities, shareholders_equity)]
+        total_current_assets = (
+            cash_array + ar_array + inventory_array + prepaid_array + other_assets_array
+        )
+        total_assets = total_current_assets + net_ppe_array
+
+        ap_array = np.array(accounts_payable, dtype=float)
+        other_liabilities_array = np.array(other_liabilities, dtype=float)
+        senior_array = np.array(senior_outstanding, dtype=float)
+        revolver_array = np.array(revolver_outstanding, dtype=float)
+        overdraft_array = np.array(overdraft_outstanding, dtype=float)
+
+        total_liabilities = (
+            ap_array + other_liabilities_array + senior_array + revolver_array + overdraft_array
+        )
+        shareholders_equity = total_assets - total_liabilities
+        total_liabilities_equity = total_liabilities + shareholders_equity
 
         table = build_table(
             self.years,
             {
-                "Cash": cash_flow.column(CASH_FLOW_END_COLUMN),
-                "Accounts Receivable": working_capital.column("Accounts Receivable"),
-                "Inventory": working_capital.column("Inventory"),
-                "Prepaid Expenses": working_capital.column("Prepaid Expenses"),
-                "Other Assets": working_capital.column("Other Assets"),
-                "Net PP&E": net_ppe,
-                "Total Assets": total_assets,
+                "Cash": cash_array.tolist(),
+                "Accounts Receivable": ar_array.tolist(),
+                "Inventory": inventory_array.tolist(),
+                "Prepaid Expenses": prepaid_array.tolist(),
+                "Other Assets": other_assets_array.tolist(),
+                "Net PP&E": net_ppe_array.tolist(),
+                "Total Assets": total_assets.tolist(),
                 "Accounts Payable": accounts_payable,
                 "Other Liabilities": other_liabilities,
                 "Overdraft": overdraft_outstanding,
-                "Total Liabilities": total_liabilities,
-                "Shareholders' Equity": shareholders_equity,
-                "Total Liabilities & Equity": total_liabilities_equity,
+                "Total Liabilities": total_liabilities.tolist(),
+                "Shareholders' Equity": shareholders_equity.tolist(),
+                "Total Liabilities & Equity": total_liabilities_equity.tolist(),
             },
         )
         self._balance_sheet_cache = table
