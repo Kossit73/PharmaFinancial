@@ -1,6 +1,7 @@
 """Core financial model built without third-party scientific dependencies."""
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
@@ -129,6 +130,11 @@ class FinancialModel:
         self._summary_metrics_cache: Table | None = None
         self._irr_result: "IRRResult | None" = None
         self._risk_factor_diagnostics_cache: Table | None = None
+        self._calendar_days_cache: List[float] | None = None
+        self._inflation_array_cache: np.ndarray | None = None
+        self._risk_revenue_array_cache: np.ndarray | None = None
+        self._risk_cost_array_cache: np.ndarray | None = None
+        self._utility_arrays_cache: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
 
     # ------------------------------------------------------------------ core
     def _build_inflation_factors(self, series: Iterable[Number]) -> List[float]:
@@ -169,6 +175,52 @@ class FinancialModel:
         self._distributor_share_cache = None
         self._interest_schedule_cache = None
         self._tax_schedule_cache = None
+        self._calendar_days_cache = None
+        self._inflation_array_cache = None
+        self._risk_revenue_array_cache = None
+        self._risk_cost_array_cache = None
+        self._utility_arrays_cache = None
+
+    def _inflation_array(self) -> np.ndarray:
+        if self._inflation_array_cache is None:
+            inflation = self._pad_series(self._inflation, len(self.years), fill=1.0)
+            self._inflation_array_cache = np.array(inflation, dtype=float)
+        return self._inflation_array_cache
+
+    def _risk_revenue_array(self) -> np.ndarray:
+        if self._risk_revenue_array_cache is None:
+            factors = self._pad_series(self._risk_factors(), len(self.years), fill=1.0)
+            self._risk_revenue_array_cache = np.array(factors, dtype=float)
+        return self._risk_revenue_array_cache
+
+    def _risk_cost_array(self) -> np.ndarray:
+        if self._risk_cost_array_cache is None:
+            factors = self._pad_series(self._risk_cost_factors(), len(self.years), fill=1.0)
+            self._risk_cost_array_cache = np.array(factors, dtype=float)
+        return self._risk_cost_array_cache
+
+    def _utility_arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        if self._utility_arrays_cache is None:
+            year_count = len(self.years)
+            utility = self.inputs.utility_schedule
+            electricity = (
+                np.array(self._pad_series(utility.electricity_per_day, year_count, fill=0.0), dtype=float)
+                * np.array(self._pad_series(utility.electricity_rate, year_count, fill=0.0), dtype=float)
+                * np.array(self._pad_series(utility.electricity_days, year_count, fill=0.0), dtype=float)
+            )
+            water = (
+                np.array(self._pad_series(utility.water_per_day, year_count, fill=0.0), dtype=float)
+                * np.array(self._pad_series(utility.water_rate, year_count, fill=0.0), dtype=float)
+                * np.array(self._pad_series(utility.water_days, year_count, fill=0.0), dtype=float)
+            )
+            steam = (
+                np.array(self._pad_series(utility.steam_per_hour, year_count, fill=0.0), dtype=float)
+                * np.array(self._pad_series(utility.steam_rate, year_count, fill=0.0), dtype=float)
+                * np.array(self._pad_series(utility.steam_days, year_count, fill=0.0), dtype=float)
+                * np.array(self._pad_series(utility.steam_hours, year_count, fill=0.0), dtype=float)
+            )
+            self._utility_arrays_cache = (electricity, water, steam)
+        return self._utility_arrays_cache
 
     def _production(self) -> Dict[str, List[float]]:
         if self._production_cache is not None:
@@ -285,11 +337,8 @@ class FinancialModel:
         production = self._production()
         commission_params = self._commission_parameters()
         year_count = len(self.years)
-        risk_factors = self._pad_series(self._risk_factors(), year_count, fill=1.0)
-        inflation = self._pad_series(self._inflation, year_count, fill=1.0)
-
-        risk_array = np.array(risk_factors, dtype=float)
-        inflation_array = np.array(inflation, dtype=float)
+        risk_array = self._risk_revenue_array()
+        inflation_array = self._inflation_array()
 
         gross_totals_array = np.zeros(year_count, dtype=float)
         columns: MutableMapping[str, List[float]] = {}
@@ -348,13 +397,10 @@ class FinancialModel:
         year_count = len(self.years)
         total_units = self._total_units_by_year()
 
-        risk_factors = self._pad_series(self._risk_cost_factors(), year_count, fill=1.0)
-        inflation = self._pad_series(self._inflation, year_count, fill=1.0)
-
         variable_lookup = self._variable_costs()
 
-        risk_array = np.array(risk_factors, dtype=float)
-        inflation_array = np.array(inflation, dtype=float)
+        risk_array = self._risk_cost_array()
+        inflation_array = self._inflation_array()
 
         raw_material_cost_array = np.zeros(year_count, dtype=float)
         for product in self.products:
@@ -364,23 +410,7 @@ class FinancialModel:
         raw_material_cost_array = raw_material_cost_array * inflation_array * risk_array
         raw_material_cost = raw_material_cost_array.tolist()
 
-        utility = self.inputs.utility_schedule
-        electricity = (
-            np.array(self._pad_series(utility.electricity_per_day, year_count, fill=0.0), dtype=float)
-            * np.array(self._pad_series(utility.electricity_rate, year_count, fill=0.0), dtype=float)
-            * np.array(self._pad_series(utility.electricity_days, year_count, fill=0.0), dtype=float)
-        )
-        water = (
-            np.array(self._pad_series(utility.water_per_day, year_count, fill=0.0), dtype=float)
-            * np.array(self._pad_series(utility.water_rate, year_count, fill=0.0), dtype=float)
-            * np.array(self._pad_series(utility.water_days, year_count, fill=0.0), dtype=float)
-        )
-        steam = (
-            np.array(self._pad_series(utility.steam_per_hour, year_count, fill=0.0), dtype=float)
-            * np.array(self._pad_series(utility.steam_rate, year_count, fill=0.0), dtype=float)
-            * np.array(self._pad_series(utility.steam_days, year_count, fill=0.0), dtype=float)
-            * np.array(self._pad_series(utility.steam_hours, year_count, fill=0.0), dtype=float)
-        )
+        electricity, water, steam = self._utility_arrays()
         utilities = (electricity + water + steam).tolist()
 
         base_direct = sum(self.inputs.direct_labor_costs.values())
@@ -940,6 +970,7 @@ class FinancialModel:
             return capex
 
         config = self.inputs.capital_expenditure or {}
+        year_index = {year: idx for idx, year in enumerate(self.years)}
 
         first_year_total = 0.0
         for key, value in config.items():
@@ -958,14 +989,14 @@ class FinancialModel:
                     year = int(year_value)
                 except (TypeError, ValueError):
                     continue
-                if year not in self.years:
-                    continue
                 try:
-                    capex[self.years.index(year)] += float(addition)
+                    index = year_index.get(year)
+                    if index is None:
+                        continue
+                    capex[index] += float(addition)
                 except (TypeError, ValueError):
                     continue
 
-        year_index = {year: idx for idx, year in enumerate(self.years)}
         for row in self.inputs.depreciation_schedule:
             try:
                 acquisition = float(row.acquisition or 0.0)
@@ -981,6 +1012,9 @@ class FinancialModel:
         return capex
 
     def _calendar_days(self) -> List[float]:
+        if self._calendar_days_cache is not None:
+            return list(self._calendar_days_cache)
+
         days = list(getattr(self.inputs.working_capital_days, "calendar_days", []) or [])
         if not days:
             days = [366 if year % 4 == 0 else 365 for year in self.years]
@@ -989,7 +1023,8 @@ class FinancialModel:
             fill = days[-1] if days else 365
             days = days + [fill for _ in range(len(self.years) - len(days))]
 
-        return [float(value) for value in days[: len(self.years)]]
+        self._calendar_days_cache = [float(value) for value in days[: len(self.years)]]
+        return list(self._calendar_days_cache)
 
     def _distributor_receivable_balances(
         self, *, weighted: Optional[Sequence[float]] = None
@@ -1014,14 +1049,14 @@ class FinancialModel:
                 balances.append(0.0)
         return balances
 
-    def _working_capital_balances_from_series(
+    def _working_capital_series_from_inputs(
         self,
         revenue: Sequence[float],
         cost_of_sales: Sequence[float],
         *,
         distributor_weighted: Optional[Sequence[float]] = None,
         distributor_share: Optional[Sequence[float]] = None,
-    ) -> Table:
+    ) -> Dict[str, List[float]]:
         days = self.inputs.working_capital_days
 
         def _pad(series: Sequence[float]) -> List[float]:
@@ -1094,27 +1129,40 @@ class FinancialModel:
             for a, inv, pre, other, pay, other_liab in zip(ar, inventory, prepaid, other_assets, ap, other_liabilities)
         ]
 
-        return build_table(
-            self.years,
-            {
-                "Days in Year": days_in_year,
-                "Accounts Receivable Days": ar_days,
-                "Accounts Receivable (Base)": ar_base,
-                "Distributor Receivables": distributor_receivables,
-                "Accounts Receivable": ar,
-                "Inventory Days": inventory_days,
-                "Inventory": inventory,
-                "Prepaid Expenses Days": prepaid_days,
-                "Prepaid Expenses": prepaid,
-                "Other Assets Days": other_asset_days,
-                "Other Assets": other_assets,
-                "Accounts Payable Days": ap_days,
-                "Accounts Payable": ap,
-                "Other Liabilities Days": other_liability_days,
-                "Other Liabilities": other_liabilities,
-                "Net Working Capital": net_working_capital,
-            },
+        return {
+            "Days in Year": days_in_year,
+            "Accounts Receivable Days": ar_days,
+            "Accounts Receivable (Base)": ar_base,
+            "Distributor Receivables": distributor_receivables,
+            "Accounts Receivable": ar,
+            "Inventory Days": inventory_days,
+            "Inventory": inventory,
+            "Prepaid Expenses Days": prepaid_days,
+            "Prepaid Expenses": prepaid,
+            "Other Assets Days": other_asset_days,
+            "Other Assets": other_assets,
+            "Accounts Payable Days": ap_days,
+            "Accounts Payable": ap,
+            "Other Liabilities Days": other_liability_days,
+            "Other Liabilities": other_liabilities,
+            "Net Working Capital": net_working_capital,
+        }
+
+    def _working_capital_balances_from_series(
+        self,
+        revenue: Sequence[float],
+        cost_of_sales: Sequence[float],
+        *,
+        distributor_weighted: Optional[Sequence[float]] = None,
+        distributor_share: Optional[Sequence[float]] = None,
+    ) -> Table:
+        columns = self._working_capital_series_from_inputs(
+            revenue,
+            cost_of_sales,
+            distributor_weighted=distributor_weighted,
+            distributor_share=distributor_share,
         )
+        return build_table(self.years, columns)
 
     def _working_capital_balances(self) -> Table:
         if self._working_capital_cache is not None:
@@ -1272,27 +1320,21 @@ class FinancialModel:
         results: Dict[str, Table] = {}
         base_inflation = list(self.inputs.inflation_series)
         base_discount = float(self.inputs.financing.discount_rate)
-        try:
-            for name, scenario in self.inputs.scenarios.items():
-                inflation_override = scenario.get("inflation", base_inflation)
-                inflation_series = [float(value) for value in inflation_override]
-                interest_values = scenario.get("interest", [base_discount])
-                try:
-                    discount_rate = float(interest_values[0]) if interest_values else base_discount
-                except (TypeError, ValueError, IndexError):
-                    discount_rate = base_discount
+        for name, scenario in self.inputs.scenarios.items():
+            inflation_override = scenario.get("inflation", base_inflation)
+            inflation_series = [float(value) for value in inflation_override]
+            interest_values = scenario.get("interest", [base_discount])
+            try:
+                discount_rate = float(interest_values[0]) if interest_values else base_discount
+            except (TypeError, ValueError, IndexError):
+                discount_rate = base_discount
 
-                self.inputs.inflation_series = inflation_series
-                self.inputs.financing.discount_rate = discount_rate
-                self._inflation = self._build_inflation_factors(self.inputs.inflation_series)
-                self._invalidate_statement_caches()
-                income = self.income_statement()
-                results[name] = income.select(["Net Revenue", "EBITDA", "EBIT", "Net Income"])
-        finally:
-            self.inputs.inflation_series = base_inflation
-            self.inputs.financing.discount_rate = base_discount
-            self._inflation = self._build_inflation_factors(self.inputs.inflation_series)
-            self._invalidate_statement_caches()
+            scenario_inputs = copy.deepcopy(self.inputs)
+            scenario_inputs.inflation_series = inflation_series
+            scenario_inputs.financing.discount_rate = discount_rate
+            scenario_model = FinancialModel(scenario_inputs)
+            income = scenario_model.income_statement()
+            results[name] = income.select(["Net Revenue", "EBITDA", "EBIT", "Net Income"])
         return results
 
     def scenario_toolkit(self, scenarios: Mapping[str, Table]) -> Dict[str, ScenarioToolResult]:
@@ -1551,31 +1593,24 @@ class FinancialModel:
             multipliers = []
             npvs = []
             irrs = []
-            original_variables = dict(getattr(self.inputs, "variable_cost_overrides", {}))
             for multiplier in adjustments:
-                original_tablet_price = self.inputs.unit_costs["Tablets"].selling_price
-                original_discount = self.inputs.financing.discount_rate
-
+                scenario_inputs = copy.deepcopy(self.inputs)
                 if variable == "tablet_price":
-                    self.inputs.unit_costs["Tablets"].selling_price = original_tablet_price * multiplier
+                    scenario_inputs.unit_costs["Tablets"].selling_price *= multiplier
                 elif variable == "raw_material_cost":
                     scaled = {
-                        product: value * multiplier for product, value in original_variables.items()
+                        product: value * multiplier
+                        for product, value in scenario_inputs.variable_cost_overrides.items()
                     }
-                    self.inputs.variable_cost_overrides = scaled
+                    scenario_inputs.variable_cost_overrides = scaled
                 elif variable == "discount_rate":
-                    self.inputs.financing.discount_rate = multiplier
+                    scenario_inputs.financing.discount_rate = multiplier
 
-                self._invalidate_statement_caches()
-                metrics = self.summary_metrics()
+                scenario_model = FinancialModel(scenario_inputs)
+                metrics = scenario_model.summary_metrics()
                 multipliers.append(multiplier)
                 npvs.append(metrics.column("Value")[0])
                 irrs.append(metrics.column("Value")[1])
-
-                self.inputs.unit_costs["Tablets"].selling_price = original_tablet_price
-                self.inputs.variable_cost_overrides = dict(original_variables)
-                self.inputs.financing.discount_rate = original_discount
-                self._invalidate_statement_caches()
             index = list(range(1, len(multipliers) + 1))
             results[variable] = build_table(index, {"Multiplier": multipliers, "NPV": npvs, "IRR": irrs}, index_name="Case")
         return results
@@ -1593,26 +1628,25 @@ class FinancialModel:
             low, high = -0.05, 0.05
 
         revenue_table = self.revenue_schedule()
-        base_revenue = revenue_table.column("Net Revenue")
+        base_revenue = np.array(revenue_table.column("Net Revenue"), dtype=float)
         costs = self.cost_structure()
-        raw_materials = costs.column("Raw Materials")
-        utilities = costs.column("Utilities")
-        direct_labor = costs.column("Direct Labor")
-        indirect_labor = costs.column("General & Admin")
-        base_cost_of_sales = costs.column("Cost of Sales")
-        depreciation = self.depreciation_schedule()
-        interest = self._interest_schedule()
-        tax_schedule = self._tax_schedule()
+        raw_materials = np.array(costs.column("Raw Materials"), dtype=float)
+        utilities = np.array(costs.column("Utilities"), dtype=float)
+        direct_labor = np.array(costs.column("Direct Labor"), dtype=float)
+        indirect_labor = np.array(costs.column("General & Admin"), dtype=float)
+        depreciation = np.array(self.depreciation_schedule(), dtype=float)
+        interest = np.array(self._interest_schedule(), dtype=float)
+        tax_schedule = np.array(self._tax_schedule(), dtype=float)
         discount_rate = self.inputs.financing.discount_rate
-        capex = self._capex_series()
+        capex = np.array(self._capex_series(), dtype=float)
         financing_components = self._financing_cash_flow_components()
         other_financing = {
             name: list(series)
             for name, series in financing_components.items()
             if name != "Dividends Paid"
         }
-        base_weighted = self._distributor_receivable_cache or [0.0 for _ in self.years]
-        base_distributor_share = self._distributor_share_cache or [0.0 for _ in self.years]
+        base_weighted = np.array(self._distributor_receivable_cache or [0.0 for _ in self.years], dtype=float)
+        base_distributor_share = np.array(self._distributor_share_cache or [0.0 for _ in self.years], dtype=float)
 
         import random
 
@@ -1697,14 +1731,16 @@ class FinancialModel:
         correlation_variables = [
             code for code in variable_codes if code in (params.correlations or {})
         ]
+        base_revenue_safe = np.where(np.abs(base_revenue) > 1e-9, base_revenue, 1.0)
+        capital_expenditure = (-capex).tolist()
 
         for _ in range(iterations):
             shocks = _correlated_shocks(correlation_variables) if use_correlated else {}
             if "revenue_growth" in variable_codes:
                 revenue_shift = shocks.get("revenue_growth", 0.0) * normal_std if use_correlated else 0.0
-                growth_rates = [_sample(revenue_shift) for _ in self.years]
+                growth_rates = np.array([_sample(revenue_shift) for _ in self.years], dtype=float)
             else:
-                growth_rates = [0.0 for _ in self.years]
+                growth_rates = np.zeros(len(self.years), dtype=float)
 
             raw_factor = 1.0 + (
                 _sample(shocks.get("raw_material_cost", 0.0) * normal_std)
@@ -1740,58 +1776,47 @@ class FinancialModel:
                     0.0,
                     1.0 - _sample(shocks.get("other", 0.0) * normal_std),
                 )
-            risk_series = [risk_adjustment for _ in self.years] if "other" in variable_codes else [1.0 for _ in self.years]
+            risk_series = (
+                np.full(len(self.years), risk_adjustment, dtype=float)
+                if "other" in variable_codes
+                else np.ones(len(self.years), dtype=float)
+            )
 
-            simulated_revenue = [
-                base * (1.0 + growth) * risk_series[idx]
-                for idx, (base, growth) in enumerate(zip(base_revenue, growth_rates))
-            ]
+            simulated_revenue = base_revenue * (1.0 + growth_rates) * risk_series
 
-            raw_series = [value * raw_factor * risk_series[idx] for idx, value in enumerate(raw_materials)]
-            utility_series = [max(0.0, value * utility_factor) for value in utilities]
-            direct_series = [value * labor_factor * risk_series[idx] for idx, value in enumerate(direct_labor)]
-            indirect_series = [value * labor_factor * risk_series[idx] for idx, value in enumerate(indirect_labor)]
+            raw_series = raw_materials * raw_factor * risk_series
+            utility_series = np.maximum(0.0, utilities * utility_factor)
+            direct_series = direct_labor * labor_factor * risk_series
+            indirect_series = indirect_labor * labor_factor * risk_series
 
-            utility_cost_share = [
-                value * self.inputs.utility_cost_of_sales_share for value in utility_series
-            ]
-            utility_admin_share = [value - cost_share for value, cost_share in zip(utility_series, utility_cost_share)]
-            simulated_cost_of_sales = [
-                raw_series[idx] + utility_cost_share[idx] + direct_series[idx]
-                for idx in range(len(self.years))
-            ]
-            general_admin_series = [
-                indirect_series[idx] + utility_admin_share[idx]
-                for idx in range(len(self.years))
-            ]
+            utility_cost_share = utility_series * self.inputs.utility_cost_of_sales_share
+            utility_admin_share = utility_series - utility_cost_share
+            simulated_cost_of_sales = raw_series + utility_cost_share + direct_series
+            general_admin_series = indirect_series + utility_admin_share
 
-            gross_profit = [
-                simulated_revenue[idx] - simulated_cost_of_sales[idx]
-                for idx in range(len(self.years))
-            ]
-            ebitda = [
-                gross_profit[idx] - general_admin_series[idx]
-                for idx in range(len(self.years))
-            ]
-            ebit = [ebitda[idx] - depreciation[idx] for idx in range(len(self.years))]
+            gross_profit = simulated_revenue - simulated_cost_of_sales
+            ebitda = gross_profit - general_admin_series
+            ebit = ebitda - depreciation
 
-            interest_series = [
-                interest[idx] * interest_factor
-                for idx in range(len(self.years))
-            ] if "senior_debt" in variable_codes else list(interest)
+            interest_series = (
+                interest * interest_factor
+                if "senior_debt" in variable_codes
+                else interest.copy()
+            )
 
-            ebt = [ebit[idx] - interest_series[idx] for idx in range(len(self.years))]
-            effective_tax = [
-                min(1.0, max(0.0, rate * tax_factor))
-                for rate in tax_schedule
-            ] if "tax_rate" in variable_codes else list(tax_schedule)
+            ebt = ebit - interest_series
+            effective_tax = (
+                np.clip(tax_schedule * tax_factor, 0.0, 1.0)
+                if "tax_rate" in variable_codes
+                else tax_schedule.copy()
+            )
             taxes: List[float] = []
             net_income: List[float] = []
             nol_balance = 0.0
             apply_nol = bool(self.inputs.tax_loss_carryforward)
             nol_limit = float(self.inputs.tax_loss_limit)
             for idx in range(len(self.years)):
-                taxable = ebt[idx]
+                taxable = float(ebt[idx])
                 if taxable <= 0:
                     tax = 0.0
                     if apply_nol:
@@ -1802,34 +1827,29 @@ class FinancialModel:
                         offset = min(nol_balance, max_offset)
                         taxable = max(taxable - offset, 0.0)
                         nol_balance -= offset
-                    tax = taxable * effective_tax[idx]
+                    tax = taxable * float(effective_tax[idx])
                 taxes.append(tax)
                 net_income.append(ebt[idx] - tax)
 
-            weighted_adjusted: List[float] = []
-            for base_weight, base_rev, sim_rev in zip(base_weighted, base_revenue, simulated_revenue):
-                if abs(base_rev) > 1e-9:
-                    ratio = sim_rev / base_rev
-                else:
-                    ratio = 1.0
-                weighted_adjusted.append(base_weight * ratio)
+            ratio = simulated_revenue / base_revenue_safe
+            weighted_adjusted = base_weighted * ratio
 
-            working_balances = self._working_capital_balances_from_series(
+            working_balances = self._working_capital_series_from_inputs(
                 simulated_revenue,
                 simulated_cost_of_sales,
-                distributor_weighted=weighted_adjusted,
-                distributor_share=base_distributor_share,
+                distributor_weighted=weighted_adjusted.tolist(),
+                distributor_share=base_distributor_share.tolist(),
             )
 
-            inventory_change = _difference(working_balances.column("Inventory"))
-            receivable_change = _difference(working_balances.column("Accounts Receivable"))
-            payable_change = _difference(working_balances.column("Accounts Payable"))
-            prepaid_change = _difference(working_balances.column("Prepaid Expenses"))
-            other_asset_change = _difference(working_balances.column("Other Assets"))
-            other_liability_change = _difference(working_balances.column("Other Liabilities"))
+            inventory_change = _difference(working_balances["Inventory"])
+            receivable_change = _difference(working_balances["Accounts Receivable"])
+            payable_change = _difference(working_balances["Accounts Payable"])
+            prepaid_change = _difference(working_balances["Prepaid Expenses"])
+            other_asset_change = _difference(working_balances["Other Assets"])
+            other_liability_change = _difference(working_balances["Other Liabilities"])
 
             operating_profit = [
-                net_income[idx] + taxes[idx] + interest_series[idx]
+                net_income[idx] + taxes[idx] + float(interest_series[idx])
                 for idx in range(len(self.years))
             ]
             inventory_adjustment = [-value for value in inventory_change]
@@ -1851,7 +1871,7 @@ class FinancialModel:
                 for idx in range(len(self.years))
             ]
 
-            interest_paid = [-value for value in interest_series]
+            interest_paid = [-float(value) for value in interest_series]
             taxes_paid = [-value for value in taxes]
             net_cash_from_operations = [
                 cash_flow_from_operations[idx]
@@ -1860,7 +1880,6 @@ class FinancialModel:
                 for idx in range(len(self.years))
             ]
 
-            capital_expenditure = [-value for value in capex]
             net_cash_from_investing = list(capital_expenditure)
 
             dividends = [-max(ni, 0.0) * self.inputs.financing.dividend_payout for ni in net_income]
