@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, List, Sequence, Tuple
+from typing import Iterable, List, Mapping, Sequence, Tuple
 
 from .inputs import DebtEntry
 
@@ -19,7 +19,12 @@ class DebtPeriod:
     outstanding: float
 
 
-def amortise_entry(entry: DebtEntry, rate: float, years: Sequence[int]) -> List[DebtPeriod]:
+def amortise_entry(
+    entry: DebtEntry,
+    rate: float,
+    years: Sequence[int],
+    year_to_index: Mapping[int, int] | None = None,
+) -> List[DebtPeriod]:
     """Generate an amortisation schedule for a single debt entry.
 
     Parameters
@@ -37,10 +42,15 @@ def amortise_entry(entry: DebtEntry, rate: float, years: Sequence[int]) -> List[
     if not years:
         return schedule
 
-    try:
-        start_index = years.index(entry.year)
-    except ValueError:
-        return schedule
+    if year_to_index is None:
+        try:
+            start_index = years.index(entry.year)
+        except ValueError:
+            return schedule
+    else:
+        start_index = year_to_index.get(entry.year)
+        if start_index is None:
+            return schedule
 
     principal = float(entry.amount)
     if principal <= 0.0:
@@ -96,13 +106,13 @@ def amortise_entries(
     outstanding_schedule = [0.0 for _ in range(horizon)]
     entry_schedules: List[List[DebtPeriod]] = []
 
+    year_to_index = {year: idx for idx, year in enumerate(years)}
     for entry in entries:
-        schedule = amortise_entry(entry, rate, years)
+        schedule = amortise_entry(entry, rate, years, year_to_index)
         entry_schedules.append(schedule)
         for period in schedule:
-            try:
-                idx = years.index(period.year)
-            except ValueError:
+            idx = year_to_index.get(period.year)
+            if idx is None:
                 continue
             interest_schedule[idx] += period.interest
             principal_schedule[idx] += period.principal

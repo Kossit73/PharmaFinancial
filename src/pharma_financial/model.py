@@ -1666,12 +1666,9 @@ class FinancialModel:
                 return rng.triangular(low, high, mode)
             return rng.uniform(low, high)
 
-        def _correlated_shocks(variable_order: List[str]) -> Dict[str, float]:
+        def _build_cholesky(variable_order: List[str]) -> List[List[float]]:
             correlations = params.correlations or {}
             size = len(variable_order)
-            if size == 0:
-                return {}
-
             matrix = [[1.0 if i == j else 0.0 for j in range(size)] for i in range(size)]
             for i, var_i in enumerate(variable_order):
                 for j, var_j in enumerate(variable_order):
@@ -1698,11 +1695,20 @@ class FinancialModel:
                     else:
                         denominator = cholesky[j][j]
                         cholesky[i][j] = (matrix[i][j] - total) / denominator if denominator else 0.0
+            return cholesky
 
+        def _correlated_shocks(
+            variable_order: List[str],
+            cholesky: List[List[float]],
+        ) -> Dict[str, float]:
+            size = len(variable_order)
+            if size == 0:
+                return {}
             normals = [rng.gauss(0.0, 1.0) for _ in range(size)]
-            correlated = []
-            for i in range(size):
-                correlated.append(sum(cholesky[i][k] * normals[k] for k in range(i + 1)))
+            correlated = [
+                sum(cholesky[i][k] * normals[k] for k in range(i + 1))
+                for i in range(size)
+            ]
             return dict(zip(variable_order, correlated))
 
         metric_names = [metric.strip() for metric in params.metrics]
@@ -1731,11 +1737,18 @@ class FinancialModel:
         correlation_variables = [
             code for code in variable_codes if code in (params.correlations or {})
         ]
+        if use_correlated and not correlation_variables:
+            use_correlated = False
+        cholesky = _build_cholesky(correlation_variables) if use_correlated else []
         base_revenue_safe = np.where(np.abs(base_revenue) > 1e-9, base_revenue, 1.0)
         capital_expenditure = (-capex).tolist()
 
         for _ in range(iterations):
-            shocks = _correlated_shocks(correlation_variables) if use_correlated else {}
+            shocks = (
+                _correlated_shocks(correlation_variables, cholesky)
+                if use_correlated
+                else {}
+            )
             if "revenue_growth" in variable_codes:
                 revenue_shift = shocks.get("revenue_growth", 0.0) * normal_std if use_correlated else 0.0
                 growth_rates = np.array([_sample(revenue_shift) for _ in self.years], dtype=float)
