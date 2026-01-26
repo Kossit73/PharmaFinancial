@@ -7,11 +7,13 @@ import hashlib
 import io
 import json
 import re
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
 import math
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, cast
+from zipfile import ZipFile
 
 try:  # pragma: no cover - allow importing helper functions without Streamlit installed
     import streamlit as st
@@ -45,13 +47,18 @@ from .model import (
     FinancialModel,
     FinancialOutputs,
 )
-from .report import collect_report_sections, generate_report
+from .report import ReportSection, ReportTable, collect_report_sections, generate_report
 from .table import Table
 
 try:  # pragma: no cover - executed in environments with pandas available
     import pandas as pd
 except Exception:  # pragma: no cover - fallback for environments without pandas
     pd = None  # type: ignore
+else:  # pragma: no cover - runtime configuration
+    try:
+        pd.set_option("mode.string_storage", "python")
+    except Exception:
+        pass
 
 try:  # pragma: no cover - optional dependency for charting
     import plotly.express as px
@@ -97,6 +104,9 @@ MAX_VISIBLE_COMMISSION_ROWS = 6
 MAX_VISIBLE_COST_ROWS = 6
 MIN_PROJECTION_YEAR = 1900
 MAX_PROJECTION_YEAR = 2300
+RAG_CHUNK_SIZE = 200
+RAG_CHUNK_OVERLAP = 50
+RAG_TOP_RESULTS = 5
 SCENARIO_TOOL_LABELS = {
     "decision_tree": "Decision Tree Tools",
     "stress_testing": "Stress Testing",
@@ -127,6 +137,7 @@ GEN_AI_LABEL_TO_CODE = {label: code for code, label in GEN_AI_FEATURE_LABELS.ite
 
 _INPUT_CACHE: dict[str, ModelInputs] = {}
 _MODEL_CACHE: dict[str, tuple["FinancialModel", "FinancialOutputs"]] = {}
+_ANALYSIS_CACHE_KEYS = ("sensitivity_results", "monte_carlo_results", "ai_insights")
 
 
 def _rerun() -> None:
@@ -247,9 +258,43 @@ def _cached_model_run(inputs: ModelInputs, digest: str) -> tuple[FinancialModel,
         return cached
 
     model = FinancialModel(inputs)
-    outputs = model.run()
+    outputs = model.run_core()
     _MODEL_CACHE[digest] = (model, outputs)
     return model, outputs
+
+
+def _clear_analysis_cache() -> None:
+    for key in _ANALYSIS_CACHE_KEYS:
+        st.session_state.pop(key, None)
+        st.session_state.pop(f"{key}_digest", None)
+
+
+def _analysis_cache_value(key: str, digest: str, fallback):
+    cached = st.session_state.get(key)
+    cached_digest = st.session_state.get(f"{key}_digest")
+    if cached is None or cached_digest != digest:
+        return fallback
+    return cached
+
+
+def _store_analysis_cache(key: str, digest: str, value) -> None:
+    st.session_state[key] = value
+    st.session_state[f"{key}_digest"] = digest
+
+
+def _merge_analysis_outputs(outputs: FinancialOutputs, digest: str) -> FinancialOutputs:
+    return replace(
+        outputs,
+        sensitivity_results=_analysis_cache_value(
+            "sensitivity_results", digest, outputs.sensitivity_results
+        ),
+        monte_carlo=_analysis_cache_value(
+            "monte_carlo_results", digest, outputs.monte_carlo
+        ),
+        ai_insights=_analysis_cache_value(
+            "ai_insights", digest, outputs.ai_insights
+        ),
+    )
 
 
 def _scenario_options(payload: Mapping[str, object]) -> List[str]:
@@ -504,20 +549,6 @@ def _streamlit_runtime_exists() -> bool:
     return get_script_run_ctx() is not None
 
 
-def _render_runtime_diagnostics() -> None:
-    """Render a lightweight diagnostics block in Streamlit Cloud."""
-
-    try:  # pragma: no cover - runtime specific
-        import platform
-
-        st.sidebar.markdown("#### Runtime Diagnostics")
-        st.sidebar.caption(f"Python: {platform.python_version()}")
-        st.sidebar.caption(f"Working dir: {Path.cwd()}")
-        st.sidebar.caption(f"App root: {Path(__file__).resolve().parent}")
-    except Exception:
-        return
-
-
 def main() -> None:
     if not _streamlit_runtime_exists():  # pragma: no cover - requires Streamlit runner
         raise RuntimeError(
@@ -531,8 +562,6 @@ def main() -> None:
         layout="wide",
     )
 
-    _render_runtime_diagnostics()
-
     st.title("Pharmaceuticals Financial Model")
     st.caption(
         "Interactive financial modelling environment covering statements, "
@@ -540,45 +569,86 @@ def main() -> None:
     )
 
     config_container = st.container()
-    download_container = st.container()
 
     inputs, digest = _resolve_inputs(config_container)
-    model, outputs = _cached_model_run(inputs, digest)
-
-    _render_excel_model_download(download_container, model, outputs)
+    run_requested = bool(st.session_state.pop("run_requested", False))
+    last_digest = st.session_state.get("last_run_digest")
+    model = st.session_state.get("last_model")
+    outputs = st.session_state.get("last_outputs")
+    if run_requested:
+        model, outputs = _cached_model_run(inputs, digest)
+        st.session_state["last_model"] = model
+        st.session_state["last_outputs"] = outputs
+        st.session_state["last_run_digest"] = digest
+        _clear_analysis_cache()
+    elif last_digest != digest:
+        model = None
+        outputs = None
+        _clear_analysis_cache()
 
     tabs = st.tabs(
         [
             "Input Landing Page",
-            "Key Metrics Dashboard",
             "Financial Performance",
             "Financial Position",
             "Cash Flow Statement",
             "Sensitivity Analysis",
             "Scenario / IFs Analysis",
+            "RAG Assistant",
             "Monte Carlo Simulation",
             "Break-even & Payback",
+            "Key Metrics Dashboard",
         ]
     )
 
     with tabs[0]:
         _render_inputs_tab(inputs, model, outputs)
     with tabs[1]:
-        _render_dashboard_tab(model, outputs)
+        if outputs is None or model is None:
+            st.info("Press Run on the Input Landing Page to generate results.")
+        else:
+            _render_income_statement(model, outputs)
     with tabs[2]:
-        _render_income_statement(model, outputs)
+        if outputs is None:
+            st.info("Press Run on the Input Landing Page to generate results.")
+        else:
+            _render_statement_tab("Statement of Financial Position", outputs.balance_sheet)
     with tabs[3]:
-        _render_statement_tab("Statement of Financial Position", outputs.balance_sheet)
+        if outputs is None:
+            st.info("Press Run on the Input Landing Page to generate results.")
+        else:
+            _render_statement_tab("Statement of Cash Flows", outputs.cash_flow)
     with tabs[4]:
-        _render_statement_tab("Statement of Cash Flows", outputs.cash_flow)
+        if outputs is None:
+            st.info("Press Run on the Input Landing Page to generate results.")
+        else:
+            _render_sensitivity(model, outputs, digest)
     with tabs[5]:
-        _render_sensitivity(outputs)
+        if outputs is None:
+            st.info("Press Run on the Input Landing Page to generate results.")
+        else:
+            _render_scenarios(outputs)
     with tabs[6]:
-        _render_scenarios(outputs)
+        if outputs is None or model is None:
+            st.info("Press Run on the Input Landing Page to generate results.")
+        else:
+            _render_rag_tab(model, outputs, digest)
     with tabs[7]:
-        _render_monte_carlo(outputs)
+        if outputs is None:
+            st.info("Press Run on the Input Landing Page to generate results.")
+        else:
+            _render_monte_carlo(model, outputs, digest)
     with tabs[8]:
-        _render_break_even(outputs)
+        if outputs is None:
+            st.info("Press Run on the Input Landing Page to generate results.")
+        else:
+            _render_break_even(outputs)
+    with tabs[9]:
+        if outputs is None or model is None:
+            st.info("Press Run on the Input Landing Page to generate results.")
+        else:
+            _render_excel_model_download(st.container(), model, outputs)
+            _render_dashboard_tab(model, outputs, digest)
 
 
 def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:
@@ -882,6 +952,73 @@ def _load_payload_from_pdf(data: bytes) -> Mapping[str, object]:
     return _load_payload_from_text(combined)
 
 
+def _extract_text_from_upload(filename: str, data: bytes) -> str:
+    suffix = Path(filename).suffix.lower()
+    if suffix in {".txt", ".md", ".csv"}:
+        return data.decode("utf-8", errors="replace")
+    if suffix == ".docx":
+        if Document is None:
+            raise ValueError("Word support requires the 'python-docx' package to be installed.")
+        document = Document(io.BytesIO(data))
+        text = "\n".join(paragraph.text for paragraph in document.paragraphs).strip()
+        if not text:
+            raise ValueError("Word document did not contain any readable text.")
+        return text
+    if suffix == ".pdf":
+        if PdfReader is None:
+            raise ValueError("PDF support requires the 'PyPDF2' package to be installed.")
+        reader = PdfReader(io.BytesIO(data))
+        text = "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+        if not text:
+            raise ValueError("PDF file did not contain any readable text.")
+        return text
+    raise ValueError("Unsupported file type for RAG. Upload TXT, MD, CSV, DOCX, or PDF files.")
+
+
+def _tokenize(text: str) -> List[str]:
+    return re.findall(r"[A-Za-z0-9']+", text.lower())
+
+
+def _chunk_text(text: str, *, size: int, overlap: int) -> List[str]:
+    words = text.split()
+    if not words:
+        return []
+    chunks: List[str] = []
+    step = max(1, size - overlap)
+    for start in range(0, len(words), step):
+        chunk = " ".join(words[start:start + size]).strip()
+        if chunk:
+            chunks.append(chunk)
+    return chunks
+
+
+def _build_rag_chunks(documents: List[Mapping[str, str]]) -> List[Mapping[str, object]]:
+    chunks: List[Mapping[str, object]] = []
+    for doc in documents:
+        name = str(doc.get("name", "Document"))
+        text = str(doc.get("text", "") or "").strip()
+        for chunk in _chunk_text(text, size=RAG_CHUNK_SIZE, overlap=RAG_CHUNK_OVERLAP):
+            tokens = _tokenize(chunk)
+            chunks.append({"source": name, "text": chunk, "tokens": tokens})
+    return chunks
+
+
+def _score_chunks(query: str, chunks: List[Mapping[str, object]]) -> List[Mapping[str, object]]:
+    query_tokens = set(_tokenize(query))
+    if not query_tokens:
+        return []
+    scored: List[Mapping[str, object]] = []
+    for chunk in chunks:
+        tokens = chunk.get("tokens", [])
+        overlap = sum(1 for token in tokens if token in query_tokens)
+        if overlap == 0:
+            continue
+        score = overlap / max(len(tokens), 1)
+        scored.append({**chunk, "score": score})
+    scored.sort(key=lambda item: item.get("score", 0.0), reverse=True)
+    return scored[:RAG_TOP_RESULTS]
+
+
 def _render_excel_model_download(
     container: DeltaGenerator, base_model: FinancialModel, base_outputs: FinancialOutputs
 ) -> None:
@@ -948,14 +1085,18 @@ def _render_excel_model_download(
                 st.info("Click 'Prepare Excel Model' to generate the workbook for download.")
 
 
+def _request_model_run() -> None:
+    st.session_state["run_requested"] = True
+
+
 def _render_inputs_tab(
-    inputs: ModelInputs, base_model: FinancialModel, base_outputs: FinancialOutputs
+    inputs: ModelInputs,
+    base_model: FinancialModel | None,
+    base_outputs: FinancialOutputs | None,
 ) -> None:
     payload = st.session_state["input_payload"]
 
-    st.markdown("### AI & Machine Learning Configuration")
-    _render_ai_settings(payload)
-    _ai_settings_to_payload(st.session_state.get("ai_settings", {}), payload)
+    st.button("Run Model", key="run_model", on_click=_request_model_run)
 
     st.markdown("### Projection Horizon")
     _render_projection_horizon(payload)
@@ -1240,8 +1381,11 @@ def _render_inputs_tab(
     st.session_state["input_payload"] = payload
 
 
-def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> None:
-    income = _with_year(outputs.income_statement)
+def _render_dashboard_tab(
+    model: FinancialModel, outputs: FinancialOutputs, digest: str
+) -> None:
+    merged_outputs = _merge_analysis_outputs(outputs, digest)
+    income = _with_year(merged_outputs.income_statement)
     supports_plotly = px is not None and pd is not None
 
     if not supports_plotly:
@@ -1259,7 +1403,7 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
             st.plotly_chart(fig_ebitda, use_container_width=True)
 
     st.markdown("### Investment Metrics")
-    metric_pairs = _extract_metric_pairs(outputs.summary_metrics)
+    metric_pairs = _extract_metric_pairs(merged_outputs.summary_metrics)
     if not metric_pairs:
         st.info("No investment metrics were generated for the current assumptions.")
     else:
@@ -1270,7 +1414,7 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
                 st.metric(label=name, value=formatted)
 
     st.markdown("### Goal Seek Metric")
-    goal_data = _ensure_dataframe(outputs.goal_seek)
+    goal_data = _ensure_dataframe(merged_outputs.goal_seek)
     if isinstance(goal_data, list):
         if not goal_data:
             st.caption("No goal seek configuration provided in the assumptions.")
@@ -1298,6 +1442,10 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
             st.dataframe(display, use_container_width=True)
         else:
             st.dataframe(goal_data, use_container_width=True)
+
+    payload = st.session_state.get("input_payload")
+    if isinstance(payload, dict):
+        _render_commission_horizon_preview(payload)
 
     st.markdown("### Working Capital Schedule")
     try:
@@ -1330,38 +1478,43 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
         )
 
         st.markdown("#### Sensitivity Analysis")
-        if outputs.sensitivity_results:
-            for variable, table in outputs.sensitivity_results.items():
+        if merged_outputs.sensitivity_results:
+            for variable, table in merged_outputs.sensitivity_results.items():
                 st.markdown(f"- **{variable}**")
                 st.dataframe(_ensure_dataframe(table), use_container_width=True)
+        elif model.inputs.sensitivity.variables:
+            st.caption("Sensitivity results not generated yet. Run Sensitivity Analysis to compute.")
         else:
             st.caption("No sensitivity configurations provided.")
 
         st.markdown("#### Scenario / IFs Analysis")
-        if outputs.scenario_results:
-            for name, table in outputs.scenario_results.items():
+        if merged_outputs.scenario_results:
+            for name, table in merged_outputs.scenario_results.items():
                 st.markdown(f"- **{name}**")
                 st.dataframe(_with_year(table), use_container_width=True)
         else:
             st.caption("No scenarios configured in the assumptions.")
 
         st.markdown("#### Break-even Analysis")
-        st.dataframe(_ensure_dataframe(outputs.break_even), use_container_width=True)
+        st.dataframe(_ensure_dataframe(merged_outputs.break_even), use_container_width=True)
 
         st.markdown("#### Payback Schedule")
-        st.dataframe(_with_year(outputs.payback), use_container_width=True)
+        st.dataframe(_with_year(merged_outputs.payback), use_container_width=True)
 
         st.markdown("#### Discounted Payback Schedule")
-        st.dataframe(_with_year(outputs.discounted_payback), use_container_width=True)
+        st.dataframe(_with_year(merged_outputs.discounted_payback), use_container_width=True)
 
         st.markdown("#### AI & Machine Learning Insights")
-        _render_ai_dashboard(outputs.ai_insights)
+        _render_ai_dashboard(
+            merged_outputs.ai_insights,
+            ai_configured=bool(model.inputs.ai),
+        )
         return
 
     # Sensitivity Analysis charts
-    if outputs.sensitivity_results:
+    if merged_outputs.sensitivity_results:
         st.markdown("#### Sensitivity Analysis")
-        for variable, table in outputs.sensitivity_results.items():
+        for variable, table in merged_outputs.sensitivity_results.items():
             frame = _ensure_dataframe(table)
             if isinstance(frame, pd.DataFrame):
                 frame = frame.reset_index()
@@ -1385,14 +1538,16 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
                 title=title,
             )
             st.plotly_chart(fig, use_container_width=True)
+    elif model.inputs.sensitivity.variables:
+        st.caption("Sensitivity results not generated yet. Run Sensitivity Analysis to compute.")
     else:
         st.caption("No sensitivity configurations provided.")
 
     # Scenario / IFs Analysis charts
-    if outputs.scenario_results:
+    if merged_outputs.scenario_results:
         st.markdown("#### Scenario / IFs Analysis")
         scenario_frames: list[pd.DataFrame] = []
-        for name, table in outputs.scenario_results.items():
+        for name, table in merged_outputs.scenario_results.items():
             frame = _with_year(table)
             if isinstance(frame, pd.DataFrame):
                 scenario_frame = frame.copy()
@@ -1430,7 +1585,7 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
 
     # Break-even chart
     st.markdown("#### Break-even Analysis")
-    break_even_df = _ensure_dataframe(outputs.break_even)
+    break_even_df = _ensure_dataframe(merged_outputs.break_even)
     if isinstance(break_even_df, pd.DataFrame):
         break_even_frame = break_even_df.reset_index().rename(columns={"index": "Product"})
     else:
@@ -1446,7 +1601,7 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
 
     # Payback charts
     st.markdown("#### Payback Schedule")
-    payback_df = _with_year(outputs.payback)
+    payback_df = _with_year(merged_outputs.payback)
     if isinstance(payback_df, pd.DataFrame):
         payback_frame = payback_df
     else:
@@ -1460,7 +1615,7 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
     )
     st.plotly_chart(fig_payback, use_container_width=True)
 
-    discounted_df = _with_year(outputs.discounted_payback)
+    discounted_df = _with_year(merged_outputs.discounted_payback)
     if isinstance(discounted_df, pd.DataFrame):
         discounted_frame = discounted_df
     else:
@@ -1475,7 +1630,10 @@ def _render_dashboard_tab(model: FinancialModel, outputs: FinancialOutputs) -> N
     st.plotly_chart(fig_discounted, use_container_width=True)
 
     st.markdown("#### AI & Machine Learning Insights")
-    _render_ai_dashboard(outputs.ai_insights)
+    _render_ai_dashboard(
+        merged_outputs.ai_insights,
+        ai_configured=bool(model.inputs.ai),
+    )
 
 
 def _render_statement_tab(title: str, table) -> None:
@@ -1675,12 +1833,15 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
             st.plotly_chart(fig_expense, use_container_width=True)
 
 
-def _render_ai_dashboard(ai_insights: Optional[AIInsights]) -> None:
+def _render_ai_dashboard(ai_insights: Optional[AIInsights], *, ai_configured: bool) -> None:
     if ai_insights is None:
-        st.caption(
-            "AI configuration not available. Enable AI enhancements on the Input Landing Page "
-            "to unlock machine-generated commentary."
-        )
+        if ai_configured:
+            st.caption("AI insights have not been generated yet. Run AI Insights to view results.")
+        else:
+            st.caption(
+                "AI configuration not available. Enable AI enhancements on the Input Landing Page "
+                "to unlock machine-generated commentary."
+            )
         return
 
     if ai_insights.ml_forecast is not None:
@@ -1702,7 +1863,9 @@ def _render_ai_dashboard(ai_insights: Optional[AIInsights]) -> None:
             st.json(ai_insights.metadata)
 
 
-def _render_sensitivity(outputs: FinancialOutputs) -> None:
+def _render_sensitivity(
+    model: FinancialModel, outputs: FinancialOutputs, digest: str
+) -> None:
     st.subheader("Sensitivity Analysis")
     payload = st.session_state.get("input_payload")
     if payload is None:
@@ -1712,13 +1875,26 @@ def _render_sensitivity(outputs: FinancialOutputs) -> None:
     _render_sensitivity_inputs(payload)
     st.session_state["input_payload"] = payload
 
-    if not outputs.sensitivity_results:
+    cached_results = _analysis_cache_value(
+        "sensitivity_results", digest, outputs.sensitivity_results
+    )
+
+    if st.button("Run Sensitivity Analysis", key="run_sensitivity"):
+        with st.spinner("Running sensitivity analysis..."):
+            cached_results = model.sensitivity_analysis()
+        _store_analysis_cache("sensitivity_results", digest, cached_results)
+
+    if not model.inputs.sensitivity.variables:
         st.info("No sensitivity configurations provided in the assumptions file.")
         return
 
     supports_plotly = px is not None and pd is not None
 
-    for variable, df in outputs.sensitivity_results.items():
+    if not cached_results:
+        st.info("Run Sensitivity Analysis to generate results.")
+        return
+
+    for variable, df in cached_results.items():
         st.markdown(f"#### {variable}")
         frame = _with_year(df)
         st.dataframe(frame, use_container_width=True)
@@ -1821,7 +1997,9 @@ def _render_scenarios(outputs: FinancialOutputs) -> None:
         st.caption("No scenario tools have been configured.")
 
 
-def _render_monte_carlo(outputs: FinancialOutputs) -> None:
+def _render_monte_carlo(
+    model: FinancialModel, outputs: FinancialOutputs, digest: str
+) -> None:
     st.subheader("Monte Carlo Simulation")
     payload = st.session_state.get("input_payload")
     if payload is None:
@@ -1831,7 +2009,24 @@ def _render_monte_carlo(outputs: FinancialOutputs) -> None:
     _render_monte_carlo_inputs(payload)
     st.session_state["input_payload"] = payload
 
-    monte_carlo_df = _ensure_dataframe(outputs.monte_carlo)
+    monte_carlo_results = _analysis_cache_value(
+        "monte_carlo_results", digest, outputs.monte_carlo
+    )
+
+    if st.button("Run Monte Carlo Simulation", key="run_monte_carlo"):
+        with st.spinner("Running Monte Carlo simulation..."):
+            monte_carlo_results = model.monte_carlo_simulation()
+        _store_analysis_cache("monte_carlo_results", digest, monte_carlo_results)
+
+    if model.inputs.monte_carlo.iterations <= 0:
+        st.info("Monte Carlo iterations are set to 0. Increase iterations to run.")
+        return
+
+    if not getattr(monte_carlo_results, "index", []):
+        st.info("Run Monte Carlo Simulation to generate results.")
+        return
+
+    monte_carlo_df = _ensure_dataframe(monte_carlo_results)
     if px is None or pd is None:
         st.warning("Plotly unavailable. Displaying Monte Carlo results in tabular form.")
         st.dataframe(monte_carlo_df, use_container_width=True)
@@ -2295,10 +2490,17 @@ def _sanitize_dataframe(frame: "pd.DataFrame") -> "pd.DataFrame":
     elif cleaned.index.dtype == "object":
         cleaned.index = cleaned.index.map(_clean_streamlit_cell)
     elif pd.api.types.is_string_dtype(cleaned.index):
-        cleaned.index = cleaned.index.astype(str)
+        cleaned.index = (
+            cleaned.index.astype("string[python]").astype(object).map(_clean_streamlit_cell)
+        )
     for column in cleaned.columns:
         if pd.api.types.is_string_dtype(cleaned[column]):
-            cleaned[column] = cleaned[column].astype(str)
+            cleaned[column] = (
+                cleaned[column]
+                .astype("string[python]")
+                .astype(object)
+                .map(_clean_streamlit_cell)
+            )
         elif cleaned[column].dtype == "object":
             cleaned[column] = cleaned[column].map(_clean_streamlit_cell)
     return cleaned
@@ -2329,6 +2531,361 @@ def _ensure_dataframe(table) -> "pd.DataFrame | list":
         except Exception:
             pass
     return table
+
+
+def _build_business_plan_bundle(
+    model: FinancialModel, outputs: FinancialOutputs, scenario_name: str
+) -> tuple[dict[str, tuple[bytes, str, str]], bytes]:
+    digest = st.session_state.get("last_run_digest", "")
+    merged_outputs = _merge_analysis_outputs(outputs, digest)
+    sections = collect_report_sections(model, merged_outputs)
+    rag_chunks = st.session_state.get("rag_chunks", [])
+    sections = _apply_section_writeups(sections, merged_outputs, rag_chunks)
+    report_name = "business_plan"
+    slug = _scenario_slug(scenario_name)
+    if slug and slug != "base":
+        report_name = f"{report_name}_{slug}"
+
+    formats = ["PDF", "Word", "Excel"]
+    reports: dict[str, tuple[bytes, str, str]] = {}
+    for format_name in formats:
+        reports[format_name] = generate_report(sections, format_name, report_name=report_name)
+
+    bundle_buffer = io.BytesIO()
+    with ZipFile(bundle_buffer, mode="w") as archive:
+        for format_name, (data, _mime, filename) in reports.items():
+            archive.writestr(filename, data)
+    return reports, bundle_buffer.getvalue()
+
+
+def _summary_metric(outputs: FinancialOutputs, name: str) -> Optional[float]:
+    table = outputs.summary_metrics
+    if name in table.index:
+        position = table.index.index(name)
+        return float(table.data["Value"][position])
+    return None
+
+
+def _final_value(table: Table, column: str) -> Optional[float]:
+    if column not in table.data:
+        return None
+    values = table.column(column)
+    return float(values[-1]) if values else None
+
+
+def _report_rows(table: Any) -> List[Mapping[str, Any]]:
+    if table is None:
+        return []
+    if isinstance(table, list):
+        if table and isinstance(table[0], Mapping):
+            return [dict(row) for row in table]
+        return [{"Value": item} for item in table]
+    if isinstance(table, Table):
+        mapping = table.as_dict()
+        rows: List[Dict[str, Any]] = []
+        for position, idx in enumerate(table.index):
+            row: Dict[str, Any] = {table.index_name: idx}
+            for column, values in mapping.items():
+                row[column] = values[position]
+            rows.append(row)
+        return rows
+    if pd is not None and isinstance(table, pd.DataFrame):
+        return table.reset_index().to_dict(orient="records")
+    if isinstance(table, Mapping):
+        return [{"Metric": key, "Value": value} for key, value in table.items()]
+    return []
+
+
+def _ordered_columns(rows: Sequence[Mapping[str, Any]]) -> List[str]:
+    seen: List[str] = []
+    for row in rows:
+        for key in row.keys():
+            if key not in seen:
+                seen.append(key)
+    return seen
+
+
+def _parse_float(value: Any) -> Optional[float]:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if isinstance(value, float) and math.isnan(value):
+            return None
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_writeup_value(value: float) -> str:
+    formatted = f"{abs(value):,.2f}" if abs(value) >= 1 else f"{abs(value):,.4f}"
+    return f"({formatted})" if value < 0 else formatted
+
+
+def _table_writeup(table: ReportTable) -> List[str]:
+    rows = _report_rows(table.data)
+    if not rows:
+        return []
+    columns = _ordered_columns(rows)
+    if not columns:
+        return []
+
+    label_key = columns[0]
+    numeric_columns = [col for col in columns[1:] if any(_parse_float(row.get(col)) is not None for row in rows)]
+    if not numeric_columns:
+        return []
+
+    def _sort_key(column: str) -> int:
+        try:
+            return int(str(column))
+        except (TypeError, ValueError):
+            return 0
+
+    numeric_columns.sort(key=_sort_key)
+    first_col, last_col = numeric_columns[0], numeric_columns[-1]
+    sentences: List[str] = []
+
+    candidates: List[Tuple[str, float, float]] = []
+    for row in rows:
+        label = str(row.get(label_key, "")).strip()
+        first_value = _parse_float(row.get(first_col))
+        last_value = _parse_float(row.get(last_col))
+        if label and first_value is not None and last_value is not None:
+            candidates.append((label, first_value, last_value))
+
+    if not candidates:
+        return []
+
+    candidates.sort(key=lambda item: abs(item[2]), reverse=True)
+    for label, first_value, last_value in candidates[:3]:
+        change = last_value - first_value
+        if abs(first_value) > 0.0001:
+            pct = change / abs(first_value) * 100.0
+            sentences.append(
+                f"{label} moved from {_format_writeup_value(first_value)} to "
+                f"{_format_writeup_value(last_value)} (Δ {_format_writeup_value(change)}, {pct:.1f}%)."
+            )
+        else:
+            sentences.append(
+                f"{label} ended at {_format_writeup_value(last_value)} (change {_format_writeup_value(change)})."
+            )
+
+    if sentences:
+        return [f"{table.title}: " + " ".join(sentences)]
+    return []
+
+
+def _section_writeup(section: ReportSection) -> List[str]:
+    notes: List[str] = []
+    for table in section.tables:
+        notes.extend(_table_writeup(table))
+    return notes
+
+
+def _apply_section_writeups(
+    sections: List[ReportSection],
+    outputs: FinancialOutputs,
+    rag_chunks: List[Mapping[str, object]],
+) -> List[ReportSection]:
+    summary_notes: Dict[str, List[str]] = {}
+
+    npv = _summary_metric(outputs, "NPV")
+    irr = _summary_metric(outputs, "IRR")
+    payback = _summary_metric(outputs, "Payback Period")
+    discounted_payback = _summary_metric(outputs, "Discounted Payback")
+    if npv is not None:
+        summary = (
+            f"NPV of {npv:,.2f} with IRR {irr:.2%} and payback year {payback:.1f} "
+            f"(discounted payback {discounted_payback:.1f})."
+            if irr is not None and payback is not None and discounted_payback is not None
+            else f"NPV of {npv:,.2f}."
+        )
+        summary_notes.setdefault("Key Metrics Dashboard", []).append(summary)
+
+    income = outputs.income_statement
+    net_revenue = _final_value(income, "Net Revenue")
+    ebitda = _final_value(income, "EBITDA")
+    ebitda_margin = _final_value(income, "EBITDA Margin")
+    if net_revenue is not None:
+        summary_notes.setdefault("Financial Performance", []).append(
+            f"Latest net revenue {net_revenue:,.2f} with EBITDA {ebitda:,.2f} "
+            f"and EBITDA margin {ebitda_margin:.2%}."
+            if ebitda is not None and ebitda_margin is not None
+            else f"Latest net revenue {net_revenue:,.2f}."
+        )
+
+    balance = outputs.balance_sheet
+    cash = _final_value(balance, "Cash")
+    assets = _final_value(balance, "Total Assets")
+    liabilities = _final_value(balance, "Total Liabilities")
+    if assets is not None:
+        summary_notes.setdefault("Financial Position", []).append(
+            f"Ending assets {assets:,.2f}, liabilities {liabilities:,.2f}, "
+            f"and cash {cash:,.2f}."
+        )
+
+    cash_flow = outputs.cash_flow
+    net_cash = _final_value(cash_flow, CASH_FLOW_NET_COLUMN)
+    if net_cash is not None:
+        summary_notes.setdefault("Cash Flow Statement", []).append(
+            f"Final period net cash flow {net_cash:,.2f}."
+        )
+
+    if outputs.sensitivity_results:
+        summary_notes.setdefault("Sensitivity Analysis", []).append(
+            f"Sensitivity runs: {len(outputs.sensitivity_results)} variables tested."
+        )
+
+    if outputs.scenario_results:
+        summary_notes.setdefault("Scenario / IFs Analysis", []).append(
+            f"Scenario set includes {len(outputs.scenario_results)} cases."
+        )
+
+    if outputs.monte_carlo.index:
+        iterations = len(outputs.monte_carlo.index)
+        npv_series = outputs.monte_carlo.column("NPV") if "NPV" in outputs.monte_carlo.data else []
+        if npv_series:
+            average_npv = sum(npv_series) / len(npv_series)
+            summary_notes.setdefault("Monte Carlo Simulation", []).append(
+                f"Monte Carlo runs: {iterations}, average NPV {average_npv:,.2f}."
+            )
+        else:
+            summary_notes.setdefault("Monte Carlo Simulation", []).append(
+                f"Monte Carlo runs: {iterations}."
+            )
+
+    if outputs.break_even.index:
+        summary_notes.setdefault("Break-even & Payback", []).append(
+            f"Break-even analysis covers {len(outputs.break_even.index)} product(s)."
+        )
+
+    updated_sections: List[ReportSection] = []
+    for section in sections:
+        notes = list(section.notes or [])
+        notes.extend(summary_notes.get(section.title, []))
+        notes.extend(_section_writeup(section))
+        rag_hits = _score_chunks(section.title, rag_chunks)
+        if rag_hits:
+            highlights = " ".join(
+                f"{hit.get('source', 'Document')}: {hit.get('text', '')}"
+                for hit in rag_hits[:2]
+            )
+            notes.append(f"RAG highlights: {highlights}")
+        updated_sections.append(
+            ReportSection(section.title, section.tables, notes=notes or None)
+        )
+    return updated_sections
+
+
+def _render_rag_tab(
+    model: FinancialModel, outputs: FinancialOutputs, digest: str
+) -> None:
+    st.markdown("### Retrieval-Augmented Generation (RAG) Assistant")
+    st.caption(
+        "Upload supporting documents and retrieve the most relevant excerpts for a query."
+    )
+
+    uploads = st.file_uploader(
+        "Upload reference documents",
+        type=["txt", "md", "csv", "pdf", "docx"],
+        accept_multiple_files=True,
+        key="rag_uploads",
+    )
+
+    payload = st.session_state.get("input_payload")
+    if isinstance(payload, dict):
+        st.markdown("### AI & Machine Learning Configuration")
+        _render_ai_settings(payload)
+        _ai_settings_to_payload(st.session_state.get("ai_settings", {}), payload)
+
+    ai_configured = bool(model.inputs.ai)
+    st.markdown("### AI Insights")
+    ai_insights = _analysis_cache_value("ai_insights", digest, outputs.ai_insights)
+    if st.button("Run AI Insights", key="run_ai_insights"):
+        with st.spinner("Generating AI insights..."):
+            ai_insights = model.ai_enhancements(
+                income=outputs.income_statement,
+                summary=outputs.summary_metrics,
+                cash_flow=outputs.cash_flow,
+            )
+        _store_analysis_cache("ai_insights", digest, ai_insights)
+    _render_ai_dashboard(ai_insights, ai_configured=ai_configured)
+
+    documents = st.session_state.get("rag_documents", [])
+    if st.button("Index Documents", key="rag_index"):
+        documents = []
+        errors: List[str] = []
+        if uploads:
+            for item in uploads:
+                try:
+                    text = _extract_text_from_upload(item.name, item.getvalue())
+                    documents.append({"name": item.name, "text": text})
+                except Exception as exc:
+                    errors.append(f"{item.name}: {exc}")
+        st.session_state["rag_documents"] = documents
+        st.session_state["rag_chunks"] = _build_rag_chunks(documents)
+        st.session_state.pop("rag_results", None)
+        if errors:
+            st.warning("Some files could not be indexed:\n" + "\n".join(errors))
+
+    if st.button("Clear Indexed Documents", key="rag_clear"):
+        st.session_state.pop("rag_documents", None)
+        st.session_state.pop("rag_chunks", None)
+        st.session_state.pop("rag_results", None)
+
+    chunks = st.session_state.get("rag_chunks", [])
+    if documents:
+        st.success(f"Indexed {len(documents)} document(s), {len(chunks)} chunks.")
+    else:
+        st.info("No documents indexed yet.")
+
+    query = st.text_input("Ask a question", key="rag_query")
+    if st.button("Search", key="rag_search") and query:
+        st.session_state["rag_results"] = _score_chunks(query, chunks)
+
+    results = st.session_state.get("rag_results", [])
+    if query and not results and chunks:
+        st.warning("No relevant passages found. Try a broader query.")
+
+    for idx, result in enumerate(results, start=1):
+        source = result.get("source", "Document")
+        score = float(result.get("score", 0.0))
+        label = f"Result {idx} · {source} · score {score:.2%}"
+        with st.expander(label, expanded=idx == 1):
+            st.write(result.get("text", ""))
+
+    st.markdown("### Business Plan Downloads")
+    st.caption(
+        "Generate a consolidated business plan bundle that includes the full financial report."
+    )
+
+    scenario_name = st.session_state.get("excel_scenario_selection", "base")
+    if st.button("Prepare Business Plan Bundle", key="prepare_business_plan"):
+        with st.spinner("Building reports..."):
+            reports, bundle = _build_business_plan_bundle(model, outputs, scenario_name)
+        st.session_state["business_plan_reports"] = reports
+        st.session_state["business_plan_bundle"] = bundle
+
+    reports = st.session_state.get("business_plan_reports", {})
+    bundle = st.session_state.get("business_plan_bundle")
+    if reports:
+        pdf_bytes, pdf_mime, pdf_name = reports["PDF"]
+        word_bytes, word_mime, word_name = reports["Word"]
+        excel_bytes, excel_mime, excel_name = reports["Excel"]
+        st.download_button("Download Business Plan (PDF)", pdf_bytes, pdf_name, mime=pdf_mime)
+        st.download_button("Download Business Plan (Word)", word_bytes, word_name, mime=word_mime)
+        st.download_button("Download Business Plan (Excel)", excel_bytes, excel_name, mime=excel_mime)
+        if bundle:
+            st.download_button(
+                "Download Business Plan Bundle (ZIP)",
+                bundle,
+                "business_plan_bundle.zip",
+                mime="application/zip",
+            )
+        if st.button("Clear Prepared Business Plan", key="clear_business_plan"):
+            st.session_state.pop("business_plan_reports", None)
+            st.session_state.pop("business_plan_bundle", None)
+    else:
+        st.info("Click 'Prepare Business Plan Bundle' to enable downloads.")
 
 
 def _format_number(value: float) -> str:
@@ -3672,44 +4229,59 @@ def _render_distributor_commission(payload: Mapping) -> None:
                 st.session_state.pop(key, None)
             _rerun()
 
-    if product_options:
-        st.markdown("#### Commission horizon preview")
-        preview_product = selected_product or product_options[0]
-        if not selected_product:
-            preview_product = st.selectbox(
-                "Preview Product",
-                options=product_options,
-                index=0,
-                key="commission_preview_product",
-            )
-        else:
-            st.caption(f"Previewing horizon for: {preview_product}")
-        increments = {
-            int(row.get("Year", 0)): float(row.get("Yearly Commission %", 0.0) or 0.0)
-            for row in rows
-            if str(row.get("Product", "")).strip() == preview_product
-        }
-        preview_rows = []
-        rate = base_rates.get(preview_product, 0.05)
-        for year in year_catalog:
-            increment = increments.get(int(year), 0.0)
-            rate = rate * (1 + increment / 100.0)
-            preview_rows.append(
-                {
-                    "Year": int(year),
-                    "Yearly Commission % (Increment)": float(increment),
-                    "Effective Rate (%)": float(rate * 100.0),
-                }
-            )
-        if pd is None:
-            st.table(preview_rows)
-        else:
-            preview_frame = pd.DataFrame(preview_rows)
-            preview_frame = preview_frame.astype(str)
-            st.table(preview_frame)
 
+def _render_commission_horizon_preview(payload: Mapping) -> None:
+    rows: list[dict] = st.session_state.get("commission_rows") or []
+    if not rows:
+        rows = _payload_to_commission_rows(payload)
 
+    unit_costs = payload.get("unit_costs", {}) if isinstance(payload, Mapping) else {}
+    base_products = (
+        {str(name) for name in unit_costs.keys()}
+        if isinstance(unit_costs, Mapping)
+        else set()
+    )
+    product_options = sorted(
+        base_products | {str(row.get("Product", "")) for row in rows if row.get("Product")}
+    )
+    if not product_options:
+        return
 
+    years = [int(year) for year in payload.get("years", [])] if isinstance(payload, Mapping) else []
+    row_years = [int(row.get("Year", 0)) for row in rows if row.get("Year") is not None]
+    year_catalog = sorted({*years, *row_years}) or [0]
+
+    st.markdown("### Commission horizon preview")
+    preview_product = st.selectbox(
+        "Preview Product",
+        options=product_options,
+        index=0,
+        key="commission_preview_product",
+    )
+    increments = {
+        int(row.get("Year", 0)): float(row.get("Yearly Commission %", 0.0) or 0.0)
+        for row in rows
+        if str(row.get("Product", "")).strip() == preview_product
+    }
+    preview_rows = []
+    base_rates = _commission_base_rates(payload)
+    rate = base_rates.get(preview_product, 0.05)
+    for year in year_catalog:
+        increment = increments.get(int(year), 0.0)
+        rate = rate * (1 + increment / 100.0)
+        preview_rows.append(
+            {
+                "Year": int(year),
+                "Yearly Commission % (Increment)": float(increment),
+                "Effective Rate (%)": float(rate * 100.0),
+            }
+        )
+    if pd is None:
+        st.table(preview_rows)
+    else:
+        preview_frame = pd.DataFrame(preview_rows)
+        preview_frame = preview_frame.astype(str)
+        st.table(preview_frame)
 
 def _calculate_depreciation_preview(rows: Sequence[Mapping[str, object]]) -> list[dict]:
     """Return derived depreciation metrics for each configured asset row.
@@ -4102,15 +4674,30 @@ def _render_cost_and_financing(payload: dict) -> None:
         format="%.4f",
         key="raw_material_per_unit",
     )
-    annual_text = st.text_area(
-        "Annual raw material spend (comma separated, optional)",
-        value=_format_float_list(raw.get("annual", [])),
-        key="raw_material_annual",
-    )
-    try:
-        raw["annual"] = _parse_float_list(annual_text)
-    except ValueError as exc:
-        st.warning(f"Raw material schedule ignored: {exc}")
+    years = payload.get("years", [])
+    annual_values = raw.get("annual", [])
+    if not isinstance(annual_values, Sequence):
+        annual_values = []
+    raw_rows = []
+    for idx, year in enumerate(years):
+        value = float(annual_values[idx]) if idx < len(annual_values) else 0.0
+        raw_rows.append({"Year": int(year), "Annual Spend": value})
+    if raw_rows:
+        st.markdown("#### Annual raw material spend (optional)")
+        if hasattr(st, "data_editor"):
+            updated = st.data_editor(
+                raw_rows,
+                use_container_width=True,
+                hide_index=True,
+                key="raw_material_annual_table",
+                column_config={
+                    "Year": st.column_config.NumberColumn(disabled=True),
+                    "Annual Spend": st.column_config.NumberColumn(format="%.2f"),
+                },
+            )
+            raw["annual"] = [float(row.get("Annual Spend", 0.0)) for row in updated]
+        else:
+            st.table(raw_rows)
 
     financing = payload.setdefault("financing", {})
     finance_cols = st.columns(3)
@@ -4507,333 +5094,377 @@ def _render_tax_schedule(payload: dict) -> None:
     tax["timing_adjustment"] = float(timing_adjustment)
 
     schedule = _ensure_schedule_length(tax.get("schedule", []), len(years), fill=base_rate)
+    tax["schedule"] = schedule
 
-    session_key = "tax_entries"
-    default_entries = [
-        _normalise_tax_entry(
-            {
-                "label": str(year) if year is not None else f"Year {index + 1}",
-                "rate": float(schedule[index]),
-            },
-            index,
-            base_rate,
-        )
-        for index, year in enumerate(years)
-    ]
-    if not default_entries:
-        default_entries = [_normalise_tax_entry({}, 0, base_rate)]
+    with st.expander("Advanced: year-by-year tax schedule"):
+        session_key = "tax_entries"
+        default_entries = [
+            _normalise_tax_entry(
+                {
+                    "label": str(year) if year is not None else f"Year {index + 1}",
+                    "rate": float(schedule[index]),
+                },
+                index,
+                base_rate,
+            )
+            for index, year in enumerate(years)
+        ]
+        if not default_entries:
+            default_entries = [_normalise_tax_entry({}, 0, base_rate)]
 
-    if session_key not in st.session_state or not st.session_state.get(session_key):
-        st.session_state[session_key] = default_entries
+        if session_key not in st.session_state or not st.session_state.get(session_key):
+            st.session_state[session_key] = default_entries
 
-    rows: list[dict] = list(st.session_state.get(session_key, default_entries))
-    updated_rows: list[dict] = []
+        rows: list[dict] = list(st.session_state.get(session_key, default_entries))
+        updated_rows: list[dict] = []
 
-    for index, row in enumerate(rows):
-        entry = _normalise_tax_entry(row, index, base_rate)
-        container = st.container()
-        with container:
-            cols = st.columns([2.0, 1.2, 0.8])
-            label_value = cols[0].text_input(
+        for index, row in enumerate(rows):
+            entry = _normalise_tax_entry(row, index, base_rate)
+            container = st.container()
+            with container:
+                cols = st.columns([2.0, 1.2, 0.8])
+                label_value = cols[0].text_input(
+                    "Year",
+                    value=entry["label"],
+                    key=f"tax_year_label_{index}",
+                ).strip()
+                if not label_value:
+                    label_value = f"Year {index + 1}"
+
+                rate_value = cols[1].number_input(
+                    "Tax rate",
+                    value=float(entry["rate"]),
+                    min_value=0.0,
+                    step=0.01,
+                    format="%.4f",
+                    key=f"tax_rate_value_{index}",
+                )
+
+                remove_clicked = cols[2].button("Remove", key=f"tax_remove_{index}")
+
+            if remove_clicked and len(rows) > 1:
+                rows.pop(index)
+                st.session_state[session_key] = rows
+                _tax_entries_to_payload(rows, tax, years, base_rate)
+                _rerun()
+            else:
+                updated_rows.append({"label": label_value, "rate": float(rate_value)})
+
+        if updated_rows != rows and updated_rows:
+            rows = updated_rows
+            st.session_state[session_key] = rows
+
+        _tax_entries_to_payload(rows, tax, years, base_rate)
+
+        st.markdown("#### Add tax assumption")
+        default_entry = _next_tax_entry(rows, years, base_rate)
+        with st.form("tax_add_form", clear_on_submit=True):
+            new_label = st.text_input(
                 "Year",
-                value=entry["label"],
-                key=f"tax_year_label_{index}",
+                value=default_entry.get("label", f"Year {len(rows) + 1}"),
+                key="tax_new_label",
             ).strip()
-            if not label_value:
-                label_value = f"Year {index + 1}"
-
-            rate_value = cols[1].number_input(
+            new_rate = st.number_input(
                 "Tax rate",
-                value=float(entry["rate"]),
+                value=float(default_entry.get("rate", base_rate)),
                 min_value=0.0,
                 step=0.01,
                 format="%.4f",
-                key=f"tax_rate_value_{index}",
+                key="tax_new_rate",
             )
+            submitted = st.form_submit_button("Add tax year")
 
-            remove_clicked = cols[2].button("Remove", key=f"tax_remove_{index}")
-
-        if remove_clicked and len(rows) > 1:
-            rows.pop(index)
-            st.session_state[session_key] = rows
-            _tax_entries_to_payload(rows, tax, years, base_rate)
+        if submitted:
+            label = new_label or default_entry.get("label", f"Year {len(rows) + 1}")
+            new_entry = _normalise_tax_entry({"label": label, "rate": new_rate}, len(rows), base_rate)
+            updated = rows + [new_entry]
+            st.session_state[session_key] = updated
+            _tax_entries_to_payload(updated, tax, years, base_rate)
+            for key in ("tax_new_label", "tax_new_rate"):
+                st.session_state.pop(key, None)
             _rerun()
-        else:
-            updated_rows.append({"label": label_value, "rate": float(rate_value)})
-
-    if updated_rows != rows and updated_rows:
-        rows = updated_rows
-        st.session_state[session_key] = rows
-
-    _tax_entries_to_payload(rows, tax, years, base_rate)
-
-    st.markdown("#### Add tax assumption")
-    default_entry = _next_tax_entry(rows, years, base_rate)
-    with st.form("tax_add_form", clear_on_submit=True):
-        new_label = st.text_input(
-            "Year",
-            value=default_entry.get("label", f"Year {len(rows) + 1}"),
-            key="tax_new_label",
-        ).strip()
-        new_rate = st.number_input(
-            "Tax rate",
-            value=float(default_entry.get("rate", base_rate)),
-            min_value=0.0,
-            step=0.01,
-            format="%.4f",
-            key="tax_new_rate",
-        )
-        submitted = st.form_submit_button("Add tax year")
-
-    if submitted:
-        label = new_label or default_entry.get("label", f"Year {len(rows) + 1}")
-        new_entry = _normalise_tax_entry({"label": label, "rate": new_rate}, len(rows), base_rate)
-        updated = rows + [new_entry]
-        st.session_state[session_key] = updated
-        _tax_entries_to_payload(updated, tax, years, base_rate)
-        for key in ("tax_new_label", "tax_new_rate"):
-            st.session_state.pop(key, None)
-        _rerun()
 
 
 def _render_inflation_schedule(payload: dict) -> None:
     rows: list[dict] = st.session_state.get("inflation_rows", [])
     payload_years = payload.get("years", [])
 
+    base_rate = float(payload.get("inflation_rate", 0.0))
+    base_rate = st.number_input(
+        "Base inflation rate",
+        value=base_rate,
+        step=0.001,
+        format="%.4f",
+        key="inflation_base_rate",
+    )
+    payload["inflation_rate"] = float(base_rate)
+
     if not rows:
-        st.info("No inflation assumptions configured. Use the form below to add entries.")
+        payload["inflation_series"] = [base_rate for _ in payload_years]
+        st.session_state["inflation_rows"] = _payload_to_inflation_rows(payload)
+        rows = st.session_state.get("inflation_rows", [])
 
-    def _build_year_catalog(current_rows: Sequence[Mapping]) -> list[str]:
-        base_years = [str(year) for year in payload_years if year is not None]
-        existing = [
-            str(row.get("Year", "")).strip() for row in current_rows if row.get("Year")
-        ]
-        catalog = list(dict.fromkeys([*base_years, *existing]))
-        if not catalog:
-            max_length = max(len(current_rows), len(payload_years), 1)
-            catalog = [f"Year {index + 1}" for index in range(max_length)]
-        return catalog
+    with st.expander("Advanced: year-by-year inflation schedule"):
+        if not rows:
+            st.info("No inflation assumptions configured. Use the form below to add entries.")
 
-    updated_rows: list[dict] = []
-    removal_index: int | None = None
-    year_catalog = _build_year_catalog(rows)
+        def _build_year_catalog(current_rows: Sequence[Mapping]) -> list[str]:
+            base_years = [str(year) for year in payload_years if year is not None]
+            existing = [
+                str(row.get("Year", "")).strip() for row in current_rows if row.get("Year")
+            ]
+            catalog = list(dict.fromkeys([*base_years, *existing]))
+            if not catalog:
+                max_length = max(len(current_rows), len(payload_years), 1)
+                catalog = [f"Year {index + 1}" for index in range(max_length)]
+            return catalog
 
-    for index, row in enumerate(rows):
-        cols = st.columns([2.0, 1.2, 0.7])
-        current_label = str(
-            row.get("Year")
-            or (year_catalog[index] if index < len(year_catalog) else f"Year {index + 1}")
-        )
-        selected_label = _select_or_create_option(
-            cols[0],
-            "Year",
-            year_catalog,
-            f"inflation_label_{index}",
-            current_value=current_label,
-        )
-        if selected_label and selected_label not in year_catalog:
-            year_catalog.append(selected_label)
+        updated_rows: list[dict] = []
+        removal_index: int | None = None
+        year_catalog = _build_year_catalog(rows)
 
-        label = (selected_label or current_label).strip() or f"Year {index + 1}"
-        rate_value = cols[1].number_input(
-            "Rate",
-            value=float(row.get("Rate", 0.0)),
-            min_value=0.0,
-            step=0.001,
-            format="%.4f",
-            key=f"inflation_rate_{index}",
-        )
+        for index, row in enumerate(rows):
+            cols = st.columns([2.0, 1.2, 0.7])
+            current_label = str(
+                row.get("Year")
+                or (year_catalog[index] if index < len(year_catalog) else f"Year {index + 1}")
+            )
+            selected_label = _select_or_create_option(
+                cols[0],
+                "Year",
+                year_catalog,
+                f"inflation_label_{index}",
+                current_value=current_label,
+            )
+            if selected_label and selected_label not in year_catalog:
+                year_catalog.append(selected_label)
 
-        remove_clicked = cols[2].button(
-            "Remove", key=f"inflation_remove_{index}", help="Delete this inflation row"
-        )
+            label = (selected_label or current_label).strip() or f"Year {index + 1}"
+            rate_value = cols[1].number_input(
+                "Rate",
+                value=float(row.get("Rate", base_rate)),
+                min_value=0.0,
+                step=0.001,
+                format="%.4f",
+                key=f"inflation_rate_{index}",
+            )
 
-        if remove_clicked and len(rows) > 0:
-            removal_index = index
-            continue
+            remove_clicked = cols[2].button(
+                "Remove", key=f"inflation_remove_{index}", help="Delete this inflation row"
+            )
 
-        updated_rows.append({"Year": label, "Rate": float(rate_value)})
+            if remove_clicked and len(rows) > 0:
+                removal_index = index
+                continue
 
-    if removal_index is not None:
-        del rows[removal_index]
-        st.session_state["inflation_rows"] = rows
-        _rerun()
-        return
+            updated_rows.append({"Year": label, "Rate": float(rate_value)})
 
-    if updated_rows != rows:
-        st.session_state["inflation_rows"] = updated_rows
-        rows = updated_rows
+        if removal_index is not None:
+            del rows[removal_index]
+            st.session_state["inflation_rows"] = rows
+            _rerun()
+            return
 
-    year_catalog = _build_year_catalog(rows)
-    reference = rows[-1] if rows else {"Year": year_catalog[0] if year_catalog else "Year 1"}
+        if updated_rows != rows:
+            st.session_state["inflation_rows"] = updated_rows
+            rows = updated_rows
 
-    st.markdown("#### Add inflation entry")
-    with st.form("add_inflation_row"):
-        if len(year_catalog) > len(rows):
-            fallback_label = year_catalog[len(rows)]
-        elif year_catalog:
-            fallback_label = year_catalog[-1]
-        else:
-            fallback_label = f"Year {len(rows) + 1}"
+        year_catalog = _build_year_catalog(rows)
+        reference = rows[-1] if rows else {"Year": year_catalog[0] if year_catalog else "Year 1"}
 
-        new_label = _select_or_create_option(
-            st,
-            "Year",
-            year_catalog,
-            "inflation_new_label",
-            current_value=str(reference.get("Year", fallback_label)),
-        )
-        if new_label and new_label not in year_catalog:
-            year_catalog.append(new_label)
+        st.markdown("#### Add inflation entry")
+        with st.form("add_inflation_row"):
+            if len(year_catalog) > len(rows):
+                fallback_label = year_catalog[len(rows)]
+            elif year_catalog:
+                fallback_label = year_catalog[-1]
+            else:
+                fallback_label = f"Year {len(rows) + 1}"
 
-        new_rate = st.number_input(
-            "Rate",
-            value=float(reference.get("Rate", 0.0)),
-            min_value=0.0,
-            step=0.001,
-            format="%.4f",
-            key="inflation_new_rate",
-        )
-        submitted = st.form_submit_button("Add")
+            new_label = _select_or_create_option(
+                st,
+                "Year",
+                year_catalog,
+                "inflation_new_label",
+                current_value=str(reference.get("Year", fallback_label)),
+            )
+            if new_label and new_label not in year_catalog:
+                year_catalog.append(new_label)
 
-    if submitted:
-        clean_label = (new_label or "").strip() or f"Year {len(rows) + 1}"
-        updated_rows = list(rows)
-        updated_rows.append({"Year": clean_label, "Rate": float(new_rate)})
-        st.session_state["inflation_rows"] = updated_rows
-        for key in (
-            "inflation_new_label",
-            "inflation_new_label_select",
-            "inflation_new_label_custom",
-            "inflation_new_rate",
-        ):
-            st.session_state.pop(key, None)
-        _rerun()
+            new_rate = st.number_input(
+                "Rate",
+                value=float(reference.get("Rate", base_rate)),
+                min_value=0.0,
+                step=0.001,
+                format="%.4f",
+                key="inflation_new_rate",
+            )
+            submitted = st.form_submit_button("Add")
+
+        if submitted:
+            clean_label = (new_label or "").strip() or f"Year {len(rows) + 1}"
+            updated_rows = list(rows)
+            updated_rows.append({"Year": clean_label, "Rate": float(new_rate)})
+            st.session_state["inflation_rows"] = updated_rows
+            for key in (
+                "inflation_new_label",
+                "inflation_new_label_select",
+                "inflation_new_label_custom",
+                "inflation_new_rate",
+            ):
+                st.session_state.pop(key, None)
+            _rerun()
 
 
 def _render_risk_schedule(payload: dict) -> None:
     rows: list[dict] = st.session_state.get("risk_rows", [])
     categories = _risk_categories(payload, rows)
 
-    if not rows:
-        st.info("No risk assumptions configured. Use the form below to add entries.")
-
-    def _build_year_catalog(current_rows: Sequence[Mapping]) -> list[str]:
-        payload_years = payload.get("years") or []
-        base_years = [str(year) for year in payload_years if year is not None]
-        existing = [
-            str(row.get("Year", "")).strip() for row in current_rows if row.get("Year")
-        ]
-        catalog = list(dict.fromkeys([*base_years, *existing]))
-        if not catalog:
-            max_length = max(len(current_rows), len(payload_years), 1)
-            catalog = [f"Year {index + 1}" for index in range(max_length)]
-        return catalog
-
-    updated_rows: list[dict] = []
-    removal_index: int | None = None
-    year_catalog = _build_year_catalog(rows)
-
-    for index, row in enumerate(rows):
-        column_widths = [2.0] + [1.0 for _ in categories] + [0.7]
-        cols = st.columns(column_widths)
-
-        current_label = str(
-            row.get("Year")
-            or (year_catalog[index] if index < len(year_catalog) else f"Year {index + 1}")
-        )
-        selected_label = _select_or_create_option(
-            cols[0],
-            "Year",
-            year_catalog,
-            f"risk_label_{index}",
-            current_value=current_label,
-        )
-        if selected_label and selected_label not in year_catalog:
-            year_catalog.append(selected_label)
-
-        label = (selected_label or current_label).strip() or f"Year {index + 1}"
-        cleaned_row = {"Year": label}
-        for position, category in enumerate(categories, start=1):
-            cleaned_row[category] = cols[position].number_input(
-                f"{category.title()} Risk",
-                value=float(row.get(category, 0.0)),
+    if categories:
+        risk_defaults = payload.get("risk", {}) if isinstance(payload, Mapping) else {}
+        base_cols = st.columns(len(categories))
+        base_values: dict[str, float] = {}
+        for col, category in zip(base_cols, categories):
+            series = risk_defaults.get(category, []) if isinstance(risk_defaults, Mapping) else []
+            default_value = float(series[0]) if series else 0.0
+            base_values[category] = col.number_input(
+                f"{category.title()} base risk",
+                value=default_value,
                 min_value=0.0,
                 max_value=1.0,
                 step=0.01,
                 format="%.4f",
-                key=f"risk_{category}_{index}",
+                key=f"risk_base_{category}",
+            )
+        if not rows:
+            years = payload.get("years", []) if isinstance(payload, Mapping) else []
+            payload["risk"] = {
+                category: [float(value) for _ in years]
+                for category, value in base_values.items()
+            }
+            st.session_state["risk_rows"] = _payload_to_risk_rows(payload)
+            rows = st.session_state.get("risk_rows", [])
+
+    with st.expander("Advanced: year-by-year risk schedule"):
+        if not rows:
+            st.info("No risk assumptions configured. Use the form below to add entries.")
+
+        def _build_year_catalog(current_rows: Sequence[Mapping]) -> list[str]:
+            payload_years = payload.get("years") or []
+            base_years = [str(year) for year in payload_years if year is not None]
+            existing = [
+                str(row.get("Year", "")).strip() for row in current_rows if row.get("Year")
+            ]
+            catalog = list(dict.fromkeys([*base_years, *existing]))
+            if not catalog:
+                max_length = max(len(current_rows), len(payload_years), 1)
+                catalog = [f"Year {index + 1}" for index in range(max_length)]
+            return catalog
+
+        updated_rows: list[dict] = []
+        removal_index: int | None = None
+        year_catalog = _build_year_catalog(rows)
+
+        for index, row in enumerate(rows):
+            column_widths = [2.0] + [1.0 for _ in categories] + [0.7]
+            cols = st.columns(column_widths)
+
+            current_label = str(
+                row.get("Year")
+                or (year_catalog[index] if index < len(year_catalog) else f"Year {index + 1}")
+            )
+            selected_label = _select_or_create_option(
+                cols[0],
+                "Year",
+                year_catalog,
+                f"risk_label_{index}",
+                current_value=current_label,
+            )
+            if selected_label and selected_label not in year_catalog:
+                year_catalog.append(selected_label)
+
+            label = (selected_label or current_label).strip() or f"Year {index + 1}"
+            cleaned_row = {"Year": label}
+            for position, category in enumerate(categories, start=1):
+                cleaned_row[category] = cols[position].number_input(
+                    f"{category.title()} Risk",
+                    value=float(row.get(category, 0.0)),
+                    min_value=0.0,
+                    max_value=1.0,
+                    step=0.01,
+                    format="%.4f",
+                    key=f"risk_{category}_{index}",
+                )
+
+            remove_clicked = cols[-1].button(
+                "Remove", key=f"risk_remove_{index}", help="Delete this risk row"
             )
 
-        remove_clicked = cols[-1].button(
-            "Remove", key=f"risk_remove_{index}", help="Delete this risk row"
-        )
+            if remove_clicked and len(rows) > 0:
+                removal_index = index
+                continue
 
-        if remove_clicked and len(rows) > 0:
-            removal_index = index
-            continue
+            updated_rows.append(cleaned_row)
 
-        updated_rows.append(cleaned_row)
+        if removal_index is not None:
+            del rows[removal_index]
+            st.session_state["risk_rows"] = rows
+            _rerun()
+            return
 
-    if removal_index is not None:
-        del rows[removal_index]
-        st.session_state["risk_rows"] = rows
-        _rerun()
-        return
+        if updated_rows != rows:
+            st.session_state["risk_rows"] = updated_rows
+            rows = updated_rows
 
-    if updated_rows != rows:
-        st.session_state["risk_rows"] = updated_rows
-        rows = updated_rows
+        year_catalog = _build_year_catalog(rows)
+        reference = rows[-1] if rows else {"Year": year_catalog[0] if year_catalog else "Year 1"}
 
-    year_catalog = _build_year_catalog(rows)
-    reference = rows[-1] if rows else {"Year": year_catalog[0] if year_catalog else "Year 1"}
+        with st.form("add_risk_row"):
+            st.markdown("#### Add risk entry")
+            if len(year_catalog) > len(rows):
+                fallback_label = year_catalog[len(rows)]
+            elif year_catalog:
+                fallback_label = year_catalog[-1]
+            else:
+                fallback_label = f"Year {len(rows) + 1}"
 
-    with st.form("add_risk_row"):
-        st.markdown("#### Add risk entry")
-        if len(year_catalog) > len(rows):
-            fallback_label = year_catalog[len(rows)]
-        elif year_catalog:
-            fallback_label = year_catalog[-1]
-        else:
-            fallback_label = f"Year {len(rows) + 1}"
-
-        new_label = _select_or_create_option(
-            st,
-            "Year",
-            year_catalog,
-            "risk_new_label",
-            current_value=str(reference.get("Year", fallback_label)),
-        )
-        if new_label and new_label not in year_catalog:
-            year_catalog.append(new_label)
-
-        new_values: dict[str, float] = {}
-        for category in categories:
-            new_values[category] = st.number_input(
-                f"{category.title()} Risk",
-                value=float(reference.get(category, 0.0)),
-                min_value=0.0,
-                max_value=1.0,
-                step=0.01,
-                format="%.4f",
-                key=f"risk_new_{category}",
+            new_label = _select_or_create_option(
+                st,
+                "Year",
+                year_catalog,
+                "risk_new_label",
+                current_value=str(reference.get("Year", fallback_label)),
             )
-        submitted = st.form_submit_button("Add")
+            if new_label and new_label not in year_catalog:
+                year_catalog.append(new_label)
 
-    if submitted:
-        clean_label = (new_label or "").strip() or f"Year {len(rows) + 1}"
-        updated_rows = list(rows)
-        updated_rows.append({"Year": clean_label, **new_values})
-        st.session_state["risk_rows"] = updated_rows
-        for key in (
-            "risk_new_label",
-            "risk_new_label_select",
-            "risk_new_label_custom",
-        ):
-            st.session_state.pop(key, None)
-        for category in categories:
-            st.session_state.pop(f"risk_new_{category}", None)
-        _rerun()
+            new_values: dict[str, float] = {}
+            for category in categories:
+                new_values[category] = st.number_input(
+                    f"{category.title()} Risk",
+                    value=float(reference.get(category, 0.0)),
+                    min_value=0.0,
+                    max_value=1.0,
+                    step=0.01,
+                    format="%.4f",
+                    key=f"risk_new_{category}",
+                )
+            submitted = st.form_submit_button("Add")
+
+        if submitted:
+            clean_label = (new_label or "").strip() or f"Year {len(rows) + 1}"
+            updated_rows = list(rows)
+            updated_rows.append({"Year": clean_label, **new_values})
+            st.session_state["risk_rows"] = updated_rows
+            for key in (
+                "risk_new_label",
+                "risk_new_label_select",
+                "risk_new_label_custom",
+            ):
+                st.session_state.pop(key, None)
+            for category in categories:
+                st.session_state.pop(f"risk_new_{category}", None)
+            _rerun()
 
 
 def _render_goal_seek(payload: dict) -> None:

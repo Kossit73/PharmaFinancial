@@ -95,6 +95,56 @@
       "freight": 0.026
     }
   },
+  "price_adjustments": {
+    "Tablets": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "Capsules": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "Liquid": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "Ointment": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
   "markup": {
     "Tablets": 0.55,
     "Capsules": 0.6,
@@ -255,6 +305,9 @@
         "steam_hours": 1
       }
     ]
+  },
+  "utility_allocation": {
+    "cost_of_sales_share": 0.8
   },
   "labor": {
     "direct": {
@@ -504,6 +557,8 @@
   "tax": {
     "rate": 0.0,
     "timing_adjustment": 0.5,
+    "loss_carryforward": true,
+    "loss_carryforward_limit": 1.0,
     "schedule": [
       0.0,
       0.0,
@@ -554,6 +609,20 @@
       0.03,
       0.03
     ]
+  },
+  "risk_weights": {
+    "inherent": {
+      "revenue": 1.0,
+      "costs": 1.0
+    },
+    "climate": {
+      "revenue": 1.0,
+      "costs": 1.0
+    },
+    "political": {
+      "revenue": 1.0,
+      "costs": 1.0
+    }
   },
   "scenarios": {
     "base": {
@@ -690,7 +759,8 @@
     ],
     "variables": [
       "revenue_growth"
-    ]
+    ],
+    "correlations": {}
   },
   "ai": {
     "enabled": true,

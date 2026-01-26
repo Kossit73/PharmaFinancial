@@ -152,6 +152,7 @@ class MonteCarloParameters:
     variables: List[str] = field(default_factory=lambda: ["revenue_growth"])
     seed: Optional[int] = None
     distribution: str = "uniform"
+    correlations: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
 
 
 @dataclass
@@ -187,6 +188,7 @@ class ModelInputs:
     years: List[int]
     production_estimate: Mapping[str, List[float]]
     unit_costs: Mapping[str, ProductParameters]
+    price_adjustments: Mapping[str, List[float]]
     markup: Mapping[str, float]
     total_production_units: Mapping[str, float]
     production_capacity: Mapping[str, float]
@@ -206,13 +208,17 @@ class ModelInputs:
     tax_rate: float
     tax_rates: List[float]
     tax_timing_adjustment: float
+    tax_loss_carryforward: bool
+    tax_loss_limit: float
     risk_schedule: Mapping[str, List[float]]
+    risk_weights: Mapping[str, Mapping[str, float]]
     scenarios: Mapping[str, Mapping[str, List[float]]]
     scenario_tools: Mapping[str, List[str]]
     sensitivity: SensitivityParameters
     monte_carlo: MonteCarloParameters
     goal_seek: Optional[GoalSeekParameters]
     ai: AIParameters
+    utility_cost_of_sales_share: float
 
     @property
     def products(self) -> List[str]:
@@ -717,6 +723,16 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
     """Parse a mapping of raw inputs into :class:`ModelInputs`."""
     years = [int(year) for year in raw["years"]]
     unit_costs = _parse_product_parameters(raw["unit_costs"], raw["markup"])
+    price_adjustments_raw = raw.get("price_adjustments", {})
+    price_adjustments: Dict[str, List[float]] = {}
+    years_length = len(years)
+    if isinstance(price_adjustments_raw, Mapping):
+        for name, values in price_adjustments_raw.items():
+            if isinstance(values, Iterable) and not isinstance(values, (str, bytes)):
+                sequence = [float(value) for value in values]
+            else:
+                sequence = [float(values) if values is not None else 1.0]
+            price_adjustments[str(name)] = _coerce_schedule(sequence, years_length)
     depreciation_schedule = _parse_depreciation_schedule(raw.get("depreciation", {}), years)
     commission_rows = _parse_distributor_commission(
         raw.get("distributor_commission"), years, unit_costs
@@ -726,7 +742,6 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
     sensitivity = _parse_sensitivity(raw["sensitivity"]["variables"])
 
     utility_source = raw["utility_costs"]
-    years_length = len(years)
     utility_rows = list(utility_source.get("years", [])) if isinstance(utility_source, Mapping) else []
 
     if utility_rows:
@@ -799,6 +814,7 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         ],
         seed=seed,
         distribution=distribution or "uniform",
+        correlations=monte_source.get("correlations", {}) if isinstance(monte_source, Mapping) else {},
     )
 
     tax_data = raw["tax"]
@@ -807,6 +823,12 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         float(tax_data.get("rate", 0.0)) for _ in years
     ]
     inflation_series = _coerce_schedule(raw.get("inflation_series", []), len(years))
+    tax_loss_carryforward = bool(tax_data.get("loss_carryforward", False))
+    try:
+        tax_loss_limit = float(tax_data.get("loss_carryforward_limit", 1.0))
+    except (TypeError, ValueError):
+        tax_loss_limit = 1.0
+    tax_loss_limit = min(max(tax_loss_limit, 0.0), 1.0)
 
     production_source = raw.get("production_estimate", {})
     production_estimate: Dict[str, List[float]] = {}
@@ -855,6 +877,34 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
     if not risk_schedule:
         risk_schedule = {"inherent": [0.0 for _ in years]}
 
+    risk_weights_raw = raw.get("risk_weights", {})
+    risk_weights: Dict[str, Dict[str, float]] = {}
+    if isinstance(risk_weights_raw, Mapping):
+        for name, weights in risk_weights_raw.items():
+            if not isinstance(weights, Mapping):
+                continue
+            revenue_weight = weights.get("revenue", weights.get("income", 1.0))
+            cost_weight = weights.get("costs", weights.get("expenses", 1.0))
+            try:
+                revenue = float(revenue_weight)
+            except (TypeError, ValueError):
+                revenue = 1.0
+            try:
+                costs = float(cost_weight)
+            except (TypeError, ValueError):
+                costs = 1.0
+            risk_weights[str(name)] = {"revenue": revenue, "costs": costs}
+
+    utility_allocation = raw.get("utility_allocation", {})
+    cost_share_value = 0.8
+    if isinstance(utility_allocation, Mapping):
+        candidate = utility_allocation.get("cost_of_sales_share", utility_allocation.get("cogs_share", 0.8))
+        try:
+            cost_share_value = float(candidate)
+        except (TypeError, ValueError):
+            cost_share_value = 0.8
+    cost_share_value = min(max(cost_share_value, 0.0), 1.0)
+
     scenario_tools_raw = raw.get("scenario_tools", {})
     scenario_tools: Dict[str, List[str]] = {}
     if isinstance(scenario_tools_raw, Mapping):
@@ -896,6 +946,7 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         years=years,
         production_estimate=production_estimate,
         unit_costs=unit_costs,
+        price_adjustments=price_adjustments,
         markup=raw["markup"],
         total_production_units=total_units,
         production_capacity=capacity,
@@ -915,13 +966,17 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         tax_rate=float(tax_data.get("rate", 0.0)),
         tax_rates=tax_schedule,
         tax_timing_adjustment=float(tax_data.get("timing_adjustment", 0.0)),
+        tax_loss_carryforward=tax_loss_carryforward,
+        tax_loss_limit=tax_loss_limit,
         risk_schedule=risk_schedule,
+        risk_weights=risk_weights,
         scenarios=raw["scenarios"],
         scenario_tools=scenario_tools,
         sensitivity=sensitivity,
         monte_carlo=monte_carlo,
         goal_seek=goal_seek,
         ai=ai_params,
+        utility_cost_of_sales_share=cost_share_value,
     )
 
 

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
+from tempfile import NamedTemporaryFile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO, StringIO
@@ -13,6 +15,19 @@ from zipfile import ZipFile
 
 from .model import FinancialModel, FinancialOutputs
 from .table import Table
+
+try:  # pragma: no cover - optional dependency for charts
+    from openpyxl.chart import LineChart, Reference  # type: ignore
+except Exception:  # pragma: no cover - openpyxl may be missing
+    LineChart = None  # type: ignore
+    Reference = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency for plot rendering
+    import plotly.graph_objects as go  # type: ignore
+    import plotly.io as pio  # type: ignore
+except Exception:  # pragma: no cover - plotly optional
+    go = None  # type: ignore
+    pio = None  # type: ignore
 
 try:  # pragma: no cover - optional dependency
     import pandas as pd  # type: ignore
@@ -28,6 +43,15 @@ try:  # pragma: no cover - optional dependency
     from fpdf import FPDF  # type: ignore
 except Exception:  # pragma: no cover - FPDF may not be installed
     FPDF = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency for Excel styling
+    from openpyxl.styles import Alignment, Font, PatternFill  # type: ignore
+    from openpyxl.utils import get_column_letter  # type: ignore
+except Exception:  # pragma: no cover - optional dependency for styling
+    Alignment = None  # type: ignore
+    Font = None  # type: ignore
+    PatternFill = None  # type: ignore
+    get_column_letter = None  # type: ignore
 
 JSON_MIME = "application/json"
 CSV_MIME = "text/csv"
@@ -278,7 +302,8 @@ def _build_excel(sections: Sequence[ReportSection]) -> bytes:
         try:
             with pd.ExcelWriter(buffer) as writer:  # type: ignore[arg-type]
                 for entry in entries:
-                    frame = _rows_to_dataframe(entry["rows"])
+                    rows = entry["rows"]
+                    frame = _rows_to_dataframe(rows)
                     if frame is None:
                         raise ValueError("pandas unavailable")
                     frame = frame.copy()
@@ -292,6 +317,23 @@ def _build_excel(sections: Sequence[ReportSection]) -> bytes:
                                 frame[note_col] = ""
                             frame.iloc[0, frame.columns.get_loc(note_col)] = note
                     frame.to_excel(writer, sheet_name=entry["sheet_name"], index=False)
+                    sheet = writer.sheets.get(entry["sheet_name"])
+                    if sheet and Font and PatternFill and Alignment and get_column_letter:
+                        header_fill = PatternFill(fill_type="solid", fgColor="1F4E78")
+                        header_font = Font(color="FFFFFF", bold=True)
+                        for cell in sheet[1]:
+                            cell.font = header_font
+                            cell.fill = header_fill
+                            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                        sheet.freeze_panes = "A2"
+                        for idx, column_cells in enumerate(sheet.columns, start=1):
+                            max_length = 0
+                            for cell in column_cells[: min(len(column_cells), 50)]:
+                                value = "" if cell.value is None else str(cell.value)
+                                max_length = max(max_length, len(value))
+                            adjusted = min(max_length + 2, 60)
+                            sheet.column_dimensions[get_column_letter(idx)].width = adjusted
+                        _add_excel_chart(sheet, rows)
             return buffer.getvalue()
         except Exception:  # pragma: no cover - fall back to pure-Python writer
             pass
@@ -300,58 +342,105 @@ def _build_excel(sections: Sequence[ReportSection]) -> bytes:
 
 
 def _build_word(sections: Sequence[ReportSection]) -> bytes:
-    blocks = _collect_report_blocks(sections)
-
     if Document is not None:
         document = Document()
-        for kind, text in blocks:
-            if kind == "title":
-                document.add_heading(text, level=1)
-            elif kind == "subtitle":
-                document.add_paragraph(text, style="Subtitle")
-            elif kind == "heading1":
-                document.add_heading(text, level=2)
-            elif kind == "heading2":
-                document.add_heading(text, level=3)
-            elif kind == "note":
-                document.add_paragraph(text, style="Intense Quote")
-            else:
-                document.add_paragraph(text)
+        document.add_heading("Pharmaceuticals Financial Report", level=1)
+        document.add_paragraph(
+            f"Generated on {datetime.now(timezone.utc).isoformat()} UTC",
+            style="Subtitle",
+        )
+        for section in sections:
+            document.add_heading(section.title, level=2)
+            if section.notes:
+                for note in section.notes:
+                    document.add_paragraph(note, style="List Bullet")
+            for table in section.tables:
+                document.add_heading(table.title, level=3)
+                if table.note:
+                    document.add_paragraph(table.note, style="List Bullet")
+                rows = _table_to_rows(table.data)
+                if not rows:
+                    document.add_paragraph("No data available.")
+                    continue
+                columns = _ordered_columns(rows)
+                if not columns:
+                    document.add_paragraph("No data available.")
+                    continue
+                word_table = document.add_table(rows=1, cols=len(columns))
+                word_table.style = "Table Grid"
+                header_cells = word_table.rows[0].cells
+                for idx, column in enumerate(columns):
+                    header_cells[idx].text = str(column)
+                for row in rows:
+                    row_cells = word_table.add_row().cells
+                    for idx, column in enumerate(columns):
+                        row_cells[idx].text = _format_report_value(row.get(column, ""))
+                chart_bytes = _build_chart_image(rows, table.title)
+                if chart_bytes:
+                    document.add_picture(BytesIO(chart_bytes))
         buffer = BytesIO()
         document.save(buffer)
         return buffer.getvalue()
 
-    return _build_word_fallback(blocks)
+    return _build_word_fallback(_collect_report_blocks(sections))
 
 
 def _build_pdf(sections: Sequence[ReportSection]) -> bytes:
-    blocks = _collect_report_blocks(sections)
-
     if FPDF is not None:
         pdf = FPDF()
         pdf.set_auto_page_break(auto=True, margin=15)
         pdf.add_page()
-        for kind, text in blocks:
-            if kind == "title":
-                pdf.set_font("Arial", "B", 16)
-                pdf.cell(0, 10, text, ln=True)
-            elif kind == "subtitle":
+        pdf.set_font("Arial", "B", 16)
+        pdf.cell(0, 10, _safe_pdf_text("Pharmaceuticals Financial Report"), ln=True)
+        pdf.set_font("Arial", "", 10)
+        pdf.cell(
+            0,
+            8,
+            _safe_pdf_text(f"Generated on {datetime.now(timezone.utc).isoformat()} UTC"),
+            ln=True,
+        )
+        for section in sections:
+            pdf.ln(4)
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 8, _safe_pdf_text(section.title.upper()), ln=True)
+            pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+            if section.notes:
                 pdf.set_font("Arial", "", 10)
-                pdf.cell(0, 8, text, ln=True)
-            elif kind == "heading1":
-                pdf.ln(4)
-                pdf.set_font("Arial", "B", 14)
-                pdf.cell(0, 8, text, ln=True)
-            elif kind == "heading2":
-                pdf.set_font("Arial", "B", 12)
-                pdf.cell(0, 7, text, ln=True)
-            elif kind == "note":
-                _pdf_multiline(pdf, text)
-            else:
-                _pdf_multiline(pdf, text)
+                for note in section.notes:
+                    _pdf_multiline(pdf, f"- {_safe_pdf_text(note)}")
+            for table in section.tables:
+                pdf.ln(2)
+                pdf.set_font("Arial", "B", 11)
+                pdf.cell(0, 7, _safe_pdf_text(table.title), ln=True)
+                if table.note:
+                    pdf.set_font("Arial", "", 9)
+                    _pdf_multiline(pdf, f"Note: {_safe_pdf_text(table.note)}")
+                rows = _table_to_rows(table.data)
+                if not rows:
+                    pdf.set_font("Arial", "", 9)
+                    _pdf_multiline(pdf, "No data available.")
+                    continue
+                columns = _ordered_columns(rows)
+                if not columns:
+                    pdf.set_font("Arial", "", 9)
+                    _pdf_multiline(pdf, "No data available.")
+                    continue
+                _render_pdf_table(pdf, columns, rows)
+                chart_bytes = _build_chart_image(rows, table.title)
+                if chart_bytes:
+                    with NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                        tmp.write(chart_bytes)
+                        tmp_path = tmp.name
+                    try:
+                        pdf.image(tmp_path, w=pdf.w - pdf.l_margin - pdf.r_margin)
+                    finally:
+                        try:
+                            os.unlink(tmp_path)
+                        except OSError:  # pragma: no cover - best effort cleanup
+                            pass
         return bytes(pdf.output(dest="S").encode("latin-1"))
 
-    return _build_pdf_fallback(blocks)
+    return _build_pdf_fallback(_collect_report_blocks(sections))
 
 
 # ---------------------------------------------------------------------------
@@ -390,8 +479,164 @@ def _collect_report_blocks(sections: Sequence[ReportSection]) -> List[Tuple[str,
                 for row in rows:
                     values = [_stringify(value) for value in row.values()]
                     blocks.append(("body", " | ".join(values) or "No data available."))
+            blocks.append(("body", ""))
 
     return blocks
+
+
+def _safe_pdf_text(text: str) -> str:
+    """Return text safe for FPDF's Latin-1 encoding."""
+
+    try:
+        text.encode("latin-1")
+        return text
+    except UnicodeEncodeError:
+        return text.encode("latin-1", "replace").decode("latin-1")
+
+
+def _format_report_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        if math.isnan(value):
+            return ""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        absolute = abs(float(value))
+        formatted = f"{absolute:,.4f}" if absolute < 1 else f"{absolute:,.2f}"
+        return f"({formatted})" if value < 0 else formatted
+    return str(value)
+
+
+def _extract_chart_series(rows: Sequence[Mapping[str, Any]]) -> tuple[list[Any], list[str], list[list[float]]]:
+    if not rows:
+        return [], [], []
+    columns = _ordered_columns(rows)
+    if not columns:
+        return [], [], []
+    if "Year" in columns:
+        x_key = "Year"
+    else:
+        x_key = columns[0]
+    numeric_columns: list[str] = []
+    for column in columns:
+        if column == x_key:
+            continue
+        for row in rows:
+            value = row.get(column)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                numeric_columns.append(column)
+                break
+    if not numeric_columns:
+        return [], [], []
+    x_values = [row.get(x_key) for row in rows]
+    series_values: list[list[float]] = []
+    for column in numeric_columns[:4]:
+        values: list[float] = []
+        for row in rows:
+            value = row.get(column)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                values.append(float(value))
+            else:
+                values.append(0.0)
+        series_values.append(values)
+    return x_values, numeric_columns[:4], series_values
+
+
+def _build_chart_image(rows: Sequence[Mapping[str, Any]], title: str) -> bytes | None:
+    if go is None or pio is None:
+        return None
+    x_values, labels, series_values = _extract_chart_series(rows)
+    if not labels or not x_values:
+        return None
+    fig = go.Figure()
+    for label, values in zip(labels, series_values):
+        fig.add_trace(go.Scatter(x=x_values, y=values, mode="lines+markers", name=str(label)))
+    fig.update_layout(
+        title=title,
+        xaxis_title="Year",
+        yaxis_title="Value",
+        template="plotly_white",
+        height=360,
+        margin=dict(l=40, r=20, t=40, b=40),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    try:
+        return pio.to_image(fig, format="png", scale=2)
+    except Exception:  # pragma: no cover - image rendering optional
+        return None
+
+
+def _add_excel_chart(sheet, rows: Sequence[Mapping[str, Any]]) -> None:
+    if not rows or LineChart is None or Reference is None:
+        return
+    columns = _ordered_columns(rows)
+    if not columns or "Year" not in columns:
+        return
+    year_col = columns.index("Year") + 1
+    numeric_cols: list[int] = []
+    for idx, column in enumerate(columns, start=1):
+        if idx == year_col:
+            continue
+        for row in rows:
+            value = row.get(column)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                numeric_cols.append(idx)
+                break
+    if not numeric_cols:
+        return
+    chart = LineChart()
+    chart.title = "Trend"
+    chart.y_axis.title = "Value"
+    chart.x_axis.title = "Year"
+    data = Reference(sheet, min_col=min(numeric_cols), max_col=max(numeric_cols), min_row=1, max_row=sheet.max_row)
+    chart.add_data(data, titles_from_data=True)
+    categories = Reference(sheet, min_col=year_col, min_row=2, max_row=sheet.max_row)
+    chart.set_categories(categories)
+    anchor_row = sheet.max_row + 2
+    sheet.add_chart(chart, f"A{anchor_row}")
+
+
+def _truncate_text(pdf: "FPDF", text: str, width: float) -> str:
+    if pdf.get_string_width(text) <= width:
+        return text
+    trimmed = text
+    ellipsis = "..."
+    while trimmed and pdf.get_string_width(f"{trimmed}{ellipsis}") > width:
+        trimmed = trimmed[:-1]
+    return f"{trimmed}{ellipsis}" if trimmed else text[:1]
+
+
+def _render_pdf_table(
+    pdf: "FPDF",
+    columns: Sequence[str],
+    rows: Sequence[Mapping[str, Any]],
+) -> None:
+    page_width = pdf.w - pdf.l_margin - pdf.r_margin
+    if not columns:
+        return
+    first_width = page_width * 0.45 if len(columns) > 1 else page_width
+    other_width = (
+        (page_width - first_width) / max(len(columns) - 1, 1) if len(columns) > 1 else 0
+    )
+    widths = [first_width] + [other_width] * (len(columns) - 1)
+
+    pdf.set_font("Arial", "B", 9)
+    pdf.set_fill_color(230, 230, 230)
+    for idx, column in enumerate(columns):
+        text = _truncate_text(pdf, _safe_pdf_text(str(column)), widths[idx])
+        align = "L" if idx == 0 else "R"
+        pdf.cell(widths[idx], 7, text, border="B", align=align, fill=True)
+    pdf.ln(7)
+
+    pdf.set_font("Arial", "", 9)
+    for row in rows:
+        for idx, column in enumerate(columns):
+            raw = row.get(column, "")
+            value = _format_report_value(raw)
+            align = "L" if idx == 0 else "R"
+            text = _truncate_text(pdf, _safe_pdf_text(value), widths[idx])
+            pdf.cell(widths[idx], 6, text, border="B", align=align)
+        pdf.ln(6)
 
 
 def _collect_sheet_entries(sections: Sequence[ReportSection]) -> List[dict[str, Any]]:
