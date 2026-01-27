@@ -2100,6 +2100,25 @@ class FinancialModel:
             metadata["ml_diagnostics"] = {
                 name: dict(values) for name, values in advisor.diagnostics.items()
             }
+            metadata["ml_backtest"] = {
+                name: dict(values) for name, values in advisor.backtest_diagnostics.items()
+            }
+            metadata["ml_explainability"] = {
+                name: dict(values) for name, values in advisor.explainability.items()
+            }
+            metadata["ml_audit_log"] = dict(advisor.audit_log)
+        metadata["ai_config"] = {
+            "enabled": config.enabled,
+            "provider": config.provider,
+            "model": config.model,
+            "forecast_horizon": config.forecast_horizon,
+            "ml_methods": list(config.ml_methods),
+            "generative_features": list(config.generative_features),
+            "regularization": config.regularization,
+            "min_forecast": config.min_forecast,
+            "max_forecast_multiplier": config.max_forecast_multiplier,
+            "seasonality_period": config.seasonality_period,
+        }
         metadata["risk_factor_overview"] = self.risk_factor_diagnostics().as_dict()
         irr_info = self.irr_diagnostics()
         if irr_info is not None:
