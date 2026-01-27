@@ -1,0 +1,31 @@
+{
+  "generated": "TIMESTAMP",
+  "sections": [
+    {
+      "title": "Summary Metrics",
+      "tables": [
+        {
+          "title": "Summary Metrics",
+          "rows": [
+            {
+              "Metric": "NPV",
+              "Value": -70.3921342450854
+            },
+            {
+              "Metric": "IRR",
+              "Value": NaN
+            },
+            {
+              "Metric": "Payback Period",
+              "Value": NaN
+            },
+            {
+              "Metric": "Discounted Payback",
+              "Value": NaN
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

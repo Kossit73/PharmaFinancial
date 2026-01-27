@@ -173,6 +173,47 @@ class FinancialModelTest(unittest.TestCase):
         expected = ["NPV", "IRR", "Payback Period", "Discounted Payback"]
         self.assertEqual(summary.index, expected)
 
+    def test_summary_metrics_regression(self):
+        summary = self.outputs.summary_metrics.column("Value")
+        self.assertAlmostEqual(summary[0], -70.3921342450854, places=6)
+        self.assertTrue(math.isnan(summary[1]))
+        self.assertTrue(math.isnan(summary[2]))
+        self.assertTrue(math.isnan(summary[3]))
+
+    def test_production_schedule_matches_inputs(self):
+        production = self.model._production()
+        year_count = len(self.inputs.years)
+
+        def _pad(series):
+            values = [float(value) for value in series]
+            if not values:
+                return [0.0 for _ in range(year_count)]
+            if len(values) >= year_count:
+                return values[:year_count]
+            return values + [values[-1] for _ in range(year_count - len(values))]
+
+        for product, series in self.inputs.production_estimate.items():
+            expected = _pad(series)
+            self.assertEqual(len(production[product]), year_count)
+            for actual, expected_value in zip(production[product], expected):
+                self.assertAlmostEqual(actual, expected_value, places=6)
+
+    def test_working_capital_schedule_changes(self):
+        schedule = self.model.working_capital_schedule()
+        net_working_capital = schedule.column("Net Working Capital")
+        changes = schedule.column("Change in Net Working Capital")
+        self.assertEqual(len(net_working_capital), len(changes))
+        expected_changes = []
+        previous = None
+        for value in net_working_capital:
+            if previous is None:
+                expected_changes.append(float(value))
+            else:
+                expected_changes.append(float(value) - previous)
+            previous = float(value)
+        for actual, expected in zip(changes, expected_changes):
+            self.assertAlmostEqual(actual, expected, places=6)
+
     def test_goal_seek_metric_matches_income_statement(self):
         self.assertIsNotNone(self.inputs.goal_seek)
         goal_table = self.outputs.goal_seek
