@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import copy
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
 import numpy as np
@@ -2105,9 +2105,11 @@ class FinancialModel:
         if irr_info is not None:
             metadata["irr_diagnostics"] = {
                 "value": irr_info.value,
+                "solutions": list(irr_info.solutions),
                 "iterations": irr_info.iterations,
                 "method": irr_info.method,
                 "converged": irr_info.converged,
+                "tolerance": irr_info.tolerance,
                 "message": irr_info.message,
             }
 
@@ -2338,12 +2340,23 @@ class IRRResult:
     method: str
     converged: bool
     message: str = ""
+    solutions: List[float] = field(default_factory=list)
+    tolerance: float = 1e-8
 
     def __float__(self) -> float:
         return float(self.value)
 
 
-def npf_irr(cashflows: Iterable[Number]) -> IRRResult:
+def npf_irr(
+    cashflows: Iterable[Number],
+    *,
+    guess: float = 0.1,
+    max_iterations: int = 100,
+    tolerance: float = 1e-8,
+    bracket_min: float = -0.9,
+    bracket_max: float = 10.0,
+    bracket_steps: int = 200,
+) -> IRRResult:
     values = [float(value) for value in cashflows]
     if len(values) < 2:
         return IRRResult(
@@ -2352,6 +2365,16 @@ def npf_irr(cashflows: Iterable[Number]) -> IRRResult:
             method="insufficient_data",
             converged=False,
             message="At least two cash flow periods are required to compute IRR.",
+            tolerance=tolerance,
+        )
+    if not any(value > 0 for value in values) or not any(value < 0 for value in values):
+        return IRRResult(
+            value=float("nan"),
+            iterations=0,
+            method="no_sign_change",
+            converged=False,
+            message="Cash flows do not change sign, so IRR is undefined.",
+            tolerance=tolerance,
         )
 
     def _npv(rate: float) -> float:
@@ -2374,9 +2397,66 @@ def npf_irr(cashflows: Iterable[Number]) -> IRRResult:
             total += -idx * value / denominator
         return total
 
-    guess = 0.1
-    max_iterations = 100
-    tolerance = 1e-8
+    def _sign_changes(series: Iterable[float]) -> int:
+        signs = [value for value in series if value != 0.0]
+        if not signs:
+            return 0
+        changes = 0
+        previous = signs[0] > 0
+        for value in signs[1:]:
+            current = value > 0
+            if current != previous:
+                changes += 1
+            previous = current
+        return changes
+
+    def _bisect(lower: float, upper: float) -> tuple[float, int, bool]:
+        lower_value = _npv(lower)
+        upper_value = _npv(upper)
+        if lower_value == 0.0:
+            return lower, 0, True
+        if upper_value == 0.0:
+            return upper, 0, True
+        if lower_value * upper_value > 0:
+            return (lower + upper) / 2, 0, False
+        for iteration in range(1, max_iterations + 1):
+            midpoint = (lower + upper) / 2
+            mid_value = _npv(midpoint)
+            if abs(mid_value) < tolerance or abs(upper - lower) < tolerance:
+                return midpoint, iteration, True
+            if lower_value * mid_value < 0:
+                upper = midpoint
+                upper_value = mid_value
+            else:
+                lower = midpoint
+                lower_value = mid_value
+        return (lower + upper) / 2, max_iterations, False
+
+    def _scan_brackets(low: float, high: float, steps: int) -> List[tuple[float, float]]:
+        if steps < 2:
+            return []
+        step_size = (high - low) / steps
+        brackets: List[tuple[float, float]] = []
+        previous_rate = low
+        previous_value = _npv(previous_rate)
+        for idx in range(1, steps + 1):
+            current_rate = low + step_size * idx
+            current_value = _npv(current_rate)
+            if previous_value == 0.0:
+                brackets.append((previous_rate, previous_rate))
+            elif current_value == 0.0:
+                brackets.append((current_rate, current_rate))
+            elif previous_value * current_value < 0:
+                brackets.append((previous_rate, current_rate))
+            previous_rate = current_rate
+            previous_value = current_value
+        return brackets
+
+    sign_change_count = _sign_changes(values)
+    newton_solution: Optional[float] = None
+    newton_iterations = 0
+    newton_converged = False
+
     for iteration in range(1, max_iterations + 1):
         guess = max(guess, -0.999999)
         value = _npv(guess)
@@ -2385,82 +2465,69 @@ def npf_irr(cashflows: Iterable[Number]) -> IRRResult:
             break
         next_guess = guess - value / derivative
         if abs(next_guess - guess) < tolerance:
-            return IRRResult(
-                value=next_guess,
-                iterations=iteration,
-                method="newton",
-                converged=True,
-            )
+            newton_solution = next_guess
+            newton_iterations = iteration
+            newton_converged = True
+            break
         guess = next_guess
 
-    bracket_points = [-0.9, 0.0, 0.5, 1.0, 2.0, 5.0, 10.0]
-    lower = None
-    upper = None
-    previous_rate = bracket_points[0]
-    previous_value = _npv(previous_rate)
-    for rate in bracket_points[1:]:
-        current_value = _npv(rate)
-        if previous_value == 0.0:
-            return IRRResult(value=previous_rate, iterations=0, method="bracket", converged=True)
-        if current_value == 0.0:
-            return IRRResult(value=rate, iterations=0, method="bracket", converged=True)
-        if previous_value * current_value < 0:
-            lower, upper = previous_rate, rate
-            break
-        previous_rate, previous_value = rate, current_value
-
-    if lower is None or upper is None:
-        rate0, rate1 = 0.0, 0.2
-        value0, value1 = _npv(rate0), _npv(rate1)
-        for iteration in range(1, max_iterations + 1):
-            denominator = value1 - value0
-            if abs(denominator) < 1e-12:
+    bracket_low = bracket_min
+    bracket_high = bracket_max
+    brackets = _scan_brackets(bracket_low, bracket_high, bracket_steps)
+    if not brackets:
+        for scale in (2.0, 5.0, 10.0):
+            brackets = _scan_brackets(bracket_low, bracket_high * scale, bracket_steps)
+            if brackets:
                 break
-            rate2 = rate1 - value1 * (rate1 - rate0) / denominator
-            if abs(rate2 - rate1) < tolerance:
-                return IRRResult(
-                    value=rate2,
-                    iterations=iteration,
-                    method="secant",
-                    converged=True,
-                )
-            rate0, value0 = rate1, value1
-            rate1 = rate2
-            value1 = _npv(rate1)
-        return IRRResult(
-            value=float("nan"),
-            iterations=max_iterations,
-            method="secant",
-            converged=False,
-            message="Unable to locate a valid IRR using Newton or secant methods.",
-        )
 
-    npv_lower = _npv(lower)
-    npv_upper = _npv(upper)
-    midpoint = (lower + upper) / 2
-    for iteration in range(1, max_iterations + 1):
-        midpoint = (lower + upper) / 2
-        value = _npv(midpoint)
-        if abs(value) < tolerance or abs(upper - lower) < tolerance:
-            return IRRResult(
-                value=midpoint,
-                iterations=iteration,
-                method="bisection",
-                converged=True,
-            )
-        if npv_lower * value < 0:
-            upper = midpoint
-            npv_upper = value
-        else:
-            lower = midpoint
-            npv_lower = value
+    solutions: List[float] = []
+    best_bisect_iterations = 0
+    bisect_converged = False
+    for lower, upper in brackets:
+        root, iterations_used, converged = _bisect(lower, upper)
+        if converged:
+            bisect_converged = True
+            best_bisect_iterations = max(best_bisect_iterations, iterations_used)
+        if not math.isfinite(root):
+            continue
+        if not solutions or all(abs(root - existing) > tolerance for existing in solutions):
+            solutions.append(root)
+
+    if newton_converged and newton_solution is not None and math.isfinite(newton_solution):
+        if all(abs(newton_solution - existing) > tolerance for existing in solutions):
+            solutions.insert(0, newton_solution)
+
+    solutions = sorted(solutions)
+    chosen_value = float("nan")
+    chosen_method = "none"
+    iterations_used = 0
+    converged = False
+    if newton_converged and newton_solution is not None:
+        chosen_value = newton_solution
+        chosen_method = "newton"
+        iterations_used = newton_iterations
+        converged = True
+    elif solutions:
+        positive_solutions = [value for value in solutions if value > -1.0]
+        chosen_value = positive_solutions[0] if positive_solutions else solutions[0]
+        chosen_method = "bisection"
+        iterations_used = best_bisect_iterations
+        converged = bisect_converged
+
+    message_parts = []
+    if sign_change_count > 1 and len(solutions) > 1:
+        message_parts.append("Multiple IRR solutions detected due to multiple cash flow sign changes.")
+    if not converged:
+        message_parts.append("IRR solver did not converge within the specified tolerance.")
 
     return IRRResult(
-        value=midpoint,
-        iterations=max_iterations,
-        method="bisection",
-        converged=False,
-        message="Bisection method did not converge within the iteration limit.",
+        value=chosen_value,
+        iterations=iterations_used,
+        method=chosen_method,
+        converged=converged,
+        message=" ".join(message_parts),
+        solutions=solutions,
+        tolerance=tolerance,
     )
 
 
