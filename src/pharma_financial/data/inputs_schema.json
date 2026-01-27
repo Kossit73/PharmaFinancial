@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "years",
+    "unit_costs",
+    "markup",
+    "inflation_series",
+    "utility_costs",
+    "working_capital",
+    "financing",
+    "tax",
+    "risk",
+    "risk_weights",
+    "scenarios",
+    "sensitivity",
+    "monte_carlo",
+    "ai"
+  ],
+  "properties": {
+    "years": {
+      "type": "array",
+      "items": { "type": "integer" },
+      "minItems": 1
+    },
+    "unit_costs": { "type": "object" },
+    "markup": { "type": "object" },
+    "inflation_series": {
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 1
+    },
+    "utility_costs": { "type": "object" },
+    "working_capital": { "type": "object" },
+    "financing": { "type": "object" },
+    "tax": { "type": "object" },
+    "risk": { "type": "object" },
+    "risk_weights": { "type": "object" },
+    "scenarios": { "type": "object" },
+    "scenario_files": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "sensitivity": { "type": "object" },
+    "monte_carlo": {
+      "type": "object",
+      "required": ["iterations"],
+      "properties": {
+        "iterations": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "ai": { "type": "object" }
+  }
+}

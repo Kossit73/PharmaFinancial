@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
 import numpy as np
@@ -1620,51 +1621,143 @@ class FinancialModel:
         iterations = params.iterations
         bounds = [float(value) for value in params.revenue_growth_range]
         if len(bounds) >= 2:
-            low, high = sorted((bounds[0], bounds[1]))
+            default_low, default_high = sorted((bounds[0], bounds[1]))
         elif bounds:
             span = abs(bounds[0])
-            low, high = -span, span
+            default_low, default_high = -span, span
         else:
-            low, high = -0.05, 0.05
+            default_low, default_high = -0.05, 0.05
 
-        revenue_table = self.revenue_schedule()
-        base_revenue = np.array(revenue_table.column("Net Revenue"), dtype=float)
-        costs = self.cost_structure()
-        raw_materials = np.array(costs.column("Raw Materials"), dtype=float)
-        utilities = np.array(costs.column("Utilities"), dtype=float)
-        direct_labor = np.array(costs.column("Direct Labor"), dtype=float)
-        indirect_labor = np.array(costs.column("General & Admin"), dtype=float)
-        depreciation = np.array(self.depreciation_schedule(), dtype=float)
-        interest = np.array(self._interest_schedule(), dtype=float)
-        tax_schedule = np.array(self._tax_schedule(), dtype=float)
-        discount_rate = self.inputs.financing.discount_rate
-        capex = np.array(self._capex_series(), dtype=float)
-        financing_components = self._financing_cash_flow_components()
-        other_financing = {
-            name: list(series)
-            for name, series in financing_components.items()
-            if name != "Dividends Paid"
-        }
-        base_weighted = np.array(self._distributor_receivable_cache or [0.0 for _ in self.years], dtype=float)
-        base_distributor_share = np.array(self._distributor_share_cache or [0.0 for _ in self.years], dtype=float)
+        def _build_baseline(model: "FinancialModel") -> Dict[str, Any]:
+            revenue_table = model.revenue_schedule()
+            base_revenue = np.array(revenue_table.column("Net Revenue"), dtype=float)
+            costs = model.cost_structure()
+            raw_materials = np.array(costs.column("Raw Materials"), dtype=float)
+            utilities = np.array(costs.column("Utilities"), dtype=float)
+            direct_labor = np.array(costs.column("Direct Labor"), dtype=float)
+            indirect_labor = np.array(costs.column("General & Admin"), dtype=float)
+            depreciation = np.array(model.depreciation_schedule(), dtype=float)
+            interest = np.array(model._interest_schedule(), dtype=float)
+            tax_schedule = np.array(model._tax_schedule(), dtype=float)
+            discount_rate = model.inputs.financing.discount_rate
+            capex = np.array(model._capex_series(), dtype=float)
+            financing_components = model._financing_cash_flow_components()
+            other_financing = {
+                name: list(series)
+                for name, series in financing_components.items()
+                if name != "Dividends Paid"
+            }
+            base_weighted = np.array(model._distributor_receivable_cache or [0.0 for _ in model.years], dtype=float)
+            base_distributor_share = np.array(model._distributor_share_cache or [0.0 for _ in model.years], dtype=float)
+            return {
+                "base_revenue": base_revenue,
+                "raw_materials": raw_materials,
+                "utilities": utilities,
+                "direct_labor": direct_labor,
+                "indirect_labor": indirect_labor,
+                "depreciation": depreciation,
+                "interest": interest,
+                "tax_schedule": tax_schedule,
+                "discount_rate": discount_rate,
+                "capex": capex,
+                "other_financing": other_financing,
+                "base_weighted": base_weighted,
+                "base_distributor_share": base_distributor_share,
+            }
+
+        base_baseline = _build_baseline(self)
+        baselines = {"base": base_baseline}
+        scenario_weights = {name: weight for name, weight in (params.scenario_weights or {}).items() if weight > 0}
+        if scenario_weights:
+            for name, scenario in self.inputs.scenarios.items():
+                if name not in scenario_weights:
+                    continue
+                scenario_inputs = copy.deepcopy(self.inputs)
+                inflation_override = scenario.get("inflation", scenario_inputs.inflation_series)
+                scenario_inputs.inflation_series = [float(value) for value in inflation_override]
+                interest_values = scenario.get("interest", [scenario_inputs.financing.discount_rate])
+                try:
+                    scenario_inputs.financing.discount_rate = (
+                        float(interest_values[0]) if interest_values else scenario_inputs.financing.discount_rate
+                    )
+                except (TypeError, ValueError, IndexError):
+                    pass
+                scenario_model = FinancialModel(scenario_inputs)
+                baselines[name] = _build_baseline(scenario_model)
+            if "base" not in scenario_weights:
+                baselines.pop("base", None)
+        else:
+            scenario_weights = {"base": 1.0}
+
+        weighted_scenarios = [
+            (name, weight)
+            for name, weight in scenario_weights.items()
+            if weight > 0 and name in baselines
+        ]
+        if not weighted_scenarios:
+            weighted_scenarios = [("base", 1.0)]
+
+        total_weight = sum(weight for _, weight in weighted_scenarios)
+        cumulative_weights: List[tuple[str, float]] = []
+        running = 0.0
+        for name, weight in weighted_scenarios:
+            running += weight
+            cumulative_weights.append((name, running))
+
+        deterministic_share = params.deterministic_share
 
         import random
 
         rng = random.Random()
         if params.seed is not None:
             rng.seed(params.seed)
-        distribution = (params.distribution or "uniform").lower()
-        normal_std = (high - low) / 6 if high != low else max(abs(high), 1.0) / 6
+        fallback_distribution = (params.distribution or "uniform").lower()
+        distribution_overrides = params.distributions or {}
 
-        def _sample(shift: float = 0.0) -> float:
+        def _distribution_type(variable: str) -> str:
+            override = distribution_overrides.get(variable, {})
+            dist_name = override.get("type") or override.get("distribution")
+            return str(dist_name or fallback_distribution).strip().lower()
+
+        def _distribution_bounds(variable: str, override: Mapping[str, Any]) -> tuple[float, float]:
+            range_override = override.get("range") if isinstance(override, Mapping) else None
+            low = override.get("low")
+            high = override.get("high")
+            if low is None and high is None and isinstance(range_override, Iterable):
+                values = [float(value) for value in range_override]
+                if len(values) >= 2:
+                    low, high = values[0], values[1]
+            if low is None or high is None:
+                low, high = (default_low, default_high) if variable == "revenue_growth" else (-0.05, 0.05)
+            return float(low), float(high)
+
+        def _sample_value(
+            variable: str,
+            *,
+            shock: Optional[float] = None,
+        ) -> float:
+            override = distribution_overrides.get(variable, {})
+            distribution = _distribution_type(variable)
+            low, high = _distribution_bounds(variable, override)
+            min_value = override.get("min", low)
+            max_value = override.get("max", high)
             if distribution == "normal":
-                mean = (low + high) / 2
-                value = rng.gauss(mean + shift, normal_std)
-                return max(min(value, high), low)
-            if distribution in {"triangular", "triangle"}:
-                mode = (low + high) / 2
-                return rng.triangular(low, high, mode)
-            return rng.uniform(low, high)
+                mean = float(override.get("mean", (low + high) / 2))
+                std = float(override.get("std", (high - low) / 6 if high != low else max(abs(high), 1.0) / 6))
+                z = shock if shock is not None else rng.gauss(0.0, 1.0)
+                value = mean + std * z
+            elif distribution in {"lognormal", "log-normal", "log_normal"}:
+                mu = float(override.get("mu", 0.0))
+                sigma = float(override.get("sigma", 0.25))
+                z = shock if shock is not None else rng.gauss(0.0, 1.0)
+                offset = float(override.get("offset", 1.0))
+                value = math.exp(mu + sigma * z) - offset
+            elif distribution in {"triangular", "triangle"}:
+                mode = float(override.get("mode", (low + high) / 2))
+                value = rng.triangular(low, high, mode)
+            else:
+                value = rng.uniform(low, high)
+            return max(min(value, float(max_value)), float(min_value))
 
         def _build_cholesky(variable_order: List[str]) -> List[List[float]]:
             correlations = params.correlations or {}
@@ -1733,62 +1826,80 @@ class FinancialModel:
             variable_codes.insert(0, "revenue_growth")
 
         results: Dict[str, List[float]] = {metric: [] for metric in metrics_to_track}
-        use_correlated = distribution == "normal" and bool(params.correlations)
+        use_correlated = bool(params.correlations)
         correlation_variables = [
-            code for code in variable_codes if code in (params.correlations or {})
+            code
+            for code in variable_codes
+            if code in (params.correlations or {})
+            and _distribution_type(code) in {"normal", "lognormal", "log-normal", "log_normal"}
         ]
         if use_correlated and not correlation_variables:
             use_correlated = False
         cholesky = _build_cholesky(correlation_variables) if use_correlated else []
-        base_revenue_safe = np.where(np.abs(base_revenue) > 1e-9, base_revenue, 1.0)
-        capital_expenditure = (-capex).tolist()
 
         for _ in range(iterations):
+            scenario_roll = rng.random() * total_weight
+            scenario_name = weighted_scenarios[-1][0]
+            for name, cumulative in cumulative_weights:
+                if scenario_roll <= cumulative:
+                    scenario_name = name
+                    break
+            baseline = baselines.get(scenario_name, base_baseline)
+            base_revenue = baseline["base_revenue"]
+            raw_materials = baseline["raw_materials"]
+            utilities = baseline["utilities"]
+            direct_labor = baseline["direct_labor"]
+            indirect_labor = baseline["indirect_labor"]
+            depreciation = baseline["depreciation"]
+            interest = baseline["interest"]
+            tax_schedule = baseline["tax_schedule"]
+            discount_rate = baseline["discount_rate"]
+            capex = baseline["capex"]
+            other_financing = baseline["other_financing"]
+            base_weighted = baseline["base_weighted"]
+            base_distributor_share = baseline["base_distributor_share"]
+            base_revenue_safe = np.where(np.abs(base_revenue) > 1e-9, base_revenue, 1.0)
+            capital_expenditure = (-capex).tolist()
+
+            deterministic = rng.random() < deterministic_share
             shocks = (
                 _correlated_shocks(correlation_variables, cholesky)
                 if use_correlated
                 else {}
             )
             if "revenue_growth" in variable_codes:
-                revenue_shift = shocks.get("revenue_growth", 0.0) * normal_std if use_correlated else 0.0
-                growth_rates = np.array([_sample(revenue_shift) for _ in self.years], dtype=float)
+                if deterministic:
+                    growth_rates = np.zeros(len(self.years), dtype=float)
+                else:
+                    revenue_shock = shocks.get("revenue_growth")
+                    growth_rates = np.array(
+                        [_sample_value("revenue_growth", shock=revenue_shock) for _ in self.years],
+                        dtype=float,
+                    )
             else:
                 growth_rates = np.zeros(len(self.years), dtype=float)
 
-            raw_factor = 1.0 + (
-                _sample(shocks.get("raw_material_cost", 0.0) * normal_std)
-                if "raw_material_cost" in variable_codes
-                else 0.0
-            )
-            labor_factor = 1.0 + (
-                _sample(shocks.get("labor_cost", 0.0) * normal_std)
-                if "labor_cost" in variable_codes
-                else 0.0
-            )
-            utility_factor = 1.0 + (
-                _sample(shocks.get("utility_cost", 0.0) * normal_std)
-                if "utility_cost" in variable_codes
-                else 0.0
-            )
-            interest_factor = 1.0 + (
-                _sample(shocks.get("senior_debt", 0.0) * normal_std)
-                if "senior_debt" in variable_codes
-                else 0.0
-            )
-            tax_factor = 1.0 + (
-                _sample(shocks.get("tax_rate", 0.0) * normal_std)
-                if "tax_rate" in variable_codes
-                else 0.0
-            )
+            raw_factor = 1.0
+            if "raw_material_cost" in variable_codes and not deterministic:
+                raw_factor += _sample_value("raw_material_cost", shock=shocks.get("raw_material_cost"))
+            labor_factor = 1.0
+            if "labor_cost" in variable_codes and not deterministic:
+                labor_factor += _sample_value("labor_cost", shock=shocks.get("labor_cost"))
+            utility_factor = 1.0
+            if "utility_cost" in variable_codes and not deterministic:
+                utility_factor += _sample_value("utility_cost", shock=shocks.get("utility_cost"))
+            interest_factor = 1.0
+            if "senior_debt" in variable_codes and not deterministic:
+                interest_factor += _sample_value("senior_debt", shock=shocks.get("senior_debt"))
+            tax_factor = 1.0
+            if "tax_rate" in variable_codes and not deterministic:
+                tax_factor += _sample_value("tax_rate", shock=shocks.get("tax_rate"))
             if tax_factor < 0:
                 tax_factor = 0.0
 
             risk_adjustment = 1.0
-            if "other" in variable_codes:
-                risk_adjustment = max(
-                    0.0,
-                    1.0 - _sample(shocks.get("other", 0.0) * normal_std),
-                )
+            if "other" in variable_codes and not deterministic:
+                risk_adjustment = max(0.0, 1.0 - _sample_value("other", shock=shocks.get("other")))
             risk_series = (
                 np.full(len(self.years), risk_adjustment, dtype=float)
                 if "other" in variable_codes
@@ -1989,14 +2100,35 @@ class FinancialModel:
             metadata["ml_diagnostics"] = {
                 name: dict(values) for name, values in advisor.diagnostics.items()
             }
+            metadata["ml_backtest"] = {
+                name: dict(values) for name, values in advisor.backtest_diagnostics.items()
+            }
+            metadata["ml_explainability"] = {
+                name: dict(values) for name, values in advisor.explainability.items()
+            }
+            metadata["ml_audit_log"] = dict(advisor.audit_log)
+        metadata["ai_config"] = {
+            "enabled": config.enabled,
+            "provider": config.provider,
+            "model": config.model,
+            "forecast_horizon": config.forecast_horizon,
+            "ml_methods": list(config.ml_methods),
+            "generative_features": list(config.generative_features),
+            "regularization": config.regularization,
+            "min_forecast": config.min_forecast,
+            "max_forecast_multiplier": config.max_forecast_multiplier,
+            "seasonality_period": config.seasonality_period,
+        }
         metadata["risk_factor_overview"] = self.risk_factor_diagnostics().as_dict()
         irr_info = self.irr_diagnostics()
         if irr_info is not None:
             metadata["irr_diagnostics"] = {
                 "value": irr_info.value,
+                "solutions": list(irr_info.solutions),
                 "iterations": irr_info.iterations,
                 "method": irr_info.method,
                 "converged": irr_info.converged,
+                "tolerance": irr_info.tolerance,
                 "message": irr_info.message,
             }
 
@@ -2227,12 +2359,23 @@ class IRRResult:
     method: str
     converged: bool
     message: str = ""
+    solutions: List[float] = field(default_factory=list)
+    tolerance: float = 1e-8
 
     def __float__(self) -> float:
         return float(self.value)
 
 
-def npf_irr(cashflows: Iterable[Number]) -> IRRResult:
+def npf_irr(
+    cashflows: Iterable[Number],
+    *,
+    guess: float = 0.1,
+    max_iterations: int = 100,
+    tolerance: float = 1e-8,
+    bracket_min: float = -0.9,
+    bracket_max: float = 10.0,
+    bracket_steps: int = 200,
+) -> IRRResult:
     values = [float(value) for value in cashflows]
     if len(values) < 2:
         return IRRResult(
@@ -2241,6 +2384,16 @@ def npf_irr(cashflows: Iterable[Number]) -> IRRResult:
             method="insufficient_data",
             converged=False,
             message="At least two cash flow periods are required to compute IRR.",
+            tolerance=tolerance,
+        )
+    if not any(value > 0 for value in values) or not any(value < 0 for value in values):
+        return IRRResult(
+            value=float("nan"),
+            iterations=0,
+            method="no_sign_change",
+            converged=False,
+            message="Cash flows do not change sign, so IRR is undefined.",
+            tolerance=tolerance,
         )
 
     def _npv(rate: float) -> float:
@@ -2263,9 +2416,66 @@ def npf_irr(cashflows: Iterable[Number]) -> IRRResult:
             total += -idx * value / denominator
         return total
 
-    guess = 0.1
-    max_iterations = 100
-    tolerance = 1e-8
+    def _sign_changes(series: Iterable[float]) -> int:
+        signs = [value for value in series if value != 0.0]
+        if not signs:
+            return 0
+        changes = 0
+        previous = signs[0] > 0
+        for value in signs[1:]:
+            current = value > 0
+            if current != previous:
+                changes += 1
+            previous = current
+        return changes
+
+    def _bisect(lower: float, upper: float) -> tuple[float, int, bool]:
+        lower_value = _npv(lower)
+        upper_value = _npv(upper)
+        if lower_value == 0.0:
+            return lower, 0, True
+        if upper_value == 0.0:
+            return upper, 0, True
+        if lower_value * upper_value > 0:
+            return (lower + upper) / 2, 0, False
+        for iteration in range(1, max_iterations + 1):
+            midpoint = (lower + upper) / 2
+            mid_value = _npv(midpoint)
+            if abs(mid_value) < tolerance or abs(upper - lower) < tolerance:
+                return midpoint, iteration, True
+            if lower_value * mid_value < 0:
+                upper = midpoint
+                upper_value = mid_value
+            else:
+                lower = midpoint
+                lower_value = mid_value
+        return (lower + upper) / 2, max_iterations, False
+
+    def _scan_brackets(low: float, high: float, steps: int) -> List[tuple[float, float]]:
+        if steps < 2:
+            return []
+        step_size = (high - low) / steps
+        brackets: List[tuple[float, float]] = []
+        previous_rate = low
+        previous_value = _npv(previous_rate)
+        for idx in range(1, steps + 1):
+            current_rate = low + step_size * idx
+            current_value = _npv(current_rate)
+            if previous_value == 0.0:
+                brackets.append((previous_rate, previous_rate))
+            elif current_value == 0.0:
+                brackets.append((current_rate, current_rate))
+            elif previous_value * current_value < 0:
+                brackets.append((previous_rate, current_rate))
+            previous_rate = current_rate
+            previous_value = current_value
+        return brackets
+
+    sign_change_count = _sign_changes(values)
+    newton_solution: Optional[float] = None
+    newton_iterations = 0
+    newton_converged = False
+
     for iteration in range(1, max_iterations + 1):
         guess = max(guess, -0.999999)
         value = _npv(guess)
@@ -2274,82 +2484,69 @@ def npf_irr(cashflows: Iterable[Number]) -> IRRResult:
             break
         next_guess = guess - value / derivative
         if abs(next_guess - guess) < tolerance:
-            return IRRResult(
-                value=next_guess,
-                iterations=iteration,
-                method="newton",
-                converged=True,
-            )
+            newton_solution = next_guess
+            newton_iterations = iteration
+            newton_converged = True
+            break
         guess = next_guess
 
-    bracket_points = [-0.9, 0.0, 0.5, 1.0, 2.0, 5.0, 10.0]
-    lower = None
-    upper = None
-    previous_rate = bracket_points[0]
-    previous_value = _npv(previous_rate)
-    for rate in bracket_points[1:]:
-        current_value = _npv(rate)
-        if previous_value == 0.0:
-            return IRRResult(value=previous_rate, iterations=0, method="bracket", converged=True)
-        if current_value == 0.0:
-            return IRRResult(value=rate, iterations=0, method="bracket", converged=True)
-        if previous_value * current_value < 0:
-            lower, upper = previous_rate, rate
-            break
-        previous_rate, previous_value = rate, current_value
-
-    if lower is None or upper is None:
-        rate0, rate1 = 0.0, 0.2
-        value0, value1 = _npv(rate0), _npv(rate1)
-        for iteration in range(1, max_iterations + 1):
-            denominator = value1 - value0
-            if abs(denominator) < 1e-12:
+    bracket_low = bracket_min
+    bracket_high = bracket_max
+    brackets = _scan_brackets(bracket_low, bracket_high, bracket_steps)
+    if not brackets:
+        for scale in (2.0, 5.0, 10.0):
+            brackets = _scan_brackets(bracket_low, bracket_high * scale, bracket_steps)
+            if brackets:
                 break
-            rate2 = rate1 - value1 * (rate1 - rate0) / denominator
-            if abs(rate2 - rate1) < tolerance:
-                return IRRResult(
-                    value=rate2,
-                    iterations=iteration,
-                    method="secant",
-                    converged=True,
-                )
-            rate0, value0 = rate1, value1
-            rate1 = rate2
-            value1 = _npv(rate1)
-        return IRRResult(
-            value=float("nan"),
-            iterations=max_iterations,
-            method="secant",
-            converged=False,
-            message="Unable to locate a valid IRR using Newton or secant methods.",
-        )
 
-    npv_lower = _npv(lower)
-    npv_upper = _npv(upper)
-    midpoint = (lower + upper) / 2
-    for iteration in range(1, max_iterations + 1):
-        midpoint = (lower + upper) / 2
-        value = _npv(midpoint)
-        if abs(value) < tolerance or abs(upper - lower) < tolerance:
-            return IRRResult(
-                value=midpoint,
-                iterations=iteration,
-                method="bisection",
-                converged=True,
-            )
-        if npv_lower * value < 0:
-            upper = midpoint
-            npv_upper = value
-        else:
-            lower = midpoint
-            npv_lower = value
+    solutions: List[float] = []
+    best_bisect_iterations = 0
+    bisect_converged = False
+    for lower, upper in brackets:
+        root, iterations_used, converged = _bisect(lower, upper)
+        if converged:
+            bisect_converged = True
+            best_bisect_iterations = max(best_bisect_iterations, iterations_used)
+        if not math.isfinite(root):
+            continue
+        if not solutions or all(abs(root - existing) > tolerance for existing in solutions):
+            solutions.append(root)
+
+    if newton_converged and newton_solution is not None and math.isfinite(newton_solution):
+        if all(abs(newton_solution - existing) > tolerance for existing in solutions):
+            solutions.insert(0, newton_solution)
+
+    solutions = sorted(solutions)
+    chosen_value = float("nan")
+    chosen_method = "none"
+    iterations_used = 0
+    converged = False
+    if newton_converged and newton_solution is not None:
+        chosen_value = newton_solution
+        chosen_method = "newton"
+        iterations_used = newton_iterations
+        converged = True
+    elif solutions:
+        positive_solutions = [value for value in solutions if value > -1.0]
+        chosen_value = positive_solutions[0] if positive_solutions else solutions[0]
+        chosen_method = "bisection"
+        iterations_used = best_bisect_iterations
+        converged = bisect_converged
+
+    message_parts = []
+    if sign_change_count > 1 and len(solutions) > 1:
+        message_parts.append("Multiple IRR solutions detected due to multiple cash flow sign changes.")
+    if not converged:
+        message_parts.append("IRR solver did not converge within the specified tolerance.")
 
     return IRRResult(
-        value=midpoint,
-        iterations=max_iterations,
-        method="bisection",
-        converged=False,
-        message="Bisection method did not converge within the iteration limit.",
+        value=chosen_value,
+        iterations=iterations_used,
+        method=chosen_method,
+        converged=converged,
+        message=" ".join(message_parts),
+        solutions=solutions,
+        tolerance=tolerance,
     )
 
 

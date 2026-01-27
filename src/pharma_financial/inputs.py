@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+import warnings
 import json
 
 
@@ -152,7 +153,10 @@ class MonteCarloParameters:
     variables: List[str] = field(default_factory=lambda: ["revenue_growth"])
     seed: Optional[int] = None
     distribution: str = "uniform"
+    distributions: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     correlations: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
+    scenario_weights: Mapping[str, float] = field(default_factory=dict)
+    deterministic_share: float = 0.0
 
 
 @dataclass
@@ -802,6 +806,27 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
     except (TypeError, ValueError):
         seed = None
     distribution = str(monte_source.get("distribution", "uniform")).strip().lower() if isinstance(monte_source, Mapping) else "uniform"
+    distributions = monte_source.get("distributions", {}) if isinstance(monte_source, Mapping) else {}
+    if not isinstance(distributions, Mapping):
+        distributions = {}
+    scenario_weights = monte_source.get("scenario_weights", {}) if isinstance(monte_source, Mapping) else {}
+    if not isinstance(scenario_weights, Mapping):
+        scenario_weights = {}
+    deterministic_share_raw = monte_source.get("deterministic_share", 0.0) if isinstance(monte_source, Mapping) else 0.0
+    try:
+        deterministic_share = float(deterministic_share_raw)
+    except (TypeError, ValueError):
+        deterministic_share = 0.0
+    deterministic_share = min(max(deterministic_share, 0.0), 1.0)
+
+    cleaned_weights: Dict[str, float] = {}
+    for name, weight in scenario_weights.items():
+        if not str(name):
+            continue
+        try:
+            cleaned_weights[str(name)] = float(weight)
+        except (TypeError, ValueError):
+            continue
 
     monte_carlo = MonteCarloParameters(
         iterations=int(monte_source["iterations"]),
@@ -814,7 +839,10 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         ],
         seed=seed,
         distribution=distribution or "uniform",
+        distributions=distributions,
         correlations=monte_source.get("correlations", {}) if isinstance(monte_source, Mapping) else {},
+        scenario_weights=cleaned_weights,
+        deterministic_share=deterministic_share,
     )
 
     tax_data = raw["tax"]
@@ -982,12 +1010,243 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
 
 def load_inputs(path: Optional[Path] = None) -> ModelInputs:
     """Load model assumptions from JSON."""
+    raw = load_raw_inputs(path)
+    base_dir = Path(path).resolve().parent if path is not None else Path(__file__).resolve().parent / "data"
+    apply_scenario_files(raw, base_dir)
+    errors, warning_messages = validate_inputs(raw)
+    if errors:
+        message = "Input validation failed:\n" + "\n".join(f"- {item}" for item in errors)
+        raise ValueError(message)
+    for warning_message in warning_messages:
+        warnings.warn(warning_message, stacklevel=2)
+    return parse_inputs(raw)
+
+
+def load_raw_inputs(path: Optional[Path] = None) -> Dict[str, object]:
+    """Load the raw inputs JSON without parsing into model structures."""
     if path is None:
         path = Path(__file__).resolve().parent / "data" / "default_inputs.json"
     with Path(path).open("r", encoding="utf-8") as handle:
         raw = json.load(handle)
 
-    return parse_inputs(raw)
+    if not isinstance(raw, Mapping):
+        raise ValueError("Inputs JSON must be an object at the top level.")
+    return dict(raw)
+
+
+def apply_scenario_files(raw: Mapping[str, object], base_dir: Path) -> None:
+    scenario_files = raw.get("scenario_files", [])
+    if not isinstance(scenario_files, list):
+        return
+    scenarios = raw.get("scenarios")
+    if not isinstance(scenarios, Mapping):
+        scenarios = {}
+        raw["scenarios"] = scenarios
+    for entry in scenario_files:
+        if not isinstance(entry, str) or not entry.strip():
+            continue
+        path = Path(entry)
+        if not path.is_absolute():
+            path = base_dir / path
+        if not path.exists():
+            warnings.warn(f"Scenario file not found: {path}", stacklevel=2)
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            warnings.warn(f"Scenario file {path} is invalid JSON: {exc}", stacklevel=2)
+            continue
+        if not isinstance(payload, Mapping):
+            warnings.warn(f"Scenario file {path} must contain an object.", stacklevel=2)
+            continue
+        name = str(payload.get("name") or path.stem).strip()
+        if not name:
+            warnings.warn(f"Scenario file {path} missing a name.", stacklevel=2)
+            continue
+        scenario_payload = {}
+        for key in ("inflation", "interest"):
+            if key in payload:
+                scenario_payload[key] = payload[key]
+        if not scenario_payload:
+            warnings.warn(f"Scenario file {path} has no supported fields.", stacklevel=2)
+            continue
+        scenarios[name] = scenario_payload
+
+
+def _schema_path() -> Path:
+    return Path(__file__).resolve().parent / "data" / "inputs_schema.json"
+
+
+def _validate_schema(
+    data: object,
+    schema: Mapping[str, object],
+    path: str = "",
+) -> List[str]:
+    errors: List[str] = []
+    expected_type = schema.get("type")
+    if expected_type:
+        type_map = {
+            "object": Mapping,
+            "array": list,
+            "string": str,
+            "number": (int, float),
+            "integer": int,
+            "boolean": bool,
+        }
+        expected = type_map.get(expected_type)
+        if expected and not isinstance(data, expected):
+            errors.append(f"{path or 'root'} should be {expected_type}.")
+            return errors
+
+    if expected_type == "object":
+        data_map = data if isinstance(data, Mapping) else {}
+        required = schema.get("required", []) if isinstance(schema.get("required", []), list) else []
+        for key in required:
+            if key not in data_map:
+                errors.append(f"{path or 'root'} missing required field '{key}'.")
+        properties = schema.get("properties", {}) if isinstance(schema.get("properties", {}), Mapping) else {}
+        for key, subschema in properties.items():
+            if key in data_map and isinstance(subschema, Mapping):
+                subpath = f"{path}.{key}" if path else key
+                errors.extend(_validate_schema(data_map[key], subschema, subpath))
+
+    if expected_type == "array":
+        if isinstance(data, list):
+            min_items = schema.get("minItems")
+            max_items = schema.get("maxItems")
+            if isinstance(min_items, int) and len(data) < min_items:
+                errors.append(f"{path or 'root'} should have at least {min_items} items.")
+            if isinstance(max_items, int) and len(data) > max_items:
+                errors.append(f"{path or 'root'} should have at most {max_items} items.")
+            items_schema = schema.get("items")
+            if isinstance(items_schema, Mapping):
+                for idx, item in enumerate(data):
+                    subpath = f"{path}[{idx}]"
+                    errors.extend(_validate_schema(item, items_schema, subpath))
+
+    if expected_type in {"number", "integer"} and isinstance(data, (int, float)):
+        minimum = schema.get("minimum")
+        maximum = schema.get("maximum")
+        if isinstance(minimum, (int, float)) and data < minimum:
+            errors.append(f"{path or 'root'} should be >= {minimum}.")
+        if isinstance(maximum, (int, float)) and data > maximum:
+            errors.append(f"{path or 'root'} should be <= {maximum}.")
+
+    return errors
+
+
+def validate_inputs(raw: Mapping[str, object]) -> Tuple[List[str], List[str]]:
+    errors: List[str] = []
+    warnings_list: List[str] = []
+    schema = {}
+    try:
+        with _schema_path().open("r", encoding="utf-8") as handle:
+            schema = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        errors.append(f"Unable to load inputs schema: {exc}")
+        return errors, warnings_list
+
+    if isinstance(schema, Mapping):
+        errors.extend(_validate_schema(raw, schema))
+
+    years = raw.get("years", [])
+    if not isinstance(years, list):
+        years = []
+    year_count = len(years)
+
+    def _warn_length(name: str, values: object) -> None:
+        if isinstance(values, list) and year_count and len(values) != year_count:
+            warnings_list.append(
+                f"{name} length ({len(values)}) does not match years ({year_count})."
+            )
+
+    _warn_length("inflation_series", raw.get("inflation_series"))
+
+    inflation_series = raw.get("inflation_series", [])
+    if isinstance(inflation_series, list):
+        for idx, value in enumerate(inflation_series):
+            try:
+                rate = float(value)
+            except (TypeError, ValueError):
+                continue
+            if rate < -0.1 or rate > 0.5:
+                warnings_list.append(
+                    f"inflation_series[{idx}]={rate} is outside the expected range (-0.10 to 0.50)."
+                )
+
+    risk = raw.get("risk", {})
+    if isinstance(risk, Mapping):
+        for name, series in risk.items():
+            _warn_length(f"risk.{name}", series)
+            if isinstance(series, list):
+                for idx, value in enumerate(series):
+                    try:
+                        factor = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if factor < 0 or factor > 1:
+                        warnings_list.append(
+                            f"risk.{name}[{idx}]={factor} is outside the expected range (0 to 1)."
+                        )
+
+    tax = raw.get("tax", {})
+    if isinstance(tax, Mapping):
+        schedule = tax.get("schedule")
+        _warn_length("tax.schedule", schedule)
+        rate = tax.get("rate")
+        if isinstance(rate, (int, float)) and (rate < 0 or rate > 1):
+            warnings_list.append(
+                f"tax.rate={rate} is outside the expected range (0 to 1)."
+            )
+
+    working_capital = raw.get("working_capital", {})
+    if isinstance(working_capital, Mapping):
+        for key, series in working_capital.items():
+            if not isinstance(series, list):
+                continue
+            for idx, value in enumerate(series):
+                try:
+                    days = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if days < 0:
+                    warnings_list.append(
+                        f"working_capital.{key}[{idx}]={days} should not be negative."
+                    )
+
+    capex = raw.get("capital_expenditure", {})
+    if isinstance(capex, Mapping):
+        for key, value in capex.items():
+            if key == "annual_additions":
+                additions = value if isinstance(value, Mapping) else {}
+                for year, addition in additions.items():
+                    try:
+                        addition_value = float(addition)
+                    except (TypeError, ValueError):
+                        continue
+                    if addition_value < 0:
+                        warnings_list.append(
+                            f"capital_expenditure.annual_additions[{year}]={addition_value} should be non-negative."
+                        )
+                continue
+            try:
+                amount = float(value)
+            except (TypeError, ValueError):
+                continue
+            if amount < 0:
+                warnings_list.append(
+                    f"capital_expenditure.{key}={amount} should be non-negative."
+                )
+
+    scenarios = raw.get("scenarios", {})
+    if isinstance(scenarios, Mapping):
+        for name, scenario in scenarios.items():
+            if not isinstance(scenario, Mapping):
+                continue
+            _warn_length(f"scenarios.{name}.inflation", scenario.get("inflation"))
+            _warn_length(f"scenarios.{name}.interest", scenario.get("interest"))
+
+    return errors, warnings_list
 
 
 __all__ = [
@@ -1006,4 +1265,7 @@ __all__ = [
     "AIParameters",
     "parse_inputs",
     "load_inputs",
+    "load_raw_inputs",
+    "apply_scenario_files",
+    "validate_inputs",
 ]

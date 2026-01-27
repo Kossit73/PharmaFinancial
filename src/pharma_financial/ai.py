@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, List, Mapping, Optional, Sequence
 
@@ -25,6 +26,9 @@ class MachineLearningAdvisor:
     def __init__(self, parameters: AIParameters):
         self.parameters = parameters
         self.diagnostics: dict[str, Mapping[str, float]] = {}
+        self.backtest_diagnostics: dict[str, Mapping[str, float]] = {}
+        self.explainability: dict[str, Mapping[str, float]] = {}
+        self.audit_log: dict[str, Any] = {}
 
     def revenue_forecast(self, years: Sequence[int], revenues: Sequence[float]) -> Optional[Table]:
         horizon = max(int(self.parameters.forecast_horizon or 0), 0)
@@ -36,7 +40,6 @@ class MachineLearningAdvisor:
         if not base_years or not revenue_values:
             return None
 
-        self.diagnostics = {}
         methods = [
             method.strip().lower()
             for method in self.parameters.ml_methods
@@ -44,6 +47,15 @@ class MachineLearningAdvisor:
         ]
         if not methods:
             methods = ["linear_regression"]
+        self.diagnostics = {}
+        self.backtest_diagnostics = {}
+        self.explainability = {}
+        self.audit_log = {
+            "forecast_horizon": horizon,
+            "methods": methods,
+            "history_points": len(revenue_values),
+            "years": list(base_years),
+        }
 
         horizon_years = [base_years[-1] + step for step in range(1, horizon + 1)]
         full_years = base_years + horizon_years
@@ -60,6 +72,11 @@ class MachineLearningAdvisor:
                 self.diagnostics[label] = diagnostics
             else:
                 self.diagnostics[label] = {}
+            backtest = self._rolling_backtest(method, base_years, revenue_values)
+            self.backtest_diagnostics[label] = backtest
+            explanation = self._explain_method(method, base_years, revenue_values)
+            if explanation:
+                self.explainability[label] = explanation
 
         return build_table(full_years, columns)
 
@@ -208,6 +225,64 @@ class MachineLearningAdvisor:
         intercept = mean_y - slope * mean_x
         return slope, intercept
 
+    def _rolling_backtest(
+        self,
+        method: str,
+        years: Sequence[int],
+        values: Sequence[float],
+        min_train: int = 3,
+    ) -> Mapping[str, float]:
+        if len(values) <= min_train:
+            return {}
+        predictions: List[float] = []
+        actuals: List[float] = []
+        for idx in range(min_train, len(values)):
+            train_years = years[:idx]
+            train_values = values[:idx]
+            forecast, _ = self._fit_and_forecast(method, train_years, train_values, horizon=1)
+            if not forecast:
+                continue
+            predictions.append(float(forecast[0]))
+            actuals.append(float(values[idx]))
+        return self._error_metrics(actuals, predictions)
+
+    def _explain_method(
+        self,
+        method: str,
+        years: Sequence[int],
+        values: Sequence[float],
+    ) -> Mapping[str, float]:
+        method = method.lower()
+        if method == "cagr":
+            if not values:
+                return {}
+            start = float(values[0])
+            end = float(values[-1])
+            periods = max(len(values) - 1, 1)
+            growth = 0.0
+            if start > 0 and end > 0:
+                growth = end / start
+                growth = growth ** (1 / periods) - 1
+            return {"cagr": growth}
+        if method in {"moving_average", "rolling_mean"}:
+            return {"window": 3.0}
+        if method in {"seasonal", "seasonal_trend", "seasonality"}:
+            period = max(int(self.parameters.seasonality_period or 0), 0)
+            indices = list(range(len(values)))
+            slope, intercept = self._trend_coefficients(indices, values)
+            return {"trend_slope": slope, "trend_intercept": intercept, "seasonality_period": float(period)}
+        if not years:
+            return {}
+        n = len(years)
+        mean_x = sum(years) / n
+        mean_y = sum(values) / n if values else 0.0
+        denominator = sum((x - mean_x) ** 2 for x in years) + max(self.parameters.regularization, 0.0)
+        slope = 0.0 if abs(denominator) < 1e-12 else sum(
+            (x - mean_x) * (y - mean_y) for x, y in zip(years, values)
+        ) / denominator
+        intercept = mean_y - slope * mean_x
+        return {"slope": slope, "intercept": intercept}
+
     def _clamp_forecasts(
         self, forecasts: Sequence[float], history: Sequence[float]
     ) -> List[float]:
@@ -295,10 +370,14 @@ class GenerativeAdvisor:
             )
 
         prompt = self._build_prompt(summary, income, cash_flow, ml_table)
+        self.metadata["prompt"] = prompt
         response = self._invoke_model(prompt)
         if response:
-            self.metadata["status"] = "model_response"
-            return response
+            filtered = self._filter_response(prompt, response)
+            if filtered is not None:
+                self.metadata["status"] = "model_response"
+                self.metadata["response"] = filtered
+                return filtered
 
         self.metadata.setdefault("status", "fallback")
         return self._fallback(summary, income, cash_flow, ml_table)
@@ -410,6 +489,39 @@ class GenerativeAdvisor:
                 "falling back to heuristic summary."
             )
         return None
+
+    def _filter_response(self, prompt: str, response: str) -> Optional[str]:
+        allowed_numbers = self._extract_numbers(prompt)
+        response_numbers = self._extract_numbers(response)
+        if not response_numbers:
+            self.metadata["numeric_fidelity"] = "no_numbers"
+            return response
+        for number in response_numbers:
+            if not self._number_in_set(number, allowed_numbers):
+                self.metadata["numeric_fidelity"] = "failed"
+                self.metadata["numeric_fidelity_details"] = {
+                    "unexpected_number": number,
+                    "allowed_samples": allowed_numbers[:10],
+                }
+                return None
+        self.metadata["numeric_fidelity"] = "passed"
+        return response
+
+    def _extract_numbers(self, text: str) -> List[float]:
+        matches = re.findall(r"[-+]?(?:\\d+\\.?\\d*|\\d*\\.\\d+)", text)
+        numbers: List[float] = []
+        for match in matches:
+            try:
+                numbers.append(float(match))
+            except ValueError:
+                continue
+        return numbers
+
+    def _number_in_set(self, value: float, allowed: Sequence[float]) -> bool:
+        for candidate in allowed:
+            if math.isclose(value, candidate, rel_tol=0.02, abs_tol=1.0):
+                return True
+        return False
 
     def _fallback(
         self,

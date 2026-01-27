@@ -64,6 +64,10 @@ try:  # pragma: no cover - optional dependency for charting
     import plotly.express as px
 except Exception:  # pragma: no cover - gracefully degrade when Plotly missing
     px = None  # type: ignore
+try:  # pragma: no cover - optional dependency for charting
+    import plotly.graph_objects as go
+except Exception:  # pragma: no cover - gracefully degrade when Plotly missing
+    go = None  # type: ignore
 
 try:  # pragma: no cover - optional dependency for Excel ingestion
     from openpyxl import load_workbook
@@ -1984,6 +1988,53 @@ def _render_scenarios(outputs: FinancialOutputs) -> None:
                             y="Value",
                             title=f"{name} Scenario Comparison",
                         )
+                    st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("### Scenario Comparisons")
+        base_name = "base" if "base" in outputs.scenario_results else next(iter(outputs.scenario_results))
+        base_table = outputs.scenario_results[base_name]
+        comparison_rows: list[dict] = []
+        metrics = ["Net Revenue", "EBITDA", "Net Income"]
+        for metric in metrics:
+            if metric not in base_table.data:
+                continue
+            base_value = base_table.column(metric)[-1]
+            for name, table in outputs.scenario_results.items():
+                if metric not in table.data:
+                    continue
+                scenario_value = table.column(metric)[-1]
+                comparison_rows.append(
+                    {
+                        "Scenario": name,
+                        "Metric": metric,
+                        "Base": base_value,
+                        "Scenario Value": scenario_value,
+                        "Delta": scenario_value - base_value,
+                    }
+                )
+
+        if comparison_rows:
+            st.dataframe(_ensure_dataframe(comparison_rows), use_container_width=True)
+
+            if go is not None:
+                for name, table in outputs.scenario_results.items():
+                    if name == base_name or "Net Income" not in table.data:
+                        continue
+                    base_value = base_table.column("Net Income")[-1]
+                    scenario_value = table.column("Net Income")[-1]
+                    delta = scenario_value - base_value
+                    fig = go.Figure(
+                        go.Waterfall(
+                            name="Net Income",
+                            orientation="v",
+                            measure=["absolute", "relative", "total"],
+                            x=["Base", f"{name} Delta", name],
+                            y=[base_value, delta, scenario_value],
+                            text=[f"{base_value:,.2f}", f"{delta:,.2f}", f"{scenario_value:,.2f}"],
+                            connector={"line": {"color": "rgb(63, 63, 63)"}},
+                        )
+                    )
+                    fig.update_layout(title=f"Net Income Waterfall: {base_name} to {name}")
                     st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("### Scenario Tool Insights")
@@ -5777,6 +5828,11 @@ def _render_monte_carlo_inputs(payload: dict) -> None:
         step=10,
         key="monte_iterations",
     )
+    seed_text = st.text_input(
+        "Random seed (optional)",
+        value="" if monte.get("seed") is None else str(monte.get("seed")),
+        key="monte_seed",
+    )
     growth_range = list(monte.get("revenue_growth_range", [0.05, 0.15]))
     if len(growth_range) < 2:
         growth_range = [0.0, 0.0]
@@ -5814,6 +5870,7 @@ def _render_monte_carlo_inputs(payload: dict) -> None:
     monte["iterations"] = int(iterations)
     monte["revenue_growth_range"] = [float(min_growth), float(max_growth)]
     monte["metrics"] = metrics
+    monte["seed"] = int(seed_text) if seed_text.strip().lstrip("-").isdigit() else None
 
     variable_options = [
         ("revenue_growth", "Revenue Growth"),
@@ -5841,6 +5898,180 @@ def _render_monte_carlo_inputs(payload: dict) -> None:
     if "revenue_growth" not in selected_codes:
         selected_codes.insert(0, "revenue_growth")
     monte["variables"] = selected_codes
+
+    default_distribution = monte.get("distribution", "uniform")
+    distribution_options = ["uniform", "normal", "triangular", "lognormal"]
+    monte["distribution"] = st.selectbox(
+        "Default distribution",
+        options=distribution_options,
+        index=distribution_options.index(default_distribution)
+        if default_distribution in distribution_options
+        else 0,
+        key="monte_default_distribution",
+    )
+
+    distributions = dict(monte.get("distributions", {}) or {})
+    with st.expander("Per-variable distributions", expanded=False):
+        for code in selected_codes:
+            label = variable_map.get(code, code)
+            current = distributions.get(code, {})
+            dist_key = f"monte_dist_{code}"
+            dist_type = st.selectbox(
+                f"{label} distribution",
+                options=distribution_options,
+                index=distribution_options.index(current.get("type", monte["distribution"]))
+                if current.get("type", monte["distribution"]) in distribution_options
+                else 0,
+                key=dist_key,
+            )
+            if code == "revenue_growth":
+                default_low, default_high = min_growth, max_growth
+            else:
+                default_low, default_high = -0.05, 0.05
+
+            if dist_type == "normal":
+                mean = st.number_input(
+                    f"{label} mean",
+                    value=float(current.get("mean", (default_low + default_high) / 2)),
+                    key=f"{dist_key}_mean",
+                )
+                std = st.number_input(
+                    f"{label} std dev",
+                    value=float(current.get("std", (default_high - default_low) / 6 if default_high != default_low else 0.01)),
+                    key=f"{dist_key}_std",
+                )
+                min_value = st.number_input(
+                    f"{label} min clamp",
+                    value=float(current.get("min", default_low)),
+                    key=f"{dist_key}_min",
+                )
+                max_value = st.number_input(
+                    f"{label} max clamp",
+                    value=float(current.get("max", default_high)),
+                    key=f"{dist_key}_max",
+                )
+                distributions[code] = {
+                    "type": dist_type,
+                    "mean": mean,
+                    "std": std,
+                    "min": min_value,
+                    "max": max_value,
+                }
+            elif dist_type in {"triangular", "triangle"}:
+                low = st.number_input(
+                    f"{label} low",
+                    value=float(current.get("low", default_low)),
+                    key=f"{dist_key}_low",
+                )
+                mode = st.number_input(
+                    f"{label} mode",
+                    value=float(current.get("mode", (default_low + default_high) / 2)),
+                    key=f"{dist_key}_mode",
+                )
+                high = st.number_input(
+                    f"{label} high",
+                    value=float(current.get("high", default_high)),
+                    key=f"{dist_key}_high",
+                )
+                distributions[code] = {
+                    "type": "triangular",
+                    "low": low,
+                    "mode": mode,
+                    "high": high,
+                }
+            elif dist_type == "lognormal":
+                mu = st.number_input(
+                    f"{label} mu",
+                    value=float(current.get("mu", 0.0)),
+                    key=f"{dist_key}_mu",
+                )
+                sigma = st.number_input(
+                    f"{label} sigma",
+                    value=float(current.get("sigma", 0.25)),
+                    key=f"{dist_key}_sigma",
+                )
+                offset = st.number_input(
+                    f"{label} offset",
+                    value=float(current.get("offset", 1.0)),
+                    key=f"{dist_key}_offset",
+                )
+                min_value = st.number_input(
+                    f"{label} min clamp",
+                    value=float(current.get("min", default_low)),
+                    key=f"{dist_key}_min",
+                )
+                max_value = st.number_input(
+                    f"{label} max clamp",
+                    value=float(current.get("max", default_high)),
+                    key=f"{dist_key}_max",
+                )
+                distributions[code] = {
+                    "type": dist_type,
+                    "mu": mu,
+                    "sigma": sigma,
+                    "offset": offset,
+                    "min": min_value,
+                    "max": max_value,
+                }
+            else:
+                low = st.number_input(
+                    f"{label} low",
+                    value=float(current.get("low", default_low)),
+                    key=f"{dist_key}_low",
+                )
+                high = st.number_input(
+                    f"{label} high",
+                    value=float(current.get("high", default_high)),
+                    key=f"{dist_key}_high",
+                )
+                distributions[code] = {
+                    "type": "uniform",
+                    "low": low,
+                    "high": high,
+                }
+    monte["distributions"] = distributions
+
+    correlation_payload = json.dumps(monte.get("correlations", {}), indent=2)
+    correlation_text = st.text_area(
+        "Correlation matrix (JSON)",
+        value=correlation_payload,
+        height=140,
+        key="monte_correlations",
+    )
+    try:
+        parsed_correlations = json.loads(correlation_text) if correlation_text.strip() else {}
+    except json.JSONDecodeError:
+        st.warning("Correlations must be valid JSON. Keeping previous values.")
+    else:
+        if isinstance(parsed_correlations, dict):
+            monte["correlations"] = parsed_correlations
+
+    scenario_names = list((payload.get("scenarios") or {}).keys())
+    scenario_weight_defaults = dict(monte.get("scenario_weights", {}) or {})
+    with st.expander("Scenario-weighted Monte Carlo", expanded=False):
+        st.caption("Assign weights to deterministic scenario baselines for weighted sampling.")
+        seen_names = set()
+        for name in ["base", *scenario_names]:
+            if name in seen_names:
+                continue
+            seen_names.add(name)
+            weight_value = float(scenario_weight_defaults.get(name, 0.0 if name != "base" else 1.0))
+            scenario_weight_defaults[name] = st.number_input(
+                f"{name} weight",
+                min_value=0.0,
+                value=weight_value,
+                key=f"monte_scenario_weight_{name}",
+            )
+        deterministic_share = st.slider(
+            "Deterministic share",
+            min_value=0.0,
+            max_value=1.0,
+            value=float(monte.get("deterministic_share", 0.0)),
+            step=0.05,
+            key="monte_deterministic_share",
+        )
+    monte["scenario_weights"] = scenario_weight_defaults
+    monte["deterministic_share"] = deterministic_share
 
 
 def _extract_metric_pairs(summary) -> Sequence[Tuple[str, float]]:

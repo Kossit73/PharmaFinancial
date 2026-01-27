@@ -2,9 +2,16 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
-from .inputs import load_inputs
+from .inputs import (
+    apply_scenario_files,
+    load_inputs,
+    load_raw_inputs,
+    parse_inputs,
+    validate_inputs,
+)
 from .model import FinancialModel
 
 
@@ -43,6 +50,40 @@ def run_model(input_path: Path | None = None, output: Path | None = None) -> Non
     _write_table("monte_carlo", results.monte_carlo)
 
 
+def run_scenario_batch(
+    input_path: Path | None,
+    scenario_dir: Path,
+    output: Path | None = None,
+) -> None:
+    raw_inputs = load_raw_inputs(input_path)
+    scenario_files = sorted(scenario_dir.glob("*.json"))
+    raw_inputs["scenario_files"] = [str(path) for path in scenario_files]
+    apply_scenario_files(raw_inputs, scenario_dir)
+    errors, warnings_list = validate_inputs(raw_inputs)
+    for warning_message in warnings_list:
+        print(f"Warning: {warning_message}")
+    if errors:
+        for error in errors:
+            print(f"Error: {error}")
+        raise SystemExit(1)
+
+    inputs = parse_inputs(raw_inputs)
+    model = FinancialModel(inputs)
+    scenarios = model.scenario_analysis()
+
+    output = output or Path.cwd()
+    output.mkdir(parents=True, exist_ok=True)
+    scenario_output = output / "scenarios"
+    scenario_output.mkdir(parents=True, exist_ok=True)
+
+    for name, table in scenarios.items():
+        path = scenario_output / f"{name}.csv"
+        try:
+            table.to_frame().to_csv(path)  # type: ignore[attr-defined]
+        except Exception:
+            table.to_csv(path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the Pharmaceuticals financial model")
     parser.add_argument("--inputs", type=Path, default=None, help="Path to an inputs JSON file")
@@ -52,7 +93,42 @@ def main() -> None:
         default=Path("outputs"),
         help="Directory to store generated CSV schedules",
     )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Validate input assumptions and exit without running the model",
+    )
+    parser.add_argument(
+        "--scenario-dir",
+        type=Path,
+        default=None,
+        help="Directory containing scenario JSON definitions for batch runs",
+    )
+    parser.add_argument(
+        "--batch-scenarios",
+        action="store_true",
+        help="Run scenario analysis for all files in --scenario-dir and write CSV outputs",
+    )
     args = parser.parse_args()
+    if args.validate:
+        raw_inputs = load_raw_inputs(args.inputs)
+        errors, warnings_list = validate_inputs(raw_inputs)
+        for warning_message in warnings_list:
+            print(f"Warning: {warning_message}")
+        if errors:
+            for error in errors:
+                print(f"Error: {error}")
+            sys.exit(1)
+        print("Inputs validation succeeded.")
+        sys.exit(0)
+
+    if args.batch_scenarios:
+        if args.scenario_dir is None:
+            print("Error: --scenario-dir is required with --batch-scenarios.")
+            sys.exit(1)
+        run_scenario_batch(args.inputs, args.scenario_dir, args.output)
+        sys.exit(0)
+
     run_model(args.inputs, args.output)
 
 
