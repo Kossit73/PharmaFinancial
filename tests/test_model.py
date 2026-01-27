@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from pharma_financial.inputs import load_inputs, parse_inputs
+from pharma_financial.inputs import apply_scenario_files, load_inputs, parse_inputs
 from pharma_financial.model import (
     CASH_FLOW_BEGIN_COLUMN,
     CASH_FLOW_END_COLUMN,
@@ -301,6 +301,16 @@ class FinancialModelTest(unittest.TestCase):
             self.assertEqual(len(series), horizon)
         self.assertEqual(len(parsed.inflation_series), horizon)
         self.assertEqual(len(parsed.utility_schedule.electricity_per_day), horizon)
+
+    def test_scenario_files_are_loaded(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+        )
+        payload["scenarios"] = {}
+        apply_scenario_files(payload, Path("src/pharma_financial/data"))
+        self.assertIn("base", payload["scenarios"])
+        self.assertIn("best", payload["scenarios"])
+        self.assertIn("worst", payload["scenarios"])
 
     def test_income_statement_relationships(self):
         income = self.outputs.income_statement

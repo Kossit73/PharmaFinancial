@@ -704,6 +704,11 @@
       ]
     }
   },
+  "scenario_files": [
+    "scenarios/base.json",
+    "scenarios/best.json",
+    "scenarios/worst.json"
+  ],
   "sensitivity": {
     "variables": {
       "tablet_price": [

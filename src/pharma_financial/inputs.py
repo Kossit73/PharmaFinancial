@@ -1011,6 +1011,8 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
 def load_inputs(path: Optional[Path] = None) -> ModelInputs:
     """Load model assumptions from JSON."""
     raw = load_raw_inputs(path)
+    base_dir = Path(path).resolve().parent if path is not None else Path(__file__).resolve().parent / "data"
+    apply_scenario_files(raw, base_dir)
     errors, warning_messages = validate_inputs(raw)
     if errors:
         message = "Input validation failed:\n" + "\n".join(f"- {item}" for item in errors)
@@ -1030,6 +1032,45 @@ def load_raw_inputs(path: Optional[Path] = None) -> Dict[str, object]:
     if not isinstance(raw, Mapping):
         raise ValueError("Inputs JSON must be an object at the top level.")
     return dict(raw)
+
+
+def apply_scenario_files(raw: Mapping[str, object], base_dir: Path) -> None:
+    scenario_files = raw.get("scenario_files", [])
+    if not isinstance(scenario_files, list):
+        return
+    scenarios = raw.get("scenarios")
+    if not isinstance(scenarios, Mapping):
+        scenarios = {}
+        raw["scenarios"] = scenarios
+    for entry in scenario_files:
+        if not isinstance(entry, str) or not entry.strip():
+            continue
+        path = Path(entry)
+        if not path.is_absolute():
+            path = base_dir / path
+        if not path.exists():
+            warnings.warn(f"Scenario file not found: {path}", stacklevel=2)
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            warnings.warn(f"Scenario file {path} is invalid JSON: {exc}", stacklevel=2)
+            continue
+        if not isinstance(payload, Mapping):
+            warnings.warn(f"Scenario file {path} must contain an object.", stacklevel=2)
+            continue
+        name = str(payload.get("name") or path.stem).strip()
+        if not name:
+            warnings.warn(f"Scenario file {path} missing a name.", stacklevel=2)
+            continue
+        scenario_payload = {}
+        for key in ("inflation", "interest"):
+            if key in payload:
+                scenario_payload[key] = payload[key]
+        if not scenario_payload:
+            warnings.warn(f"Scenario file {path} has no supported fields.", stacklevel=2)
+            continue
+        scenarios[name] = scenario_payload
 
 
 def _schema_path() -> Path:
@@ -1225,5 +1266,6 @@ __all__ = [
     "parse_inputs",
     "load_inputs",
     "load_raw_inputs",
+    "apply_scenario_files",
     "validate_inputs",
 ]

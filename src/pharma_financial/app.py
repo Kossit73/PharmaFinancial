@@ -64,6 +64,10 @@ try:  # pragma: no cover - optional dependency for charting
     import plotly.express as px
 except Exception:  # pragma: no cover - gracefully degrade when Plotly missing
     px = None  # type: ignore
+try:  # pragma: no cover - optional dependency for charting
+    import plotly.graph_objects as go
+except Exception:  # pragma: no cover - gracefully degrade when Plotly missing
+    go = None  # type: ignore
 
 try:  # pragma: no cover - optional dependency for Excel ingestion
     from openpyxl import load_workbook
@@ -1984,6 +1988,53 @@ def _render_scenarios(outputs: FinancialOutputs) -> None:
                             y="Value",
                             title=f"{name} Scenario Comparison",
                         )
+                    st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("### Scenario Comparisons")
+        base_name = "base" if "base" in outputs.scenario_results else next(iter(outputs.scenario_results))
+        base_table = outputs.scenario_results[base_name]
+        comparison_rows: list[dict] = []
+        metrics = ["Net Revenue", "EBITDA", "Net Income"]
+        for metric in metrics:
+            if metric not in base_table.data:
+                continue
+            base_value = base_table.column(metric)[-1]
+            for name, table in outputs.scenario_results.items():
+                if metric not in table.data:
+                    continue
+                scenario_value = table.column(metric)[-1]
+                comparison_rows.append(
+                    {
+                        "Scenario": name,
+                        "Metric": metric,
+                        "Base": base_value,
+                        "Scenario Value": scenario_value,
+                        "Delta": scenario_value - base_value,
+                    }
+                )
+
+        if comparison_rows:
+            st.dataframe(_ensure_dataframe(comparison_rows), use_container_width=True)
+
+            if go is not None:
+                for name, table in outputs.scenario_results.items():
+                    if name == base_name or "Net Income" not in table.data:
+                        continue
+                    base_value = base_table.column("Net Income")[-1]
+                    scenario_value = table.column("Net Income")[-1]
+                    delta = scenario_value - base_value
+                    fig = go.Figure(
+                        go.Waterfall(
+                            name="Net Income",
+                            orientation="v",
+                            measure=["absolute", "relative", "total"],
+                            x=["Base", f"{name} Delta", name],
+                            y=[base_value, delta, scenario_value],
+                            text=[f"{base_value:,.2f}", f"{delta:,.2f}", f"{scenario_value:,.2f}"],
+                            connector={"line": {"color": "rgb(63, 63, 63)"}},
+                        )
+                    )
+                    fig.update_layout(title=f"Net Income Waterfall: {base_name} to {name}")
                     st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("### Scenario Tool Insights")

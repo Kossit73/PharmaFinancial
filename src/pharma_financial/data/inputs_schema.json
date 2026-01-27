@@ -37,6 +37,10 @@
     "risk": { "type": "object" },
     "risk_weights": { "type": "object" },
     "scenarios": { "type": "object" },
+    "scenario_files": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
     "sensitivity": { "type": "object" },
     "monte_carlo": {
       "type": "object",
