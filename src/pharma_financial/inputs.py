@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 import json
 
 
@@ -152,7 +152,10 @@ class MonteCarloParameters:
     variables: List[str] = field(default_factory=lambda: ["revenue_growth"])
     seed: Optional[int] = None
     distribution: str = "uniform"
+    distributions: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     correlations: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
+    scenario_weights: Mapping[str, float] = field(default_factory=dict)
+    deterministic_share: float = 0.0
 
 
 @dataclass
@@ -802,6 +805,27 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
     except (TypeError, ValueError):
         seed = None
     distribution = str(monte_source.get("distribution", "uniform")).strip().lower() if isinstance(monte_source, Mapping) else "uniform"
+    distributions = monte_source.get("distributions", {}) if isinstance(monte_source, Mapping) else {}
+    if not isinstance(distributions, Mapping):
+        distributions = {}
+    scenario_weights = monte_source.get("scenario_weights", {}) if isinstance(monte_source, Mapping) else {}
+    if not isinstance(scenario_weights, Mapping):
+        scenario_weights = {}
+    deterministic_share_raw = monte_source.get("deterministic_share", 0.0) if isinstance(monte_source, Mapping) else 0.0
+    try:
+        deterministic_share = float(deterministic_share_raw)
+    except (TypeError, ValueError):
+        deterministic_share = 0.0
+    deterministic_share = min(max(deterministic_share, 0.0), 1.0)
+
+    cleaned_weights: Dict[str, float] = {}
+    for name, weight in scenario_weights.items():
+        if not str(name):
+            continue
+        try:
+            cleaned_weights[str(name)] = float(weight)
+        except (TypeError, ValueError):
+            continue
 
     monte_carlo = MonteCarloParameters(
         iterations=int(monte_source["iterations"]),
@@ -814,7 +838,10 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         ],
         seed=seed,
         distribution=distribution or "uniform",
+        distributions=distributions,
         correlations=monte_source.get("correlations", {}) if isinstance(monte_source, Mapping) else {},
+        scenario_weights=cleaned_weights,
+        deterministic_share=deterministic_share,
     )
 
     tax_data = raw["tax"]

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import math
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
@@ -1620,51 +1621,143 @@ class FinancialModel:
         iterations = params.iterations
         bounds = [float(value) for value in params.revenue_growth_range]
         if len(bounds) >= 2:
-            low, high = sorted((bounds[0], bounds[1]))
+            default_low, default_high = sorted((bounds[0], bounds[1]))
         elif bounds:
             span = abs(bounds[0])
-            low, high = -span, span
+            default_low, default_high = -span, span
         else:
-            low, high = -0.05, 0.05
+            default_low, default_high = -0.05, 0.05
 
-        revenue_table = self.revenue_schedule()
-        base_revenue = np.array(revenue_table.column("Net Revenue"), dtype=float)
-        costs = self.cost_structure()
-        raw_materials = np.array(costs.column("Raw Materials"), dtype=float)
-        utilities = np.array(costs.column("Utilities"), dtype=float)
-        direct_labor = np.array(costs.column("Direct Labor"), dtype=float)
-        indirect_labor = np.array(costs.column("General & Admin"), dtype=float)
-        depreciation = np.array(self.depreciation_schedule(), dtype=float)
-        interest = np.array(self._interest_schedule(), dtype=float)
-        tax_schedule = np.array(self._tax_schedule(), dtype=float)
-        discount_rate = self.inputs.financing.discount_rate
-        capex = np.array(self._capex_series(), dtype=float)
-        financing_components = self._financing_cash_flow_components()
-        other_financing = {
-            name: list(series)
-            for name, series in financing_components.items()
-            if name != "Dividends Paid"
-        }
-        base_weighted = np.array(self._distributor_receivable_cache or [0.0 for _ in self.years], dtype=float)
-        base_distributor_share = np.array(self._distributor_share_cache or [0.0 for _ in self.years], dtype=float)
+        def _build_baseline(model: "FinancialModel") -> Dict[str, Any]:
+            revenue_table = model.revenue_schedule()
+            base_revenue = np.array(revenue_table.column("Net Revenue"), dtype=float)
+            costs = model.cost_structure()
+            raw_materials = np.array(costs.column("Raw Materials"), dtype=float)
+            utilities = np.array(costs.column("Utilities"), dtype=float)
+            direct_labor = np.array(costs.column("Direct Labor"), dtype=float)
+            indirect_labor = np.array(costs.column("General & Admin"), dtype=float)
+            depreciation = np.array(model.depreciation_schedule(), dtype=float)
+            interest = np.array(model._interest_schedule(), dtype=float)
+            tax_schedule = np.array(model._tax_schedule(), dtype=float)
+            discount_rate = model.inputs.financing.discount_rate
+            capex = np.array(model._capex_series(), dtype=float)
+            financing_components = model._financing_cash_flow_components()
+            other_financing = {
+                name: list(series)
+                for name, series in financing_components.items()
+                if name != "Dividends Paid"
+            }
+            base_weighted = np.array(model._distributor_receivable_cache or [0.0 for _ in model.years], dtype=float)
+            base_distributor_share = np.array(model._distributor_share_cache or [0.0 for _ in model.years], dtype=float)
+            return {
+                "base_revenue": base_revenue,
+                "raw_materials": raw_materials,
+                "utilities": utilities,
+                "direct_labor": direct_labor,
+                "indirect_labor": indirect_labor,
+                "depreciation": depreciation,
+                "interest": interest,
+                "tax_schedule": tax_schedule,
+                "discount_rate": discount_rate,
+                "capex": capex,
+                "other_financing": other_financing,
+                "base_weighted": base_weighted,
+                "base_distributor_share": base_distributor_share,
+            }
+
+        base_baseline = _build_baseline(self)
+        baselines = {"base": base_baseline}
+        scenario_weights = {name: weight for name, weight in (params.scenario_weights or {}).items() if weight > 0}
+        if scenario_weights:
+            for name, scenario in self.inputs.scenarios.items():
+                if name not in scenario_weights:
+                    continue
+                scenario_inputs = copy.deepcopy(self.inputs)
+                inflation_override = scenario.get("inflation", scenario_inputs.inflation_series)
+                scenario_inputs.inflation_series = [float(value) for value in inflation_override]
+                interest_values = scenario.get("interest", [scenario_inputs.financing.discount_rate])
+                try:
+                    scenario_inputs.financing.discount_rate = (
+                        float(interest_values[0]) if interest_values else scenario_inputs.financing.discount_rate
+                    )
+                except (TypeError, ValueError, IndexError):
+                    pass
+                scenario_model = FinancialModel(scenario_inputs)
+                baselines[name] = _build_baseline(scenario_model)
+            if "base" not in scenario_weights:
+                baselines.pop("base", None)
+        else:
+            scenario_weights = {"base": 1.0}
+
+        weighted_scenarios = [
+            (name, weight)
+            for name, weight in scenario_weights.items()
+            if weight > 0 and name in baselines
+        ]
+        if not weighted_scenarios:
+            weighted_scenarios = [("base", 1.0)]
+
+        total_weight = sum(weight for _, weight in weighted_scenarios)
+        cumulative_weights: List[tuple[str, float]] = []
+        running = 0.0
+        for name, weight in weighted_scenarios:
+            running += weight
+            cumulative_weights.append((name, running))
+
+        deterministic_share = params.deterministic_share
 
         import random
 
         rng = random.Random()
         if params.seed is not None:
             rng.seed(params.seed)
-        distribution = (params.distribution or "uniform").lower()
-        normal_std = (high - low) / 6 if high != low else max(abs(high), 1.0) / 6
+        fallback_distribution = (params.distribution or "uniform").lower()
+        distribution_overrides = params.distributions or {}
 
-        def _sample(shift: float = 0.0) -> float:
+        def _distribution_type(variable: str) -> str:
+            override = distribution_overrides.get(variable, {})
+            dist_name = override.get("type") or override.get("distribution")
+            return str(dist_name or fallback_distribution).strip().lower()
+
+        def _distribution_bounds(variable: str, override: Mapping[str, Any]) -> tuple[float, float]:
+            range_override = override.get("range") if isinstance(override, Mapping) else None
+            low = override.get("low")
+            high = override.get("high")
+            if low is None and high is None and isinstance(range_override, Iterable):
+                values = [float(value) for value in range_override]
+                if len(values) >= 2:
+                    low, high = values[0], values[1]
+            if low is None or high is None:
+                low, high = (default_low, default_high) if variable == "revenue_growth" else (-0.05, 0.05)
+            return float(low), float(high)
+
+        def _sample_value(
+            variable: str,
+            *,
+            shock: Optional[float] = None,
+        ) -> float:
+            override = distribution_overrides.get(variable, {})
+            distribution = _distribution_type(variable)
+            low, high = _distribution_bounds(variable, override)
+            min_value = override.get("min", low)
+            max_value = override.get("max", high)
             if distribution == "normal":
-                mean = (low + high) / 2
-                value = rng.gauss(mean + shift, normal_std)
-                return max(min(value, high), low)
-            if distribution in {"triangular", "triangle"}:
-                mode = (low + high) / 2
-                return rng.triangular(low, high, mode)
-            return rng.uniform(low, high)
+                mean = float(override.get("mean", (low + high) / 2))
+                std = float(override.get("std", (high - low) / 6 if high != low else max(abs(high), 1.0) / 6))
+                z = shock if shock is not None else rng.gauss(0.0, 1.0)
+                value = mean + std * z
+            elif distribution in {"lognormal", "log-normal", "log_normal"}:
+                mu = float(override.get("mu", 0.0))
+                sigma = float(override.get("sigma", 0.25))
+                z = shock if shock is not None else rng.gauss(0.0, 1.0)
+                offset = float(override.get("offset", 1.0))
+                value = math.exp(mu + sigma * z) - offset
+            elif distribution in {"triangular", "triangle"}:
+                mode = float(override.get("mode", (low + high) / 2))
+                value = rng.triangular(low, high, mode)
+            else:
+                value = rng.uniform(low, high)
+            return max(min(value, float(max_value)), float(min_value))
 
         def _build_cholesky(variable_order: List[str]) -> List[List[float]]:
             correlations = params.correlations or {}
@@ -1733,62 +1826,80 @@ class FinancialModel:
             variable_codes.insert(0, "revenue_growth")
 
         results: Dict[str, List[float]] = {metric: [] for metric in metrics_to_track}
-        use_correlated = distribution == "normal" and bool(params.correlations)
+        use_correlated = bool(params.correlations)
         correlation_variables = [
-            code for code in variable_codes if code in (params.correlations or {})
+            code
+            for code in variable_codes
+            if code in (params.correlations or {})
+            and _distribution_type(code) in {"normal", "lognormal", "log-normal", "log_normal"}
         ]
         if use_correlated and not correlation_variables:
             use_correlated = False
         cholesky = _build_cholesky(correlation_variables) if use_correlated else []
-        base_revenue_safe = np.where(np.abs(base_revenue) > 1e-9, base_revenue, 1.0)
-        capital_expenditure = (-capex).tolist()
 
         for _ in range(iterations):
+            scenario_roll = rng.random() * total_weight
+            scenario_name = weighted_scenarios[-1][0]
+            for name, cumulative in cumulative_weights:
+                if scenario_roll <= cumulative:
+                    scenario_name = name
+                    break
+            baseline = baselines.get(scenario_name, base_baseline)
+            base_revenue = baseline["base_revenue"]
+            raw_materials = baseline["raw_materials"]
+            utilities = baseline["utilities"]
+            direct_labor = baseline["direct_labor"]
+            indirect_labor = baseline["indirect_labor"]
+            depreciation = baseline["depreciation"]
+            interest = baseline["interest"]
+            tax_schedule = baseline["tax_schedule"]
+            discount_rate = baseline["discount_rate"]
+            capex = baseline["capex"]
+            other_financing = baseline["other_financing"]
+            base_weighted = baseline["base_weighted"]
+            base_distributor_share = baseline["base_distributor_share"]
+            base_revenue_safe = np.where(np.abs(base_revenue) > 1e-9, base_revenue, 1.0)
+            capital_expenditure = (-capex).tolist()
+
+            deterministic = rng.random() < deterministic_share
             shocks = (
                 _correlated_shocks(correlation_variables, cholesky)
                 if use_correlated
                 else {}
             )
             if "revenue_growth" in variable_codes:
-                revenue_shift = shocks.get("revenue_growth", 0.0) * normal_std if use_correlated else 0.0
-                growth_rates = np.array([_sample(revenue_shift) for _ in self.years], dtype=float)
+                if deterministic:
+                    growth_rates = np.zeros(len(self.years), dtype=float)
+                else:
+                    revenue_shock = shocks.get("revenue_growth")
+                    growth_rates = np.array(
+                        [_sample_value("revenue_growth", shock=revenue_shock) for _ in self.years],
+                        dtype=float,
+                    )
             else:
                 growth_rates = np.zeros(len(self.years), dtype=float)
 
-            raw_factor = 1.0 + (
-                _sample(shocks.get("raw_material_cost", 0.0) * normal_std)
-                if "raw_material_cost" in variable_codes
-                else 0.0
-            )
-            labor_factor = 1.0 + (
-                _sample(shocks.get("labor_cost", 0.0) * normal_std)
-                if "labor_cost" in variable_codes
-                else 0.0
-            )
-            utility_factor = 1.0 + (
-                _sample(shocks.get("utility_cost", 0.0) * normal_std)
-                if "utility_cost" in variable_codes
-                else 0.0
-            )
-            interest_factor = 1.0 + (
-                _sample(shocks.get("senior_debt", 0.0) * normal_std)
-                if "senior_debt" in variable_codes
-                else 0.0
-            )
-            tax_factor = 1.0 + (
-                _sample(shocks.get("tax_rate", 0.0) * normal_std)
-                if "tax_rate" in variable_codes
-                else 0.0
-            )
+            raw_factor = 1.0
+            if "raw_material_cost" in variable_codes and not deterministic:
+                raw_factor += _sample_value("raw_material_cost", shock=shocks.get("raw_material_cost"))
+            labor_factor = 1.0
+            if "labor_cost" in variable_codes and not deterministic:
+                labor_factor += _sample_value("labor_cost", shock=shocks.get("labor_cost"))
+            utility_factor = 1.0
+            if "utility_cost" in variable_codes and not deterministic:
+                utility_factor += _sample_value("utility_cost", shock=shocks.get("utility_cost"))
+            interest_factor = 1.0
+            if "senior_debt" in variable_codes and not deterministic:
+                interest_factor += _sample_value("senior_debt", shock=shocks.get("senior_debt"))
+            tax_factor = 1.0
+            if "tax_rate" in variable_codes and not deterministic:
+                tax_factor += _sample_value("tax_rate", shock=shocks.get("tax_rate"))
             if tax_factor < 0:
                 tax_factor = 0.0
 
             risk_adjustment = 1.0
-            if "other" in variable_codes:
-                risk_adjustment = max(
-                    0.0,
-                    1.0 - _sample(shocks.get("other", 0.0) * normal_std),
-                )
+            if "other" in variable_codes and not deterministic:
+                risk_adjustment = max(0.0, 1.0 - _sample_value("other", shock=shocks.get("other")))
             risk_series = (
                 np.full(len(self.years), risk_adjustment, dtype=float)
                 if "other" in variable_codes

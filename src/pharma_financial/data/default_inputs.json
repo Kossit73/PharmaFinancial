@@ -752,6 +752,30 @@
       0.05,
       0.15
     ],
+    "seed": 42,
+    "distribution": "uniform",
+    "distributions": {
+      "revenue_growth": {
+        "type": "normal",
+        "mean": 0.1,
+        "std": 0.02,
+        "min": 0.05,
+        "max": 0.15
+      },
+      "raw_material_cost": {
+        "type": "triangular",
+        "low": -0.03,
+        "mode": 0.0,
+        "high": 0.04
+      },
+      "labor_cost": {
+        "type": "normal",
+        "mean": 0.0,
+        "std": 0.02,
+        "min": -0.05,
+        "max": 0.05
+      }
+    },
     "metrics": [
       "NPV",
       "Average Net Income",
@@ -760,7 +784,18 @@
     "variables": [
       "revenue_growth"
     ],
-    "correlations": {}
+    "correlations": {
+      "revenue_growth": {
+        "raw_material_cost": -0.2,
+        "labor_cost": -0.1
+      }
+    },
+    "scenario_weights": {
+      "base": 0.7,
+      "best": 0.15,
+      "worst": 0.15
+    },
+    "deterministic_share": 0.1
   },
   "ai": {
     "enabled": true,
