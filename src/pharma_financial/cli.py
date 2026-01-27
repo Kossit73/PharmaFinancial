@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
-from .inputs import load_inputs
+from .inputs import load_inputs, load_raw_inputs, validate_inputs
 from .model import FinancialModel
 
 
@@ -52,7 +53,24 @@ def main() -> None:
         default=Path("outputs"),
         help="Directory to store generated CSV schedules",
     )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Validate input assumptions and exit without running the model",
+    )
     args = parser.parse_args()
+    if args.validate:
+        raw_inputs = load_raw_inputs(args.inputs)
+        errors, warnings_list = validate_inputs(raw_inputs)
+        for warning_message in warnings_list:
+            print(f"Warning: {warning_message}")
+        if errors:
+            for error in errors:
+                print(f"Error: {error}")
+            sys.exit(1)
+        print("Inputs validation succeeded.")
+        sys.exit(0)
+
     run_model(args.inputs, args.output)
 
 
