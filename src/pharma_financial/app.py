@@ -6050,7 +6050,11 @@ def _render_monte_carlo_inputs(payload: dict) -> None:
     scenario_weight_defaults = dict(monte.get("scenario_weights", {}) or {})
     with st.expander("Scenario-weighted Monte Carlo", expanded=False):
         st.caption("Assign weights to deterministic scenario baselines for weighted sampling.")
+        seen_names = set()
         for name in ["base", *scenario_names]:
+            if name in seen_names:
+                continue
+            seen_names.add(name)
             weight_value = float(scenario_weight_defaults.get(name, 0.0 if name != "base" else 1.0))
             scenario_weight_defaults[name] = st.number_input(
                 f"{name} weight",
