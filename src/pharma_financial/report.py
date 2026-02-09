@@ -1,6 +1,7 @@
 """Utilities for assembling and exporting consolidated model reports."""
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -89,6 +90,32 @@ def collect_report_sections(model: FinancialModel, outputs: FinancialOutputs) ->
 
     sections: List[ReportSection] = []
 
+    def _percentile(values: Sequence[float], percentile: float) -> float | None:
+        if not values:
+            return None
+        cleaned = [float(value) for value in values if value == value]
+        if not cleaned:
+            return None
+        cleaned.sort()
+        if len(cleaned) == 1:
+            return cleaned[0]
+        position = (len(cleaned) - 1) * (percentile / 100.0)
+        lower_index = int(math.floor(position))
+        upper_index = int(math.ceil(position))
+        if lower_index == upper_index:
+            return cleaned[lower_index]
+        lower_value = cleaned[lower_index]
+        upper_value = cleaned[upper_index]
+        weight = position - lower_index
+        return lower_value + (upper_value - lower_value) * weight
+
+    def _summary_metric_from(source: FinancialOutputs | Table, name: str) -> float | None:
+        table = source.summary_metrics if isinstance(source, FinancialOutputs) else source
+        if name in table.index:
+            position = table.index.index(name)
+            return float(table.data["Value"][position])
+        return None
+
     summary_metrics = outputs.summary_metrics
     executive_metrics = [
         "NPV",
@@ -108,7 +135,78 @@ def collect_report_sections(model: FinancialModel, outputs: FinancialOutputs) ->
             summary_labels.append(metric)
             summary_values.append(summary_metrics.data["Value"][position])
     executive_table = build_table(summary_labels, {"Value": summary_values}, index_name="Metric")
-    sections.append(ReportSection("Executive Summary", [ReportTable("Executive Summary", executive_table)]))
+    range_rows: List[Mapping[str, float]] = []
+    for metric in ["NPV", "IRR", "Investor Viability Score"]:
+        if metric not in outputs.monte_carlo.data:
+            continue
+        values = outputs.monte_carlo.column(metric)
+        p10 = _percentile(values, 10)
+        p50 = _percentile(values, 50)
+        p90 = _percentile(values, 90)
+        if p10 is None or p50 is None or p90 is None:
+            continue
+        range_rows.append({"Metric": metric, "P10": p10, "P50": p50, "P90": p90})
+
+    scenario_rows: List[Mapping[str, float]] = []
+    base_metrics = {
+        "NPV": _summary_metric_from(outputs, "NPV"),
+        "IRR": _summary_metric_from(outputs, "IRR"),
+        "Investor Viability Score": _summary_metric_from(outputs, "Investor Viability Score"),
+    }
+    if all(value is not None for value in base_metrics.values()):
+        scenario_rows.append({"Scenario": "Base", **{k: float(v) for k, v in base_metrics.items()}})
+
+    if model.inputs.scenarios:
+        base_inflation = list(model.inputs.inflation_series)
+        base_discount = float(model.inputs.financing.discount_rate)
+        for name, scenario in model.inputs.scenarios.items():
+            inflation_override = scenario.get("inflation", base_inflation)
+            inflation_series = [float(value) for value in inflation_override]
+            interest_values = scenario.get("interest", [base_discount])
+            try:
+                discount_rate = float(interest_values[0]) if interest_values else base_discount
+            except (TypeError, ValueError, IndexError):
+                discount_rate = base_discount
+
+            scenario_inputs = copy.deepcopy(model.inputs)
+            scenario_inputs.inflation_series = inflation_series
+            scenario_inputs.financing.discount_rate = discount_rate
+            scenario_model = FinancialModel(scenario_inputs)
+            summary = scenario_model.summary_metrics()
+            scenario_rows.append(
+                {
+                    "Scenario": str(name),
+                    "NPV": _summary_metric_from(summary, "NPV"),
+                    "IRR": _summary_metric_from(summary, "IRR"),
+                    "Investor Viability Score": _summary_metric_from(summary, "Investor Viability Score"),
+                }
+            )
+
+    compact_rows: List[Mapping[str, float]] = []
+    if scenario_rows:
+        base_row = next((row for row in scenario_rows if row.get("Scenario") == "Base"), None)
+        if base_row is not None and base_row.get("NPV") is not None:
+            base_npv = float(base_row["NPV"])
+            downside = min(scenario_rows, key=lambda row: row.get("NPV", base_npv))
+            upside = max(scenario_rows, key=lambda row: row.get("NPV", base_npv))
+            for label, row in [("Base", base_row), ("Downside", downside), ("Upside", upside)]:
+                compact_rows.append(
+                    {
+                        "Scenario": label,
+                        "NPV": float(row.get("NPV", float("nan"))),
+                        "IRR": float(row.get("IRR", float("nan"))),
+                        "Investor Viability Score": float(row.get("Investor Viability Score", float("nan"))),
+                        "NPV Δ vs Base": float(row.get("NPV", base_npv)) - base_npv,
+                    }
+                )
+
+    executive_tables = [ReportTable("Executive Summary", executive_table)]
+    if range_rows:
+        executive_tables.append(ReportTable("Monte Carlo Range (P10/P50/P90)", range_rows))
+    if compact_rows:
+        executive_tables.append(ReportTable("Scenario Delta (Base/Downside/Upside)", compact_rows))
+
+    sections.append(ReportSection("Executive Summary", executive_tables))
 
     key_tables: List[ReportTable] = [
         ReportTable("Summary Metrics", outputs.summary_metrics),

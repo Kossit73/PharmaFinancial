@@ -1673,6 +1673,97 @@ def _render_executive_summary(
             with metric_cols[idx % len(metric_cols)]:
                 st.metric(name, _format_number(value))
 
+    st.markdown("### Range & Scenario Delta")
+    range_rows: list[dict[str, object]] = []
+    monte_table = merged_outputs.monte_carlo
+    for metric in ["NPV", "IRR", "Investor Viability Score"]:
+        if metric not in monte_table.data:
+            continue
+        values = monte_table.column(metric)
+        p10 = _percentile(values, 10)
+        p50 = _percentile(values, 50)
+        p90 = _percentile(values, 90)
+        if p10 is None or p50 is None or p90 is None:
+            continue
+        range_rows.append(
+            {"Metric": metric, "P10": p10, "P50": p50, "P90": p90}
+        )
+
+    if range_rows:
+        st.markdown("#### Monte Carlo Range (P10/P50/P90)")
+        st.dataframe(_ensure_dataframe(range_rows), use_container_width=True)
+    else:
+        st.caption("Monte Carlo ranges unavailable for NPV/IRR/viability score.")
+
+    scenario_rows: list[dict[str, float]] = []
+    base_metrics = {
+        "NPV": _summary_metric(merged_outputs, "NPV"),
+        "IRR": _summary_metric(merged_outputs, "IRR"),
+        "Investor Viability Score": _summary_metric(merged_outputs, "Investor Viability Score"),
+    }
+    if all(value is not None for value in base_metrics.values()):
+        scenario_rows.append({"Scenario": "Base", **{k: float(v) for k, v in base_metrics.items()}})
+
+    scenario_inputs = model.inputs.scenarios if model.inputs.scenarios else {}
+    if scenario_inputs:
+        def _metric_from_summary(summary: Table, metric: str) -> float:
+            if metric in summary.index:
+                position = summary.index.index(metric)
+                return float(summary.data["Value"][position])
+            return float("nan")
+
+        base_inflation = list(model.inputs.inflation_series)
+        base_discount = float(model.inputs.financing.discount_rate)
+        for name, scenario in scenario_inputs.items():
+            inflation_override = scenario.get("inflation", base_inflation)
+            inflation_series = [float(value) for value in inflation_override]
+            interest_values = scenario.get("interest", [base_discount])
+            try:
+                discount_rate = float(interest_values[0]) if interest_values else base_discount
+            except (TypeError, ValueError, IndexError):
+                discount_rate = base_discount
+
+            scenario_model = FinancialModel(copy.deepcopy(model.inputs))
+            scenario_model.inputs.inflation_series = inflation_series
+            scenario_model.inputs.financing.discount_rate = discount_rate
+            summary = scenario_model.summary_metrics()
+            scenario_rows.append(
+                {
+                    "Scenario": str(name),
+                    "NPV": _metric_from_summary(summary, "NPV"),
+                    "IRR": _metric_from_summary(summary, "IRR"),
+                    "Investor Viability Score": _metric_from_summary(
+                        summary, "Investor Viability Score"
+                    ),
+                }
+            )
+
+    if scenario_rows:
+        base_row = next((row for row in scenario_rows if row.get("Scenario") == "Base"), None)
+        base_npv = base_row.get("NPV") if base_row else None
+        if base_npv is not None:
+            downside = min(scenario_rows, key=lambda row: row.get("NPV", base_npv))
+            upside = max(scenario_rows, key=lambda row: row.get("NPV", base_npv))
+            compact_rows = []
+            for label, row in [("Base", base_row), ("Downside", downside), ("Upside", upside)]:
+                if row is None:
+                    continue
+                compact_rows.append(
+                    {
+                        "Scenario": label,
+                        "NPV": row.get("NPV"),
+                        "IRR": row.get("IRR"),
+                        "Investor Viability Score": row.get("Investor Viability Score"),
+                        "NPV Δ vs Base": row.get("NPV", 0.0) - base_npv,
+                    }
+                )
+            st.markdown("#### Scenario Delta (Base / Downside / Upside)")
+            st.dataframe(_ensure_dataframe(compact_rows), use_container_width=True)
+        else:
+            st.caption("Scenario delta unavailable without a base NPV.")
+    else:
+        st.caption("Scenario delta unavailable because no scenarios are configured.")
+
     summary_table = _ensure_dataframe(merged_outputs.summary_metrics)
     if summary_table is not None:
         st.markdown("#### Summary Metrics")
@@ -2676,6 +2767,26 @@ def _summary_metric(outputs: FinancialOutputs, name: str) -> Optional[float]:
         position = table.index.index(name)
         return float(table.data["Value"][position])
     return None
+
+
+def _percentile(values: Sequence[float], percentile: float) -> Optional[float]:
+    if not values:
+        return None
+    cleaned = [float(value) for value in values if value == value]
+    if not cleaned:
+        return None
+    cleaned.sort()
+    if len(cleaned) == 1:
+        return cleaned[0]
+    position = (len(cleaned) - 1) * (percentile / 100.0)
+    lower_index = int(math.floor(position))
+    upper_index = int(math.ceil(position))
+    if lower_index == upper_index:
+        return cleaned[lower_index]
+    lower_value = cleaned[lower_index]
+    upper_value = cleaned[upper_index]
+    weight = position - lower_index
+    return lower_value + (upper_value - lower_value) * weight
 
 
 def _final_value(table: Table, column: str) -> Optional[float]:
