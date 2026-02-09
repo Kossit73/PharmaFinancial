@@ -596,11 +596,7 @@ def main() -> None:
             "Financial Performance",
             "Financial Position",
             "Cash Flow Statement",
-            "Sensitivity Analysis",
-            "Scenario / IFs Analysis",
             "RAG Assistant",
-            "Monte Carlo Simulation",
-            "Break-even & Payback",
             "Key Metrics Dashboard",
         ]
     )
@@ -623,36 +619,34 @@ def main() -> None:
         else:
             _render_statement_tab("Statement of Cash Flows", outputs.cash_flow)
     with tabs[4]:
-        if outputs is None:
-            st.info("Press Run on the Input Landing Page to generate results.")
-        else:
-            _render_sensitivity(model, outputs, digest)
-    with tabs[5]:
-        if outputs is None:
-            st.info("Press Run on the Input Landing Page to generate results.")
-        else:
-            _render_scenarios(outputs)
-    with tabs[6]:
         if outputs is None or model is None:
             st.info("Press Run on the Input Landing Page to generate results.")
         else:
             _render_rag_tab(model, outputs, digest)
-    with tabs[7]:
-        if outputs is None:
-            st.info("Press Run on the Input Landing Page to generate results.")
-        else:
-            _render_monte_carlo(model, outputs, digest)
-    with tabs[8]:
-        if outputs is None:
-            st.info("Press Run on the Input Landing Page to generate results.")
-        else:
-            _render_break_even(outputs)
-    with tabs[9]:
+    with tabs[5]:
         if outputs is None or model is None:
             st.info("Press Run on the Input Landing Page to generate results.")
         else:
-            _render_excel_model_download(st.container(), model, outputs)
-            _render_dashboard_tab(model, outputs, digest)
+            dashboard_tabs = st.tabs(
+                [
+                    "Key Metrics Dashboard",
+                    "Sensitivity Analysis",
+                    "Scenario / IFs Analysis",
+                    "Monte Carlo Simulation",
+                    "Break-even & Payback",
+                ]
+            )
+            with dashboard_tabs[0]:
+                _render_excel_model_download(st.container(), model, outputs)
+                _render_dashboard_tab(model, outputs, digest)
+            with dashboard_tabs[1]:
+                _render_sensitivity(model, outputs, digest)
+            with dashboard_tabs[2]:
+                _render_scenarios(outputs)
+            with dashboard_tabs[3]:
+                _render_monte_carlo(model, outputs, digest)
+            with dashboard_tabs[4]:
+                _render_break_even(outputs)
 
 
 def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:
