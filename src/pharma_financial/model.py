@@ -92,6 +92,23 @@ def _average(values: Iterable[Number]) -> float:
     return sum(cleaned) / len(cleaned)
 
 
+def _weighted_average(values: Iterable[Number], weights: Iterable[Number]) -> float:
+    total_weight = 0.0
+    total_value = 0.0
+    for value, weight in zip(values, weights):
+        numeric = float(value)
+        weight_value = float(weight)
+        if not _is_finite(numeric) or not _is_finite(weight_value):
+            continue
+        if weight_value <= 0:
+            continue
+        total_weight += weight_value
+        total_value += numeric * weight_value
+    if total_weight <= 0:
+        return float("nan")
+    return total_value / total_weight
+
+
 def _score_range(value: float, low: float, high: float, *, inverse: bool = False) -> float:
     if not _is_finite(value) or high == low:
         return float("nan")
@@ -745,6 +762,41 @@ class FinancialModel:
         self._overdraft_interest_cache = interest_schedule
         self._overdraft_outstanding_cache = outstanding_schedule
         return interest_schedule, outstanding_schedule
+
+    def _debt_service_schedule(self) -> List[float]:
+        length = len(self.years)
+        if length == 0:
+            return []
+
+        schedules: List[List[float]] = []
+        financing = self.inputs.financing
+        debt_sources = [
+            (financing.senior_debt_entries, financing.senior_debt_interest),
+            (financing.revolver_entries, financing.revolver_interest),
+            (financing.overdraft_entries, financing.cash_interest),
+        ]
+        for entries, rate in debt_sources:
+            if not entries:
+                continue
+            interest_schedule, principal_schedule, _outstanding, _ = amortise_entries(
+                entries, float(rate), self.years
+            )
+            if len(interest_schedule) < length:
+                interest_schedule.extend([0.0] * (length - len(interest_schedule)))
+            if len(principal_schedule) < length:
+                principal_schedule.extend([0.0] * (length - len(principal_schedule)))
+            schedules.append(
+                [
+                    interest_schedule[idx] + principal_schedule[idx]
+                    for idx in range(length)
+                ]
+            )
+
+        if not schedules:
+            return [0.0 for _ in range(length)]
+
+        total = np.sum(np.array(schedules, dtype=float), axis=0).tolist()
+        return total
 
     def _interest_schedule(self) -> List[float]:
         if self._interest_schedule_cache is not None:
@@ -2096,30 +2148,37 @@ class FinancialModel:
         payback_years = self._payback_period(cash_flow)
         discounted_payback_years = self._payback_period(discounted)
 
-        gross_margin = _average(income.column("Gross Profit Margin"))
-        ebitda_margin = _average(income.column("EBITDA Margin"))
+        gross_margin_values = income.column("Gross Profit Margin")
+        ebitda_margin_values = income.column("EBITDA Margin")
         net_income = income.column("Net Income")
         net_margin_values = [
             _safe_ratio(value, revenue) for value, revenue in zip(net_income, net_revenue)
         ]
-        net_margin = _average(net_margin_values)
+        weighted_gross_margin = _weighted_average(gross_margin_values, net_revenue)
+        weighted_ebitda_margin = _weighted_average(ebitda_margin_values, net_revenue)
+        weighted_net_margin = _weighted_average(net_margin_values, net_revenue)
+        if not _is_finite(weighted_gross_margin):
+            weighted_gross_margin = _average(gross_margin_values)
+        if not _is_finite(weighted_ebitda_margin):
+            weighted_ebitda_margin = _average(ebitda_margin_values)
+        if not _is_finite(weighted_net_margin):
+            weighted_net_margin = _average(net_margin_values)
 
         operating_cash = cash_flow_table.column("Net Cash Generated from Operating Activities")
-        operating_cash_margin = _average(
-            [_safe_ratio(value, revenue) for value, revenue in zip(operating_cash, net_revenue)]
+        operating_cash_margin = _weighted_average(
+            [_safe_ratio(value, revenue) for value, revenue in zip(operating_cash, net_revenue)],
+            net_revenue,
         )
+        if not _is_finite(operating_cash_margin):
+            operating_cash_margin = _average(
+                [_safe_ratio(value, revenue) for value, revenue in zip(operating_cash, net_revenue)]
+            )
 
         revenue_cagr = float("nan")
         if len(net_revenue) > 1 and net_revenue[0] > 0 and net_revenue[-1] > 0:
             revenue_cagr = (net_revenue[-1] / net_revenue[0]) ** (1 / (len(net_revenue) - 1)) - 1
 
-        financing_components = self._financing_cash_flow_components()
-        debt_movements = financing_components.get("Debt Drawdown/(Repayment)", [])
-        interest_expense = income.column("Interest")
-        debt_service = [
-            max(interest, 0.0) + max(-movement, 0.0)
-            for interest, movement in zip(interest_expense, debt_movements)
-        ]
+        debt_service = self._debt_service_schedule()
         dscr_values = [
             _safe_ratio(operating_cash_value, service)
             for operating_cash_value, service in zip(operating_cash, debt_service)
@@ -2133,23 +2192,35 @@ class FinancialModel:
         if total_investment > 0:
             profitability_index = (npv_value + total_investment) / total_investment
 
+        viability_config = self.inputs.viability
+
+        def _config_for(
+            name: str,
+            default_low: float,
+            default_high: float,
+            inverse: bool = False,
+        ) -> tuple[float, float, bool]:
+            config = viability_config.metrics.get(name)
+            if config is None:
+                return default_low, default_high, inverse
+            return config.low, config.high, config.inverse
+
+        irr_low, irr_high, irr_inverse = _config_for("IRR", 0.12, 0.25)
+        pi_low, pi_high, pi_inverse = _config_for("Profitability Index", 1.1, 1.6)
+        pay_low, pay_high, pay_inverse = _config_for("Payback", 3.0, 8.0, True)
+        ebitda_low, ebitda_high, ebitda_inverse = _config_for("EBITDA Margin", 0.15, 0.35)
+        cagr_low, cagr_high, cagr_inverse = _config_for("Revenue CAGR", 0.05, 0.2)
+        dscr_low, dscr_high, dscr_inverse = _config_for("DSCR", 1.2, 2.0)
+
         viability_scores = {
-            "IRR": _score_range(irr_value, 0.12, 0.25),
-            "Profitability Index": _score_range(profitability_index, 1.1, 1.6),
-            "Payback": _score_range(payback_years, 3.0, 8.0, inverse=True),
-            "EBITDA Margin": _score_range(ebitda_margin, 0.15, 0.35),
-            "Revenue CAGR": _score_range(revenue_cagr, 0.05, 0.2),
-            "DSCR": _score_range(average_dscr, 1.2, 2.0),
+            "IRR": _score_range(irr_value, irr_low, irr_high, inverse=irr_inverse),
+            "Profitability Index": _score_range(profitability_index, pi_low, pi_high, inverse=pi_inverse),
+            "Payback": _score_range(payback_years, pay_low, pay_high, inverse=pay_inverse),
+            "EBITDA Margin": _score_range(weighted_ebitda_margin, ebitda_low, ebitda_high, inverse=ebitda_inverse),
+            "Revenue CAGR": _score_range(revenue_cagr, cagr_low, cagr_high, inverse=cagr_inverse),
+            "DSCR": _score_range(average_dscr, dscr_low, dscr_high, inverse=dscr_inverse),
         }
-        viability_weights = {
-            "IRR": 0.2,
-            "Profitability Index": 0.2,
-            "Payback": 0.15,
-            "EBITDA Margin": 0.15,
-            "Revenue CAGR": 0.15,
-            "DSCR": 0.15,
-        }
-        viability_score = _weighted_score(viability_scores, viability_weights) * 100
+        viability_score = _weighted_score(viability_scores, viability_config.weights) * 100
 
         table = build_table(
             [
@@ -2159,10 +2230,10 @@ class FinancialModel:
                 "Discounted Payback",
                 "Profitability Index",
                 "Revenue CAGR",
-                "Average Gross Margin",
-                "Average EBITDA Margin",
-                "Average Net Margin",
-                "Average Operating Cash Flow Margin",
+                "Weighted Average Gross Margin",
+                "Weighted Average EBITDA Margin",
+                "Weighted Average Net Margin",
+                "Weighted Average Operating Cash Flow Margin",
                 "Average Debt Service Coverage",
                 "Investor Viability Score",
             ],
@@ -2174,9 +2245,9 @@ class FinancialModel:
                     discounted_payback_years,
                     profitability_index,
                     revenue_cagr,
-                    gross_margin,
-                    ebitda_margin,
-                    net_margin,
+                    weighted_gross_margin,
+                    weighted_ebitda_margin,
+                    weighted_net_margin,
                     operating_cash_margin,
                     average_dscr,
                     viability_score,

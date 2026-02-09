@@ -14,7 +14,7 @@ from xml.sax.saxutils import escape as xml_escape
 from zipfile import ZipFile
 
 from .model import FinancialModel, FinancialOutputs
-from .table import Table
+from .table import Table, build_table
 
 try:  # pragma: no cover - optional dependency for charts
     from openpyxl.chart import LineChart, Reference  # type: ignore
@@ -88,6 +88,27 @@ def collect_report_sections(model: FinancialModel, outputs: FinancialOutputs) ->
     """Assemble report sections spanning all dashboards in the required order."""
 
     sections: List[ReportSection] = []
+
+    summary_metrics = outputs.summary_metrics
+    executive_metrics = [
+        "NPV",
+        "IRR",
+        "Payback Period",
+        "Profitability Index",
+        "Revenue CAGR",
+        "Weighted Average EBITDA Margin",
+        "Average Debt Service Coverage",
+        "Investor Viability Score",
+    ]
+    summary_values: List[float] = []
+    summary_labels: List[str] = []
+    for metric in executive_metrics:
+        if metric in summary_metrics.index:
+            position = summary_metrics.index.index(metric)
+            summary_labels.append(metric)
+            summary_values.append(summary_metrics.data["Value"][position])
+    executive_table = build_table(summary_labels, {"Value": summary_values}, index_name="Metric")
+    sections.append(ReportSection("Executive Summary", [ReportTable("Executive Summary", executive_table)]))
 
     key_tables: List[ReportTable] = [
         ReportTable("Summary Metrics", outputs.summary_metrics),

@@ -629,6 +629,7 @@ def main() -> None:
         else:
             dashboard_tabs = st.tabs(
                 [
+                    "Executive Summary",
                     "Key Metrics Dashboard",
                     "Sensitivity Analysis",
                     "Scenario / IFs Analysis",
@@ -637,15 +638,17 @@ def main() -> None:
                 ]
             )
             with dashboard_tabs[0]:
+                _render_executive_summary(model, outputs, digest)
+            with dashboard_tabs[1]:
                 _render_excel_model_download(st.container(), model, outputs)
                 _render_dashboard_tab(model, outputs, digest)
-            with dashboard_tabs[1]:
-                _render_sensitivity(model, outputs, digest)
             with dashboard_tabs[2]:
-                _render_scenarios(outputs)
+                _render_sensitivity(model, outputs, digest)
             with dashboard_tabs[3]:
-                _render_monte_carlo(model, outputs, digest)
+                _render_scenarios(outputs)
             with dashboard_tabs[4]:
+                _render_monte_carlo(model, outputs, digest)
+            with dashboard_tabs[5]:
                 _render_break_even(outputs)
 
 
@@ -1407,7 +1410,7 @@ def _render_dashboard_tab(
         "IRR",
         "Payback Period",
         "Profitability Index",
-        "Average EBITDA Margin",
+        "Weighted Average EBITDA Margin",
         "Investor Viability Score",
     ]
     filtered_pairs = [pair for pair in metric_pairs if pair[0] in preferred_metrics]
@@ -1643,6 +1646,59 @@ def _render_dashboard_tab(
         merged_outputs.ai_insights,
         ai_configured=bool(model.inputs.ai),
     )
+
+
+def _render_executive_summary(
+    model: FinancialModel, outputs: FinancialOutputs, digest: str
+) -> None:
+    merged_outputs = _merge_analysis_outputs(outputs, digest)
+    st.markdown("### Executive Summary")
+
+    key_metrics = [
+        "NPV",
+        "IRR",
+        "Payback Period",
+        "Profitability Index",
+        "Revenue CAGR",
+        "Weighted Average EBITDA Margin",
+        "Average Debt Service Coverage",
+        "Investor Viability Score",
+    ]
+    metrics = [(name, _summary_metric(merged_outputs, name)) for name in key_metrics]
+    metrics = [(name, value) for name, value in metrics if value is not None]
+
+    if metrics:
+        metric_cols = st.columns(min(len(metrics), 4))
+        for idx, (name, value) in enumerate(metrics):
+            with metric_cols[idx % len(metric_cols)]:
+                st.metric(name, _format_number(value))
+
+    summary_table = _ensure_dataframe(merged_outputs.summary_metrics)
+    if summary_table is not None:
+        st.markdown("#### Summary Metrics")
+        if pd is not None and hasattr(summary_table, "reset_index"):
+            st.dataframe(summary_table, use_container_width=True)
+        else:
+            st.table(summary_table)
+
+    income = merged_outputs.income_statement
+    latest_revenue = _final_value(income, "Net Revenue")
+    latest_ebitda = _final_value(income, "EBITDA")
+    latest_margin = _final_value(income, "EBITDA Margin")
+    highlights = []
+    if latest_revenue is not None:
+        if latest_ebitda is not None and latest_margin is not None:
+            highlights.append(
+                f"Latest net revenue {latest_revenue:,.2f} with EBITDA {latest_ebitda:,.2f} "
+                f"and EBITDA margin {latest_margin:.2%}."
+            )
+        else:
+            highlights.append(f"Latest net revenue {latest_revenue:,.2f}.")
+
+    if highlights:
+        st.markdown("#### Highlights")
+        for line in highlights:
+            st.markdown(f"- {line}")
 
 
 def _render_statement_tab(title: str, table) -> None:
@@ -2748,6 +2804,8 @@ def _apply_section_writeups(
     irr = _summary_metric(outputs, "IRR")
     payback = _summary_metric(outputs, "Payback Period")
     discounted_payback = _summary_metric(outputs, "Discounted Payback")
+    viability_score = _summary_metric(outputs, "Investor Viability Score")
+    dscr = _summary_metric(outputs, "Average Debt Service Coverage")
     if npv is not None:
         summary = (
             f"NPV of {npv:,.2f} with IRR {irr:.2%} and payback year {payback:.1f} "
@@ -2756,6 +2814,12 @@ def _apply_section_writeups(
             else f"NPV of {npv:,.2f}."
         )
         summary_notes.setdefault("Key Metrics Dashboard", []).append(summary)
+        exec_summary = summary
+        if viability_score is not None:
+            exec_summary = f"{exec_summary} Investor viability score {viability_score:.1f}."
+        if dscr is not None:
+            exec_summary = f"{exec_summary} Average DSCR {dscr:.2f}."
+        summary_notes.setdefault("Executive Summary", []).append(exec_summary)
 
     income = outputs.income_statement
     net_revenue = _final_value(income, "Net Revenue")
