@@ -1408,11 +1408,22 @@ def _render_dashboard_tab(
 
     st.markdown("### Investment Metrics")
     metric_pairs = _extract_metric_pairs(merged_outputs.summary_metrics)
-    if not metric_pairs:
+    preferred_metrics = [
+        "NPV",
+        "IRR",
+        "Payback Period",
+        "Profitability Index",
+        "Average EBITDA Margin",
+        "Investor Viability Score",
+    ]
+    filtered_pairs = [pair for pair in metric_pairs if pair[0] in preferred_metrics]
+    if not filtered_pairs:
+        filtered_pairs = metric_pairs[:6]
+    if not filtered_pairs:
         st.info("No investment metrics were generated for the current assumptions.")
     else:
-        metric_cols = st.columns(len(metric_pairs))
-        for col, (name, value) in zip(metric_cols, metric_pairs):
+        metric_cols = st.columns(len(filtered_pairs))
+        for col, (name, value) in zip(metric_cols, filtered_pairs):
             with col:
                 formatted = _format_number(value)
                 st.metric(label=name, value=formatted)

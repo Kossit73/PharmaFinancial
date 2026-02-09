@@ -77,6 +77,46 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
     return numerator / denominator
 
 
+def _is_finite(value: float) -> bool:
+    return not (math.isnan(value) or math.isinf(value))
+
+
+def _average(values: Iterable[Number]) -> float:
+    cleaned: List[float] = []
+    for value in values:
+        numeric = float(value)
+        if _is_finite(numeric):
+            cleaned.append(numeric)
+    if not cleaned:
+        return float("nan")
+    return sum(cleaned) / len(cleaned)
+
+
+def _score_range(value: float, low: float, high: float, *, inverse: bool = False) -> float:
+    if not _is_finite(value) or high == low:
+        return float("nan")
+    scaled = (value - low) / (high - low)
+    if inverse:
+        scaled = 1.0 - scaled
+    return max(0.0, min(1.0, scaled))
+
+
+def _weighted_score(scores: Mapping[str, float], weights: Mapping[str, float]) -> float:
+    total_weight = 0.0
+    total_score = 0.0
+    for key, score in scores.items():
+        if not _is_finite(score):
+            continue
+        weight = float(weights.get(key, 0.0))
+        if weight <= 0:
+            continue
+        total_weight += weight
+        total_score += weight * score
+    if total_weight <= 0:
+        return float("nan")
+    return total_score / total_weight
+
+
 def _value_for_year(table: Table, column: str, year: Optional[int]) -> float:
     if column not in table.data:
         return float("nan")
@@ -2044,7 +2084,10 @@ class FinancialModel:
         if self._summary_metrics_cache is not None:
             return self._summary_metrics_cache
 
-        cash_flow = self.cash_flow_statement().column(CASH_FLOW_NET_COLUMN)
+        cash_flow_table = self.cash_flow_statement()
+        cash_flow = cash_flow_table.column(CASH_FLOW_NET_COLUMN)
+        income = self.income_statement()
+        net_revenue = income.column("Net Revenue")
         discount_rate = self.inputs.financing.discount_rate
         discounted = [cf / (1 + discount_rate) ** idx for idx, cf in enumerate(cash_flow)]
         npv_value = sum(discounted)
@@ -2052,9 +2095,93 @@ class FinancialModel:
         irr_value = irr_result.value
         payback_years = self._payback_period(cash_flow)
         discounted_payback_years = self._payback_period(discounted)
+
+        gross_margin = _average(income.column("Gross Profit Margin"))
+        ebitda_margin = _average(income.column("EBITDA Margin"))
+        net_income = income.column("Net Income")
+        net_margin_values = [
+            _safe_ratio(value, revenue) for value, revenue in zip(net_income, net_revenue)
+        ]
+        net_margin = _average(net_margin_values)
+
+        operating_cash = cash_flow_table.column("Net Cash Generated from Operating Activities")
+        operating_cash_margin = _average(
+            [_safe_ratio(value, revenue) for value, revenue in zip(operating_cash, net_revenue)]
+        )
+
+        revenue_cagr = float("nan")
+        if len(net_revenue) > 1 and net_revenue[0] > 0 and net_revenue[-1] > 0:
+            revenue_cagr = (net_revenue[-1] / net_revenue[0]) ** (1 / (len(net_revenue) - 1)) - 1
+
+        financing_components = self._financing_cash_flow_components()
+        debt_movements = financing_components.get("Debt Drawdown/(Repayment)", [])
+        interest_expense = income.column("Interest")
+        debt_service = [
+            max(interest, 0.0) + max(-movement, 0.0)
+            for interest, movement in zip(interest_expense, debt_movements)
+        ]
+        dscr_values = [
+            _safe_ratio(operating_cash_value, service)
+            for operating_cash_value, service in zip(operating_cash, debt_service)
+        ]
+        average_dscr = _average(dscr_values)
+
+        initial_investment = float(self.inputs.financing.initial_investment or 0.0)
+        total_capex = sum(self._capex_series())
+        total_investment = abs(initial_investment) + total_capex
+        profitability_index = float("nan")
+        if total_investment > 0:
+            profitability_index = (npv_value + total_investment) / total_investment
+
+        viability_scores = {
+            "IRR": _score_range(irr_value, 0.12, 0.25),
+            "Profitability Index": _score_range(profitability_index, 1.1, 1.6),
+            "Payback": _score_range(payback_years, 3.0, 8.0, inverse=True),
+            "EBITDA Margin": _score_range(ebitda_margin, 0.15, 0.35),
+            "Revenue CAGR": _score_range(revenue_cagr, 0.05, 0.2),
+            "DSCR": _score_range(average_dscr, 1.2, 2.0),
+        }
+        viability_weights = {
+            "IRR": 0.2,
+            "Profitability Index": 0.2,
+            "Payback": 0.15,
+            "EBITDA Margin": 0.15,
+            "Revenue CAGR": 0.15,
+            "DSCR": 0.15,
+        }
+        viability_score = _weighted_score(viability_scores, viability_weights) * 100
+
         table = build_table(
-            ["NPV", "IRR", "Payback Period", "Discounted Payback"],
-            {"Value": [npv_value, irr_value, payback_years, discounted_payback_years]},
+            [
+                "NPV",
+                "IRR",
+                "Payback Period",
+                "Discounted Payback",
+                "Profitability Index",
+                "Revenue CAGR",
+                "Average Gross Margin",
+                "Average EBITDA Margin",
+                "Average Net Margin",
+                "Average Operating Cash Flow Margin",
+                "Average Debt Service Coverage",
+                "Investor Viability Score",
+            ],
+            {
+                "Value": [
+                    npv_value,
+                    irr_value,
+                    payback_years,
+                    discounted_payback_years,
+                    profitability_index,
+                    revenue_cagr,
+                    gross_margin,
+                    ebitda_margin,
+                    net_margin,
+                    operating_cash_margin,
+                    average_dscr,
+                    viability_score,
+                ]
+            },
             index_name="Metric",
         )
         self._summary_metrics_cache = table
