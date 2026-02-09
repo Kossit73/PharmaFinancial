@@ -92,6 +92,24 @@ def _average(values: Iterable[Number]) -> float:
     return sum(cleaned) / len(cleaned)
 
 
+def _rolling_cagr(values: Sequence[Number], window: int) -> float:
+    if window < 2:
+        return float("nan")
+    series = [float(value) for value in values]
+    if len(series) < window:
+        return float("nan")
+    cagr_values: List[float] = []
+    for idx in range(len(series) - window + 1):
+        start = series[idx]
+        end = series[idx + window - 1]
+        if start <= 0 or end <= 0:
+            continue
+        cagr = (end / start) ** (1 / (window - 1)) - 1
+        if _is_finite(cagr):
+            cagr_values.append(cagr)
+    return _average(cagr_values)
+
+
 def _weighted_average(values: Iterable[Number], weights: Iterable[Number]) -> float:
     total_weight = 0.0
     total_value = 0.0
@@ -2177,6 +2195,16 @@ class FinancialModel:
         revenue_cagr = float("nan")
         if len(net_revenue) > 1 and net_revenue[0] > 0 and net_revenue[-1] > 0:
             revenue_cagr = (net_revenue[-1] / net_revenue[0]) ** (1 / (len(net_revenue) - 1)) - 1
+        mid_period_cagr = float("nan")
+        if len(net_revenue) > 3:
+            mid_index = len(net_revenue) // 2
+            start = net_revenue[mid_index - 1]
+            end = net_revenue[-1]
+            span = len(net_revenue) - mid_index
+            if span > 0 and start > 0 and end > 0:
+                mid_period_cagr = (end / start) ** (1 / span) - 1
+
+        rolling_cagr = _rolling_cagr(net_revenue, 3)
 
         debt_service = self._debt_service_schedule()
         dscr_values = [
@@ -2230,6 +2258,8 @@ class FinancialModel:
                 "Discounted Payback",
                 "Profitability Index",
                 "Revenue CAGR",
+                "Mid-period Revenue CAGR",
+                "Rolling Revenue CAGR (3Y Avg)",
                 "Weighted Average Gross Margin",
                 "Weighted Average EBITDA Margin",
                 "Weighted Average Net Margin",
@@ -2245,6 +2275,8 @@ class FinancialModel:
                     discounted_payback_years,
                     profitability_index,
                     revenue_cagr,
+                    mid_period_cagr,
+                    rolling_cagr,
                     weighted_gross_margin,
                     weighted_ebitda_margin,
                     weighted_net_margin,
