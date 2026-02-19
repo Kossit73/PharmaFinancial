@@ -596,11 +596,7 @@ def main() -> None:
             "Financial Performance",
             "Financial Position",
             "Cash Flow Statement",
-            "Sensitivity Analysis",
-            "Scenario / IFs Analysis",
             "RAG Assistant",
-            "Monte Carlo Simulation",
-            "Break-even & Payback",
             "Key Metrics Dashboard",
         ]
     )
@@ -623,36 +619,37 @@ def main() -> None:
         else:
             _render_statement_tab("Statement of Cash Flows", outputs.cash_flow)
     with tabs[4]:
-        if outputs is None:
-            st.info("Press Run on the Input Landing Page to generate results.")
-        else:
-            _render_sensitivity(model, outputs, digest)
-    with tabs[5]:
-        if outputs is None:
-            st.info("Press Run on the Input Landing Page to generate results.")
-        else:
-            _render_scenarios(outputs)
-    with tabs[6]:
         if outputs is None or model is None:
             st.info("Press Run on the Input Landing Page to generate results.")
         else:
             _render_rag_tab(model, outputs, digest)
-    with tabs[7]:
-        if outputs is None:
-            st.info("Press Run on the Input Landing Page to generate results.")
-        else:
-            _render_monte_carlo(model, outputs, digest)
-    with tabs[8]:
-        if outputs is None:
-            st.info("Press Run on the Input Landing Page to generate results.")
-        else:
-            _render_break_even(outputs)
-    with tabs[9]:
+    with tabs[5]:
         if outputs is None or model is None:
             st.info("Press Run on the Input Landing Page to generate results.")
         else:
-            _render_excel_model_download(st.container(), model, outputs)
-            _render_dashboard_tab(model, outputs, digest)
+            dashboard_tabs = st.tabs(
+                [
+                    "Executive Summary",
+                    "Key Metrics Dashboard",
+                    "Sensitivity Analysis",
+                    "Scenario / IFs Analysis",
+                    "Monte Carlo Simulation",
+                    "Break-even & Payback",
+                ]
+            )
+            with dashboard_tabs[0]:
+                _render_executive_summary(model, outputs, digest)
+            with dashboard_tabs[1]:
+                _render_excel_model_download(st.container(), model, outputs)
+                _render_dashboard_tab(model, outputs, digest)
+            with dashboard_tabs[2]:
+                _render_sensitivity(model, outputs, digest)
+            with dashboard_tabs[3]:
+                _render_scenarios(outputs)
+            with dashboard_tabs[4]:
+                _render_monte_carlo(model, outputs, digest)
+            with dashboard_tabs[5]:
+                _render_break_even(outputs)
 
 
 def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:
@@ -1408,11 +1405,22 @@ def _render_dashboard_tab(
 
     st.markdown("### Investment Metrics")
     metric_pairs = _extract_metric_pairs(merged_outputs.summary_metrics)
-    if not metric_pairs:
+    preferred_metrics = [
+        "NPV",
+        "IRR",
+        "Payback Period",
+        "Profitability Index",
+        "Weighted Average EBITDA Margin",
+        "Investor Viability Score",
+    ]
+    filtered_pairs = [pair for pair in metric_pairs if pair[0] in preferred_metrics]
+    if not filtered_pairs:
+        filtered_pairs = metric_pairs[:6]
+    if not filtered_pairs:
         st.info("No investment metrics were generated for the current assumptions.")
     else:
-        metric_cols = st.columns(len(metric_pairs))
-        for col, (name, value) in zip(metric_cols, metric_pairs):
+        metric_cols = st.columns(len(filtered_pairs))
+        for col, (name, value) in zip(metric_cols, filtered_pairs):
             with col:
                 formatted = _format_number(value)
                 st.metric(label=name, value=formatted)
@@ -1638,6 +1646,150 @@ def _render_dashboard_tab(
         merged_outputs.ai_insights,
         ai_configured=bool(model.inputs.ai),
     )
+
+
+def _render_executive_summary(
+    model: FinancialModel, outputs: FinancialOutputs, digest: str
+) -> None:
+    merged_outputs = _merge_analysis_outputs(outputs, digest)
+    st.markdown("### Executive Summary")
+
+    key_metrics = [
+        "NPV",
+        "IRR",
+        "Payback Period",
+        "Profitability Index",
+        "Revenue CAGR",
+        "Weighted Average EBITDA Margin",
+        "Average Debt Service Coverage",
+        "Investor Viability Score",
+    ]
+    metrics = [(name, _summary_metric(merged_outputs, name)) for name in key_metrics]
+    metrics = [(name, value) for name, value in metrics if value is not None]
+
+    if metrics:
+        metric_cols = st.columns(min(len(metrics), 4))
+        for idx, (name, value) in enumerate(metrics):
+            with metric_cols[idx % len(metric_cols)]:
+                st.metric(name, _format_number(value))
+
+    st.markdown("### Range & Scenario Delta")
+    range_rows: list[dict[str, object]] = []
+    monte_table = merged_outputs.monte_carlo
+    for metric in ["NPV", "IRR", "Investor Viability Score"]:
+        if metric not in monte_table.data:
+            continue
+        values = monte_table.column(metric)
+        p10 = _percentile(values, 10)
+        p50 = _percentile(values, 50)
+        p90 = _percentile(values, 90)
+        if p10 is None or p50 is None or p90 is None:
+            continue
+        range_rows.append(
+            {"Metric": metric, "P10": p10, "P50": p50, "P90": p90}
+        )
+
+    if range_rows:
+        st.markdown("#### Monte Carlo Range (P10/P50/P90)")
+        st.dataframe(_ensure_dataframe(range_rows), use_container_width=True)
+    else:
+        st.caption("Monte Carlo ranges unavailable for NPV/IRR/viability score.")
+
+    scenario_rows: list[dict[str, float]] = []
+    base_metrics = {
+        "NPV": _summary_metric(merged_outputs, "NPV"),
+        "IRR": _summary_metric(merged_outputs, "IRR"),
+        "Investor Viability Score": _summary_metric(merged_outputs, "Investor Viability Score"),
+    }
+    if all(value is not None for value in base_metrics.values()):
+        scenario_rows.append({"Scenario": "Base", **{k: float(v) for k, v in base_metrics.items()}})
+
+    scenario_inputs = model.inputs.scenarios if model.inputs.scenarios else {}
+    if scenario_inputs:
+        def _metric_from_summary(summary: Table, metric: str) -> float:
+            if metric in summary.index:
+                position = summary.index.index(metric)
+                return float(summary.data["Value"][position])
+            return float("nan")
+
+        base_inflation = list(model.inputs.inflation_series)
+        base_discount = float(model.inputs.financing.discount_rate)
+        for name, scenario in scenario_inputs.items():
+            inflation_override = scenario.get("inflation", base_inflation)
+            inflation_series = [float(value) for value in inflation_override]
+            interest_values = scenario.get("interest", [base_discount])
+            try:
+                discount_rate = float(interest_values[0]) if interest_values else base_discount
+            except (TypeError, ValueError, IndexError):
+                discount_rate = base_discount
+
+            scenario_model = FinancialModel(copy.deepcopy(model.inputs))
+            scenario_model.inputs.inflation_series = inflation_series
+            scenario_model.inputs.financing.discount_rate = discount_rate
+            summary = scenario_model.summary_metrics()
+            scenario_rows.append(
+                {
+                    "Scenario": str(name),
+                    "NPV": _metric_from_summary(summary, "NPV"),
+                    "IRR": _metric_from_summary(summary, "IRR"),
+                    "Investor Viability Score": _metric_from_summary(
+                        summary, "Investor Viability Score"
+                    ),
+                }
+            )
+
+    if scenario_rows:
+        base_row = next((row for row in scenario_rows if row.get("Scenario") == "Base"), None)
+        base_npv = base_row.get("NPV") if base_row else None
+        if base_npv is not None:
+            downside = min(scenario_rows, key=lambda row: row.get("NPV", base_npv))
+            upside = max(scenario_rows, key=lambda row: row.get("NPV", base_npv))
+            compact_rows = []
+            for label, row in [("Base", base_row), ("Downside", downside), ("Upside", upside)]:
+                if row is None:
+                    continue
+                compact_rows.append(
+                    {
+                        "Scenario": label,
+                        "NPV": row.get("NPV"),
+                        "IRR": row.get("IRR"),
+                        "Investor Viability Score": row.get("Investor Viability Score"),
+                        "NPV Δ vs Base": row.get("NPV", 0.0) - base_npv,
+                    }
+                )
+            st.markdown("#### Scenario Delta (Base / Downside / Upside)")
+            st.dataframe(_ensure_dataframe(compact_rows), use_container_width=True)
+        else:
+            st.caption("Scenario delta unavailable without a base NPV.")
+    else:
+        st.caption("Scenario delta unavailable because no scenarios are configured.")
+
+    summary_table = _ensure_dataframe(merged_outputs.summary_metrics)
+    if summary_table is not None:
+        st.markdown("#### Summary Metrics")
+        if pd is not None and hasattr(summary_table, "reset_index"):
+            st.dataframe(summary_table, use_container_width=True)
+        else:
+            st.table(summary_table)
+
+    income = merged_outputs.income_statement
+    latest_revenue = _final_value(income, "Net Revenue")
+    latest_ebitda = _final_value(income, "EBITDA")
+    latest_margin = _final_value(income, "EBITDA Margin")
+    highlights = []
+    if latest_revenue is not None:
+        if latest_ebitda is not None and latest_margin is not None:
+            highlights.append(
+                f"Latest net revenue {latest_revenue:,.2f} with EBITDA {latest_ebitda:,.2f} "
+                f"and EBITDA margin {latest_margin:.2%}."
+            )
+        else:
+            highlights.append(f"Latest net revenue {latest_revenue:,.2f}.")
+
+    if highlights:
+        st.markdown("#### Highlights")
+        for line in highlights:
+            st.markdown(f"- {line}")
 
 
 def _render_statement_tab(title: str, table) -> None:
@@ -2617,6 +2769,26 @@ def _summary_metric(outputs: FinancialOutputs, name: str) -> Optional[float]:
     return None
 
 
+def _percentile(values: Sequence[float], percentile: float) -> Optional[float]:
+    if not values:
+        return None
+    cleaned = [float(value) for value in values if value == value]
+    if not cleaned:
+        return None
+    cleaned.sort()
+    if len(cleaned) == 1:
+        return cleaned[0]
+    position = (len(cleaned) - 1) * (percentile / 100.0)
+    lower_index = int(math.floor(position))
+    upper_index = int(math.ceil(position))
+    if lower_index == upper_index:
+        return cleaned[lower_index]
+    lower_value = cleaned[lower_index]
+    upper_value = cleaned[upper_index]
+    weight = position - lower_index
+    return lower_value + (upper_value - lower_value) * weight
+
+
 def _final_value(table: Table, column: str) -> Optional[float]:
     if column not in table.data:
         return None
@@ -2743,6 +2915,8 @@ def _apply_section_writeups(
     irr = _summary_metric(outputs, "IRR")
     payback = _summary_metric(outputs, "Payback Period")
     discounted_payback = _summary_metric(outputs, "Discounted Payback")
+    viability_score = _summary_metric(outputs, "Investor Viability Score")
+    dscr = _summary_metric(outputs, "Average Debt Service Coverage")
     if npv is not None:
         summary = (
             f"NPV of {npv:,.2f} with IRR {irr:.2%} and payback year {payback:.1f} "
@@ -2751,6 +2925,12 @@ def _apply_section_writeups(
             else f"NPV of {npv:,.2f}."
         )
         summary_notes.setdefault("Key Metrics Dashboard", []).append(summary)
+        exec_summary = summary
+        if viability_score is not None:
+            exec_summary = f"{exec_summary} Investor viability score {viability_score:.1f}."
+        if dscr is not None:
+            exec_summary = f"{exec_summary} Average DSCR {dscr:.2f}."
+        summary_notes.setdefault("Executive Summary", []).append(exec_summary)
 
     income = outputs.income_statement
     net_revenue = _final_value(income, "Net Revenue")

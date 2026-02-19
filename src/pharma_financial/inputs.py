@@ -188,6 +188,19 @@ class AIParameters:
 
 
 @dataclass
+class ViabilityMetricConfig:
+    low: float
+    high: float
+    inverse: bool = False
+
+
+@dataclass
+class ViabilityParameters:
+    metrics: Mapping[str, ViabilityMetricConfig]
+    weights: Mapping[str, float]
+
+
+@dataclass
 class ModelInputs:
     years: List[int]
     production_estimate: Mapping[str, List[float]]
@@ -223,6 +236,7 @@ class ModelInputs:
     goal_seek: Optional[GoalSeekParameters]
     ai: AIParameters
     utility_cost_of_sales_share: float
+    viability: ViabilityParameters
 
     @property
     def products(self) -> List[str]:
@@ -497,6 +511,61 @@ def _parse_ai(data: object) -> AIParameters:
         max_forecast_multiplier=max_multiplier,
         seasonality_period=seasonality_period,
     )
+
+
+def _parse_viability(data: object) -> ViabilityParameters:
+    if not isinstance(data, Mapping):
+        data = {}
+
+    defaults = {
+        "IRR": ViabilityMetricConfig(low=0.12, high=0.25),
+        "Profitability Index": ViabilityMetricConfig(low=1.1, high=1.6),
+        "Payback": ViabilityMetricConfig(low=3.0, high=8.0, inverse=True),
+        "EBITDA Margin": ViabilityMetricConfig(low=0.15, high=0.35),
+        "Revenue CAGR": ViabilityMetricConfig(low=0.05, high=0.2),
+        "DSCR": ViabilityMetricConfig(low=1.2, high=2.0),
+    }
+    default_weights = {
+        "IRR": 0.2,
+        "Profitability Index": 0.2,
+        "Payback": 0.15,
+        "EBITDA Margin": 0.15,
+        "Revenue CAGR": 0.15,
+        "DSCR": 0.15,
+    }
+
+    metrics = dict(defaults)
+    metrics_raw = data.get("metrics", {})
+    if isinstance(metrics_raw, Mapping):
+        for name, config in metrics_raw.items():
+            if not isinstance(config, Mapping):
+                continue
+            metric_name = str(name).strip()
+            if not metric_name:
+                continue
+            low_value = config.get("min", config.get("low"))
+            high_value = config.get("max", config.get("high"))
+            try:
+                low = float(low_value)
+                high = float(high_value)
+            except (TypeError, ValueError):
+                continue
+            inverse = bool(config.get("inverse", False))
+            metrics[metric_name] = ViabilityMetricConfig(low=low, high=high, inverse=inverse)
+
+    weights_raw = data.get("weights", {})
+    weights = dict(default_weights)
+    if isinstance(weights_raw, Mapping):
+        for name, value in weights_raw.items():
+            label = str(name).strip()
+            if not label:
+                continue
+            try:
+                weights[label] = float(value)
+            except (TypeError, ValueError):
+                continue
+
+    return ViabilityParameters(metrics=metrics, weights=weights)
 
 
 def _parse_working_capital(
@@ -964,6 +1033,7 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         goal_seek = GoalSeekParameters(metric=metric, target=target, source=source, year=year)
 
     ai_params = _parse_ai(raw.get("ai", {}))
+    viability = _parse_viability(raw.get("viability", {}))
 
     if not production_estimate:
         production_estimate = {
@@ -1005,6 +1075,7 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         goal_seek=goal_seek,
         ai=ai_params,
         utility_cost_of_sales_share=cost_share_value,
+        viability=viability,
     )
 
 
@@ -1263,6 +1334,8 @@ __all__ = [
     "SensitivityParameters",
     "GoalSeekParameters",
     "AIParameters",
+    "ViabilityMetricConfig",
+    "ViabilityParameters",
     "parse_inputs",
     "load_inputs",
     "load_raw_inputs",
