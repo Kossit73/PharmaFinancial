@@ -375,9 +375,11 @@ class GenerativeAdvisor:
         if response:
             filtered = self._filter_response(prompt, response)
             if filtered is not None:
-                self.metadata["status"] = "model_response"
-                self.metadata["response"] = filtered
-                return filtered
+                audited = self._audit_pharma_management_alignment(filtered)
+                if audited is not None:
+                    self.metadata["status"] = "model_response"
+                    self.metadata["response"] = audited
+                    return audited
 
         self.metadata.setdefault("status", "fallback")
         return self._fallback(summary, income, cash_flow, ml_table)
@@ -456,6 +458,14 @@ class GenerativeAdvisor:
                         model=self.parameters.model,
                         messages=[
                             {"role": "system", "content": "You are a financial analyst."},
+                            {
+                                "role": "system",
+                                "content": (
+                                    "Prioritise pharmaceutical management best practices: "
+                                    "patient safety, GMP quality controls, regulatory readiness, "
+                                    "supply resilience, and prudent working-capital stewardship."
+                                ),
+                            },
                             {"role": "user", "content": prompt},
                         ],
                         temperature=0.2,
@@ -471,6 +481,14 @@ class GenerativeAdvisor:
                         model=self.parameters.model,
                         messages=[
                             {"role": "system", "content": "You are a financial analyst."},
+                            {
+                                "role": "system",
+                                "content": (
+                                    "Prioritise pharmaceutical management best practices: "
+                                    "patient safety, GMP quality controls, regulatory readiness, "
+                                    "supply resilience, and prudent working-capital stewardship."
+                                ),
+                            },
                             {"role": "user", "content": prompt},
                         ],
                         temperature=0.2,
@@ -506,6 +524,30 @@ class GenerativeAdvisor:
                 return None
         self.metadata["numeric_fidelity"] = "passed"
         return response
+
+    def _audit_pharma_management_alignment(self, response: str) -> Optional[str]:
+        required_domains = {
+            "patient_safety": ("patient", "safety", "pharmacovigilance"),
+            "quality_and_gmp": ("gmp", "quality", "validation", "batch"),
+            "regulatory": ("regulatory", "compliance", "inspection", "authority"),
+            "supply_continuity": ("supply", "inventory", "continuity", "shortage"),
+        }
+        lowered = response.lower()
+        covered = {
+            domain: any(keyword in lowered for keyword in keywords)
+            for domain, keywords in required_domains.items()
+        }
+        self.metadata["pharma_management_audit"] = covered
+        self.metadata["pharma_management_audit_status"] = (
+            "passed" if all(covered.values()) else "failed"
+        )
+        if all(covered.values()):
+            return response
+        self.metadata["warning"] = (
+            "Model response did not cover all pharmaceutical management practice domains; "
+            "using deterministic best-practice fallback."
+        )
+        return None
 
     def _extract_numbers(self, text: str) -> List[float]:
         matches = re.findall(r"[-+]?(?:\\d+\\.?\\d*|\\d*\\.\\d+)", text)
@@ -573,6 +615,16 @@ class GenerativeAdvisor:
 
         if forecast_note:
             lines.append(f"- {forecast_note}")
+
+        lines.extend(
+            [
+                "- Pharmaceutical management practice review:",
+                "  - Patient safety and product-quality controls should remain the first operational priority.",
+                "  - GMP readiness requires documented deviations, validated processes, and audit-ready records.",
+                "  - Regulatory planning should include proactive authority engagement and submission timelines.",
+                "  - Supply resilience should be monitored via inventory cover, critical suppliers, and shortage alerts.",
+            ]
+        )
 
         lines.append(
             "These figures indicate the profitability profile and liquidity runway based on the configured assumptions."
