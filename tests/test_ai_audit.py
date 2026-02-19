@@ -43,7 +43,10 @@ class GenerativeAdvisorAuditTest(unittest.TestCase):
         )
 
         self.assertIn("Pharmaceutical management practice review", text)
+        self.assertIn("Evidence anchors:", text)
         self.assertEqual(advisor.metadata.get("pharma_management_audit_status"), "failed")
+        audit = advisor.metadata.get("pharma_management_audit", {})
+        self.assertFalse(audit.get("passed", False))
 
     def test_model_response_covering_domains_is_accepted(self):
         params = AIParameters(enabled=True, provider="OpenAI", api_key="test-key")
@@ -61,8 +64,11 @@ class GenerativeAdvisorAuditTest(unittest.TestCase):
         )
 
         self.assertIn("patient safety", text.lower())
+        self.assertIn("Evidence anchors:", text)
         self.assertEqual(advisor.metadata.get("pharma_management_audit_status"), "passed")
         self.assertEqual(advisor.metadata.get("status"), "model_response")
+        audit = advisor.metadata.get("pharma_management_audit", {})
+        self.assertGreaterEqual(float(audit.get("aggregate_score", 0.0)), 0.75)
 
 
 if __name__ == "__main__":

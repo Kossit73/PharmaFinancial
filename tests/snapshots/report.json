@@ -22,6 +22,46 @@
             {
               "Metric": "Discounted Payback",
               "Value": NaN
+            },
+            {
+              "Metric": "Profitability Index",
+              "Value": -6.0392134245085405
+            },
+            {
+              "Metric": "Revenue CAGR",
+              "Value": 0.3870067101279189
+            },
+            {
+              "Metric": "Mid-period Revenue CAGR",
+              "Value": 0.33621601567775405
+            },
+            {
+              "Metric": "Rolling Revenue CAGR (3Y Avg)",
+              "Value": 0.37539780357192554
+            },
+            {
+              "Metric": "Weighted Average Gross Margin",
+              "Value": -4.619456326226541
+            },
+            {
+              "Metric": "Weighted Average EBITDA Margin",
+              "Value": -6.015683279767449
+            },
+            {
+              "Metric": "Weighted Average Net Margin",
+              "Value": -6.089913605902795
+            },
+            {
+              "Metric": "Weighted Average Operating Cash Flow Margin",
+              "Value": -6.1311925522778745
+            },
+            {
+              "Metric": "Average Debt Service Coverage",
+              "Value": -9.572340538530483
+            },
+            {
+              "Metric": "Investor Viability Score",
+              "Value": 23.076923076923077
             }
           ]
         }

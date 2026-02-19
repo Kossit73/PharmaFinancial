@@ -170,7 +170,22 @@ class FinancialModelTest(unittest.TestCase):
 
     def test_summary_metrics_index(self):
         summary = self.outputs.summary_metrics
-        expected = ["NPV", "IRR", "Payback Period", "Discounted Payback"]
+        expected = [
+            "NPV",
+            "IRR",
+            "Payback Period",
+            "Discounted Payback",
+            "Profitability Index",
+            "Revenue CAGR",
+            "Mid-period Revenue CAGR",
+            "Rolling Revenue CAGR (3Y Avg)",
+            "Weighted Average Gross Margin",
+            "Weighted Average EBITDA Margin",
+            "Weighted Average Net Margin",
+            "Weighted Average Operating Cash Flow Margin",
+            "Average Debt Service Coverage",
+            "Investor Viability Score",
+        ]
         self.assertEqual(summary.index, expected)
 
     def test_summary_metrics_regression(self):

@@ -1816,63 +1816,116 @@ class FinancialModel:
 
         deterministic_share = params.deterministic_share
 
-        import random
-
-        rng = random.Random()
-        if params.seed is not None:
-            rng.seed(params.seed)
+        rng = np.random.default_rng(params.seed)
         fallback_distribution = (params.distribution or "uniform").lower()
         distribution_overrides = params.distributions or {}
+        years_count = len(self.years)
 
-        def _distribution_type(variable: str) -> str:
+        distribution_configs: Dict[str, Dict[str, float | str]] = {}
+        candidate_variables = set(distribution_overrides.keys()) | set(getattr(params, "variables", []))
+
+        for variable in candidate_variables:
             override = distribution_overrides.get(variable, {})
-            dist_name = override.get("type") or override.get("distribution")
-            return str(dist_name or fallback_distribution).strip().lower()
-
-        def _distribution_bounds(variable: str, override: Mapping[str, Any]) -> tuple[float, float]:
+            dist_name = ""
+            if isinstance(override, Mapping):
+                dist_name = str(override.get("type") or override.get("distribution") or "").strip().lower()
+            distribution = dist_name or fallback_distribution
             range_override = override.get("range") if isinstance(override, Mapping) else None
-            low = override.get("low")
-            high = override.get("high")
+            low = override.get("low") if isinstance(override, Mapping) else None
+            high = override.get("high") if isinstance(override, Mapping) else None
             if low is None and high is None and isinstance(range_override, Iterable):
                 values = [float(value) for value in range_override]
                 if len(values) >= 2:
                     low, high = values[0], values[1]
             if low is None or high is None:
                 low, high = (default_low, default_high) if variable == "revenue_growth" else (-0.05, 0.05)
-            return float(low), float(high)
+            low_f = float(low)
+            high_f = float(high)
+            distribution_configs[variable] = {
+                "distribution": distribution,
+                "low": low_f,
+                "high": high_f,
+                "min_value": float(override.get("min", low_f)) if isinstance(override, Mapping) else low_f,
+                "max_value": float(override.get("max", high_f)) if isinstance(override, Mapping) else high_f,
+                "mean": float(override.get("mean", (low_f + high_f) / 2)) if isinstance(override, Mapping) else (low_f + high_f) / 2,
+                "std": float(override.get("std", (high_f - low_f) / 6 if high_f != low_f else max(abs(high_f), 1.0) / 6)) if isinstance(override, Mapping) else ((high_f - low_f) / 6 if high_f != low_f else max(abs(high_f), 1.0) / 6),
+                "mu": float(override.get("mu", 0.0)) if isinstance(override, Mapping) else 0.0,
+                "sigma": float(override.get("sigma", 0.25)) if isinstance(override, Mapping) else 0.25,
+                "offset": float(override.get("offset", 1.0)) if isinstance(override, Mapping) else 1.0,
+                "mode": float(override.get("mode", (low_f + high_f) / 2)) if isinstance(override, Mapping) else (low_f + high_f) / 2,
+            }
+
+        def _distribution_type(variable: str) -> str:
+            config = distribution_configs.get(variable)
+            if config is None:
+                return fallback_distribution
+            return str(config.get("distribution", fallback_distribution))
 
         def _sample_value(
             variable: str,
             *,
             shock: Optional[float] = None,
         ) -> float:
-            override = distribution_overrides.get(variable, {})
-            distribution = _distribution_type(variable)
-            low, high = _distribution_bounds(variable, override)
-            min_value = override.get("min", low)
-            max_value = override.get("max", high)
+            config = distribution_configs.get(variable, {})
+            distribution = str(config.get("distribution", fallback_distribution))
+            low = float(config.get("low", default_low if variable == "revenue_growth" else -0.05))
+            high = float(config.get("high", default_high if variable == "revenue_growth" else 0.05))
+            min_value = float(config.get("min_value", low))
+            max_value = float(config.get("max_value", high))
             if distribution == "normal":
-                mean = float(override.get("mean", (low + high) / 2))
-                std = float(override.get("std", (high - low) / 6 if high != low else max(abs(high), 1.0) / 6))
-                z = shock if shock is not None else rng.gauss(0.0, 1.0)
+                mean = float(config.get("mean", (low + high) / 2))
+                std = float(config.get("std", (high - low) / 6 if high != low else max(abs(high), 1.0) / 6))
+                z = float(shock) if shock is not None else float(rng.normal())
                 value = mean + std * z
             elif distribution in {"lognormal", "log-normal", "log_normal"}:
-                mu = float(override.get("mu", 0.0))
-                sigma = float(override.get("sigma", 0.25))
-                z = shock if shock is not None else rng.gauss(0.0, 1.0)
-                offset = float(override.get("offset", 1.0))
+                mu = float(config.get("mu", 0.0))
+                sigma = float(config.get("sigma", 0.25))
+                z = float(shock) if shock is not None else float(rng.normal())
+                offset = float(config.get("offset", 1.0))
                 value = math.exp(mu + sigma * z) - offset
             elif distribution in {"triangular", "triangle"}:
-                mode = float(override.get("mode", (low + high) / 2))
-                value = rng.triangular(low, high, mode)
+                mode = float(config.get("mode", (low + high) / 2))
+                value = float(rng.triangular(low, mode, high))
             else:
-                value = rng.uniform(low, high)
-            return max(min(value, float(max_value)), float(min_value))
+                value = float(rng.uniform(low, high))
+            return max(min(value, max_value), min_value)
 
-        def _build_cholesky(variable_order: List[str]) -> List[List[float]]:
+        def _sample_series(
+            variable: str,
+            count: int,
+            *,
+            shock: Optional[float] = None,
+        ) -> np.ndarray:
+            if count <= 0:
+                return np.zeros(0, dtype=float)
+            if shock is not None:
+                return np.array([_sample_value(variable, shock=shock) for _ in range(count)], dtype=float)
+            config = distribution_configs.get(variable, {})
+            distribution = str(config.get("distribution", fallback_distribution))
+            low = float(config.get("low", default_low if variable == "revenue_growth" else -0.05))
+            high = float(config.get("high", default_high if variable == "revenue_growth" else 0.05))
+            min_value = float(config.get("min_value", low))
+            max_value = float(config.get("max_value", high))
+            if distribution == "normal":
+                mean = float(config.get("mean", (low + high) / 2))
+                std = float(config.get("std", (high - low) / 6 if high != low else max(abs(high), 1.0) / 6))
+                values = rng.normal(mean, std, size=count)
+            elif distribution in {"lognormal", "log-normal", "log_normal"}:
+                mu = float(config.get("mu", 0.0))
+                sigma = float(config.get("sigma", 0.25))
+                offset = float(config.get("offset", 1.0))
+                values = rng.lognormal(mean=mu, sigma=sigma, size=count) - offset
+            elif distribution in {"triangular", "triangle"}:
+                mode = float(config.get("mode", (low + high) / 2))
+                values = rng.triangular(left=low, mode=mode, right=high, size=count)
+            else:
+                values = rng.uniform(low, high, size=count)
+            return np.clip(values.astype(float), min_value, max_value)
+
+        def _build_cholesky(variable_order: List[str]) -> np.ndarray:
             correlations = params.correlations or {}
             size = len(variable_order)
-            matrix = [[1.0 if i == j else 0.0 for j in range(size)] for i in range(size)]
+            matrix = np.eye(size, dtype=float)
             for i, var_i in enumerate(variable_order):
                 for j, var_j in enumerate(variable_order):
                     if i == j:
@@ -1886,33 +1939,23 @@ class FinancialModel:
                         corr = float(value)
                     except (TypeError, ValueError):
                         continue
-                    matrix[i][j] = max(min(corr, 1.0), -1.0)
-
-            cholesky = [[0.0 for _ in range(size)] for _ in range(size)]
-            for i in range(size):
-                for j in range(i + 1):
-                    total = sum(cholesky[i][k] * cholesky[j][k] for k in range(j))
-                    if i == j:
-                        value = matrix[i][i] - total
-                        cholesky[i][j] = value ** 0.5 if value > 0 else 0.0
-                    else:
-                        denominator = cholesky[j][j]
-                        cholesky[i][j] = (matrix[i][j] - total) / denominator if denominator else 0.0
-            return cholesky
+                    matrix[i, j] = max(min(corr, 1.0), -1.0)
+            try:
+                return np.linalg.cholesky(matrix)
+            except np.linalg.LinAlgError:
+                epsilon = 1e-8
+                return np.linalg.cholesky(matrix + np.eye(size, dtype=float) * epsilon)
 
         def _correlated_shocks(
             variable_order: List[str],
-            cholesky: List[List[float]],
+            cholesky: np.ndarray,
         ) -> Dict[str, float]:
             size = len(variable_order)
             if size == 0:
                 return {}
-            normals = [rng.gauss(0.0, 1.0) for _ in range(size)]
-            correlated = [
-                sum(cholesky[i][k] * normals[k] for k in range(i + 1))
-                for i in range(size)
-            ]
-            return dict(zip(variable_order, correlated))
+            normals = rng.normal(0.0, 1.0, size=size)
+            correlated = cholesky @ normals
+            return {variable_order[idx]: float(correlated[idx]) for idx in range(size)}
 
         metric_names = [metric.strip() for metric in params.metrics]
         allowed_metrics = {
@@ -1945,7 +1988,7 @@ class FinancialModel:
         ]
         if use_correlated and not correlation_variables:
             use_correlated = False
-        cholesky = _build_cholesky(correlation_variables) if use_correlated else []
+        cholesky = _build_cholesky(correlation_variables) if use_correlated else np.zeros((0, 0), dtype=float)
 
         for _ in range(iterations):
             scenario_roll = rng.random() * total_weight
@@ -1979,15 +2022,12 @@ class FinancialModel:
             )
             if "revenue_growth" in variable_codes:
                 if deterministic:
-                    growth_rates = np.zeros(len(self.years), dtype=float)
+                    growth_rates = np.zeros(years_count, dtype=float)
                 else:
                     revenue_shock = shocks.get("revenue_growth")
-                    growth_rates = np.array(
-                        [_sample_value("revenue_growth", shock=revenue_shock) for _ in self.years],
-                        dtype=float,
-                    )
+                    growth_rates = _sample_series("revenue_growth", years_count, shock=revenue_shock)
             else:
-                growth_rates = np.zeros(len(self.years), dtype=float)
+                growth_rates = np.zeros(years_count, dtype=float)
 
             raw_factor = 1.0
             if "raw_material_cost" in variable_codes and not deterministic:
@@ -2011,7 +2051,7 @@ class FinancialModel:
             if "other" in variable_codes and not deterministic:
                 risk_adjustment = max(0.0, 1.0 - _sample_value("other", shock=shocks.get("other")))
             risk_series = (
-                np.full(len(self.years), risk_adjustment, dtype=float)
+                np.full(years_count, risk_adjustment, dtype=float)
                 if "other" in variable_codes
                 else np.ones(len(self.years), dtype=float)
             )
