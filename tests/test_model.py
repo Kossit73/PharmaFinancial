@@ -901,6 +901,20 @@ class FinancialModelTest(unittest.TestCase):
         self.assertEqual(len(sensitivity["wage_direct"].index), 3)
 
 
+    def test_summary_includes_investor_gate_and_risk_metrics(self):
+        payload = json.loads(Path("src/pharma_financial/data/default_inputs.json").read_text())
+        payload["monte_carlo"]["iterations"] = 20
+        payload["monte_carlo"]["metrics"] = ["NPV", "IRR"]
+
+        model = FinancialModel(parse_inputs(payload))
+        summary = model.summary_metrics()
+
+        self.assertIn("Investor Gate Pass Ratio", summary.index)
+        self.assertIn("Investor Gate Status", summary.index)
+        self.assertIn("Assumption Data Quality Score", summary.index)
+        self.assertIn("Probability NPV < 0", summary.index)
+
+
 
 if __name__ == "__main__":
     unittest.main()

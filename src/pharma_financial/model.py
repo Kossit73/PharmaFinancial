@@ -219,6 +219,7 @@ class FinancialModel:
         self._risk_cost_array_cache: np.ndarray | None = None
         self._utility_arrays_cache: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
         self._labor_kpi_cache: Dict[str, float] | None = None
+        self._monte_carlo_cache: Table | None = None
 
     # ------------------------------------------------------------------ core
     def _build_inflation_factors(self, series: Iterable[Number]) -> List[float]:
@@ -265,6 +266,7 @@ class FinancialModel:
         self._risk_cost_array_cache = None
         self._utility_arrays_cache = None
         self._labor_kpi_cache = None
+        self._monte_carlo_cache = None
 
     def _inflation_array(self) -> np.ndarray:
         if self._inflation_array_cache is None:
@@ -1854,6 +1856,9 @@ class FinancialModel:
         return results
 
     def monte_carlo_simulation(self) -> Table:
+        if self._monte_carlo_cache is not None:
+            return self._monte_carlo_cache
+
         params = self.inputs.monte_carlo
         iterations = params.iterations
         bounds = [float(value) for value in params.revenue_growth_range]
@@ -2286,7 +2291,119 @@ class FinancialModel:
                 else:
                     results[metric].append(averages[metric])
 
-        return build_table(range(1, iterations + 1), results, index_name="Iteration")
+        self._monte_carlo_cache = build_table(range(1, iterations + 1), results, index_name="Iteration")
+        return self._monte_carlo_cache
+
+    def _assumption_data_quality_score(self) -> float:
+        checks: List[tuple[bool, float]] = []
+        financing = self.inputs.financing
+        checks.append((0.0 < float(financing.discount_rate) < 0.5, 15.0))
+        checks.append((0.0 <= float(financing.senior_debt_interest) < 0.5, 10.0))
+        checks.append((0.0 <= float(financing.revolver_interest) < 0.6, 8.0))
+        checks.append((0.0 <= float(financing.cash_interest) < 0.5, 8.0))
+        checks.append((float(financing.senior_debt_interest) >= float(financing.cash_interest), 8.0))
+
+        placeholder_hits = 0
+        placeholder_total = 0
+        for value in (
+            financing.discount_rate,
+            financing.senior_debt_interest,
+            financing.revolver_interest,
+            financing.cash_interest,
+            financing.dividend_payout,
+            financing.share_capital,
+        ):
+            placeholder_total += 1
+            if abs(float(value) - 1.0) < 1e-9:
+                placeholder_hits += 1
+        dep_rates = [float(row.depreciation_rate) for row in self.inputs.depreciation_schedule]
+        if dep_rates:
+            placeholder_total += len(dep_rates)
+            placeholder_hits += sum(1 for value in dep_rates if abs(value - 1.0) < 1e-9)
+        placeholder_ratio = (placeholder_hits / placeholder_total) if placeholder_total else 0.0
+        checks.append((placeholder_ratio <= 0.25, 25.0))
+
+        labor = self.inputs.labor_model
+        if labor is not None and labor.roles:
+            metadata_completion = sum(
+                1
+                for role in labor.roles
+                if role.source.strip() and role.owner.strip() and role.benchmark_year.strip()
+            ) / max(len(labor.roles), 1)
+            checks.append((metadata_completion >= 0.8, 10.0))
+
+        score = 100.0
+        for passed, penalty in checks:
+            if not passed:
+                score -= penalty
+        return max(0.0, min(score, 100.0))
+
+    def _investor_gate_metrics(
+        self,
+        *,
+        npv_value: float,
+        irr_value: float,
+        discounted_payback_years: float,
+        average_dscr: float,
+        cash_end: Sequence[Number],
+    ) -> Dict[str, float]:
+        viability_config = self.inputs.viability
+        irr_gate = viability_config.metrics.get("IRR", None)
+        dscr_gate = viability_config.metrics.get("DSCR", None)
+        payback_gate = viability_config.metrics.get("Payback", None)
+
+        irr_hurdle = max(float(self.inputs.financing.discount_rate), float(irr_gate.low if irr_gate else 0.12))
+        dscr_min = float(dscr_gate.low if dscr_gate else 1.2)
+        payback_max = float(payback_gate.high if payback_gate else 8.0)
+        liquidity_ok = not any(float(value) < 0.0 for value in cash_end)
+
+        gates = [
+            npv_value > 0.0,
+            _is_finite(irr_value) and irr_value >= irr_hurdle,
+            _is_finite(average_dscr) and average_dscr >= dscr_min,
+            _is_finite(discounted_payback_years) and discounted_payback_years <= payback_max,
+            liquidity_ok,
+        ]
+        passed = sum(1 for flag in gates if flag)
+        ratio = passed / len(gates) if gates else float("nan")
+        return {
+            "Investor Gate Pass Count": float(passed),
+            "Investor Gate Pass Ratio": ratio,
+            "Investor Gate Status": 1.0 if passed == len(gates) else 0.0,
+            "IRR Hurdle": irr_hurdle,
+        }
+
+    def _investor_risk_metrics(self, irr_hurdle: float) -> Dict[str, float]:
+        monte = self.monte_carlo_simulation()
+        if not monte.index:
+            return {}
+
+        def _clean(values: Sequence[Number]) -> List[float]:
+            cleaned: List[float] = []
+            for value in values:
+                numeric = float(value)
+                if _is_finite(numeric):
+                    cleaned.append(numeric)
+            return cleaned
+
+        result: Dict[str, float] = {}
+        if "NPV" in monte.data:
+            npv_values = _clean(monte.column("NPV"))
+            if npv_values:
+                npv_array = np.array(npv_values, dtype=float)
+                result["Probability NPV < 0"] = float(np.mean(npv_array < 0.0))
+                result["NPV P10"] = float(np.percentile(npv_array, 10))
+                result["NPV P50"] = float(np.percentile(npv_array, 50))
+                result["NPV P90"] = float(np.percentile(npv_array, 90))
+        if "IRR" in monte.data:
+            irr_values = _clean(monte.column("IRR"))
+            if irr_values:
+                irr_array = np.array(irr_values, dtype=float)
+                result["Probability IRR < Hurdle"] = float(np.mean(irr_array < irr_hurdle))
+                result["IRR P10"] = float(np.percentile(irr_array, 10))
+                result["IRR P50"] = float(np.percentile(irr_array, 50))
+                result["IRR P90"] = float(np.percentile(irr_array, 90))
+        return result
 
     def summary_metrics(self) -> Table:
         if self._summary_metrics_cache is not None:
@@ -2430,6 +2547,40 @@ class FinancialModel:
             if label in labor_kpis:
                 metric_names.append(label)
                 metric_values.append(float(labor_kpis[label]))
+
+        cash_end = cash_flow_table.column(CASH_FLOW_END_COLUMN)
+        gate_metrics = self._investor_gate_metrics(
+            npv_value=npv_value,
+            irr_value=irr_value,
+            discounted_payback_years=discounted_payback_years,
+            average_dscr=average_dscr,
+            cash_end=cash_end,
+        )
+        quality_score = self._assumption_data_quality_score()
+        risk_metrics = self._investor_risk_metrics(gate_metrics.get("IRR Hurdle", float(self.inputs.financing.discount_rate)))
+
+        for label, value in gate_metrics.items():
+            if label == "IRR Hurdle":
+                continue
+            metric_names.append(label)
+            metric_values.append(float(value))
+
+        metric_names.append("Assumption Data Quality Score")
+        metric_values.append(float(quality_score))
+
+        for label in (
+            "Probability NPV < 0",
+            "Probability IRR < Hurdle",
+            "NPV P10",
+            "NPV P50",
+            "NPV P90",
+            "IRR P10",
+            "IRR P50",
+            "IRR P90",
+        ):
+            if label in risk_metrics:
+                metric_names.append(label)
+                metric_values.append(float(risk_metrics[label]))
 
         table = build_table(
             metric_names,
