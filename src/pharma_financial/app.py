@@ -29,6 +29,7 @@ from .debt import amortise_entries
 from .inputs import DebtEntry, ModelInputs, parse_inputs
 from .model import FinancialModel, FinancialOutputs
 from .report import collect_report_sections, generate_report
+from .table import Table
 
 try:  # pragma: no cover - optional dependency for charting
     import plotly.express as px
