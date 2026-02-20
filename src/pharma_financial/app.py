@@ -2485,6 +2485,9 @@ def _ensure_dataframe(data: object) -> object:
 
     frame = _normalise_frame_columns(frame)
     for column in frame.columns:
+        if pd.api.types.is_extension_array_dtype(frame[column].dtype):
+            frame[column] = frame[column].astype(object).where(frame[column].notna(), None)
+
         if pd.api.types.is_float_dtype(frame[column]):
             frame[column] = frame[column].map(
                 lambda value: value
@@ -2492,8 +2495,10 @@ def _ensure_dataframe(data: object) -> object:
                 else None
             )
             continue
+
         frame[column] = frame[column].map(_streamlit_safe_value)
-    return frame
+
+    return frame.astype(object)
 
 
 def _mapping_to_rows(mapping: Mapping[str, float], key_label: str, value_label: str) -> list[dict]:
