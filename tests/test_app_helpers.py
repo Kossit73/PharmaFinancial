@@ -396,6 +396,64 @@ class RerunHelperTest(unittest.TestCase):
         self.assertIsInstance(workbook, (bytes, bytearray))
         self.assertGreater(len(workbook), 0)
 
+    def test_labor_model_payload_helpers_roundtrip(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+        )
+        years = payload["years"]
+        payload.setdefault("labor", {})["model_v1"] = {
+            "roles": [
+                {
+                    "name": "Operators",
+                    "labor_type": "direct",
+                    "behavior": "variable",
+                    "headcount": 5,
+                    "salary": 1.0,
+                    "planned_headcount": [5 for _ in years],
+                    "benefits_rate": [0.1 for _ in years],
+                    "overtime_rate": [0.05 for _ in years],
+                    "burden_rate": [0.2 for _ in years],
+                    "productivity_target": [100000 for _ in years],
+                    "source": "HR",
+                    "owner": "Ops",
+                    "benchmark_year": "2024",
+                }
+            ],
+            "settings": {
+                "shifts": [1 for _ in years],
+                "utilization": [0.85 for _ in years],
+                "operating_hours_per_shift": [2080 for _ in years],
+                "absenteeism": [0.03 for _ in years],
+                "overtime_cap": [0.1 for _ in years],
+                "hiring_delay_quarters": [1 for _ in years],
+                "contractor_hours": [0 for _ in years],
+                "contractor_rate": [0 for _ in years],
+                "transition_training_cost": [0 for _ in years],
+                "supervision_increment": [0 for _ in years],
+                "shift_allowance": [0 for _ in years],
+                "wage_escalation_direct": [0.03 for _ in years],
+                "wage_escalation_indirect": [0.02 for _ in years],
+            },
+        }
+
+        role_rows = self.app._payload_to_labor_model_rows(payload)
+        settings_rows = self.app._payload_to_labor_model_settings_rows(payload)
+        self.assertTrue(role_rows)
+        self.assertEqual(len(settings_rows), len(years))
+
+        role_rows[0]["Name"] = "Operators Revised"
+        role_rows[0]["Planned Headcount"] = "5, 6, 7"
+        settings_rows[0]["Shifts"] = 2.0
+
+        updated_payload = json.loads(json.dumps(payload))
+        self.app._labor_model_rows_to_payload(role_rows, updated_payload)
+        self.app._labor_model_settings_rows_to_payload(settings_rows, updated_payload)
+
+        model_v1 = updated_payload["labor"]["model_v1"]
+        self.assertEqual(model_v1["roles"][0]["name"], "Operators Revised")
+        self.assertEqual(model_v1["roles"][0]["planned_headcount"][1], 6.0)
+        self.assertEqual(model_v1["settings"]["shifts"][0], 2.0)
+
 
 class UploadLoaderTests(unittest.TestCase):
     def setUp(self):
