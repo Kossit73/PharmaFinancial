@@ -29,6 +29,7 @@ from .debt import amortise_entries
 from .inputs import DebtEntry, ModelInputs, parse_inputs
 from .model import FinancialModel, FinancialOutputs
 from .report import collect_report_sections, generate_report
+from .table import Table
 
 try:  # pragma: no cover - optional dependency for charting
     import plotly.express as px
@@ -1083,7 +1084,7 @@ def _render_inputs_tab(
         }
         for name, params in inputs.unit_costs.items()
     ]
-    st.dataframe(pd.DataFrame(assumption_rows), use_container_width=True)
+    st.dataframe(_ensure_dataframe(assumption_rows), use_container_width=True)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -1116,8 +1117,7 @@ def _render_inputs_tab(
                 "Operating Hours": hours,
             }
         )
-    utility_df = pd.DataFrame(utility_rows)
-    st.dataframe(utility_df, use_container_width=True)
+    st.dataframe(_ensure_dataframe(utility_rows), use_container_width=True)
 
 
 def _render_dashboard_tab(
@@ -2469,6 +2469,11 @@ def _ensure_dataframe(data: object) -> object:
             if isinstance(value, (dict, list, tuple, set))
             else value
         )
+
+    for column in frame.columns:
+        series = frame[column]
+        if pd.api.types.is_extension_array_dtype(series.dtype):
+            frame[column] = series.astype(object).where(series.notna(), None)
     return frame
 
 
