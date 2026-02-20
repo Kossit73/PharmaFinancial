@@ -2436,6 +2436,26 @@ def _normalise_frame_columns(frame: "pd.DataFrame") -> "pd.DataFrame":
     frame.columns = columns
     return frame
 
+
+def _streamlit_safe_value(value: object) -> object:
+    """Return a value that Streamlit can serialize safely.
+
+    Streamlit's Arrow transport can fail to decode payloads containing
+    non-finite floats (``nan``/``inf``), raw bytes, or nested container values
+    embedded inside DataFrame object columns. Normalising these values before
+    rendering keeps client-side decoding stable.
+    """
+
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, (dict, list, tuple, set)):
+        return json.dumps(value, sort_keys=True)
+    return value
+
 def _ensure_dataframe(data: object) -> object:
     if pd is None:
         if isinstance(data, Table):
@@ -2464,16 +2484,21 @@ def _ensure_dataframe(data: object) -> object:
         frame = pd.DataFrame([{"Value": data}])
 
     frame = _normalise_frame_columns(frame)
-    object_columns = [
-        column for column in frame.columns if pd.api.types.is_object_dtype(frame[column])
-    ]
-    for column in object_columns:
-        frame[column] = frame[column].map(
-            lambda value: json.dumps(value, sort_keys=True)
-            if isinstance(value, (dict, list, tuple, set))
-            else value
-        )
-    return frame
+    for column in frame.columns:
+        if pd.api.types.is_extension_array_dtype(frame[column].dtype):
+            frame[column] = frame[column].astype(object).where(frame[column].notna(), None)
+
+        if pd.api.types.is_float_dtype(frame[column]):
+            frame[column] = frame[column].map(
+                lambda value: value
+                if not isinstance(value, float) or math.isfinite(value)
+                else None
+            )
+            continue
+
+        frame[column] = frame[column].map(_streamlit_safe_value)
+
+    return frame.astype(object)
 
 
 def _mapping_to_rows(mapping: Mapping[str, float], key_label: str, value_label: str) -> list[dict]:
