@@ -840,6 +840,67 @@ class FinancialModelTest(unittest.TestCase):
                 final_entry = asset_entries[configured_life - 1]
                 self.assertAlmostEqual(float(final_entry["net_book_value"]), 0.0, places=5)
 
+    def test_labor_model_v1_generates_labor_kpis(self):
+        payload = json.loads(Path("src/pharma_financial/data/default_inputs.json").read_text())
+        payload["labor"]["model_v1"] = {
+            "roles": [
+                {
+                    "name": "Operators",
+                    "labor_type": "direct",
+                    "behavior": "variable",
+                    "headcount": 4,
+                    "salary": 0.5,
+                    "planned_headcount": [4 for _ in payload["years"]],
+                    "benefits_rate": 0.1,
+                    "overtime_rate": 0.05,
+                    "burden_rate": 0.15,
+                    "productivity_target": [100000 for _ in payload["years"]],
+                },
+                {
+                    "name": "Admin",
+                    "labor_type": "indirect",
+                    "behavior": "fixed",
+                    "headcount": 2,
+                    "salary": 0.4,
+                    "planned_headcount": [2 for _ in payload["years"]],
+                    "benefits_rate": 0.12,
+                    "overtime_rate": 0.0,
+                    "burden_rate": 0.1,
+                    "productivity_target": [1 for _ in payload["years"]],
+                },
+            ],
+            "settings": {
+                "shifts": [1 for _ in payload["years"]],
+                "utilization": [0.85 for _ in payload["years"]],
+                "operating_hours_per_shift": [2080 for _ in payload["years"]],
+                "absenteeism": [0.03 for _ in payload["years"]],
+                "overtime_cap": [0.1 for _ in payload["years"]],
+                "hiring_delay_quarters": [1 for _ in payload["years"]],
+                "contractor_hours": [0 for _ in payload["years"]],
+                "contractor_rate": [0 for _ in payload["years"]],
+                "transition_training_cost": [0 for _ in payload["years"]],
+                "supervision_increment": [0 for _ in payload["years"]],
+                "shift_allowance": [0 for _ in payload["years"]],
+                "wage_escalation_direct": [0.03 for _ in payload["years"]],
+                "wage_escalation_indirect": [0.02 for _ in payload["years"]],
+            },
+        }
+        payload["sensitivity"]["variables"] = {"wage_direct": [0.9, 1.0, 1.1]}
+
+        inputs = parse_inputs(payload)
+        self.assertIsNotNone(inputs.labor_model)
+        model = FinancialModel(inputs)
+        summary = model.summary_metrics()
+
+        self.assertIn("Average Labor Cost per Unit", summary.index)
+        self.assertIn("Average Units per Labor Hour", summary.index)
+        self.assertIn("Average Fixed Labor Share", summary.index)
+
+        sensitivity = model.sensitivity_analysis()
+        self.assertIn("wage_direct", sensitivity)
+        self.assertEqual(len(sensitivity["wage_direct"].index), 3)
+
+
 
 if __name__ == "__main__":
     unittest.main()
