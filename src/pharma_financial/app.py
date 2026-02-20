@@ -705,25 +705,42 @@ def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:
         inventory_rows = synced_inventory
     _inventory_rows_to_payload(inventory_rows, payload)
 
-    direct_rows = st.session_state.setdefault(
-        "direct_labor_rows",
-        _mapping_to_rows(payload.get("labor", {}).get("direct", {}), "Role", "Annual Cost"),
+    labor_mode = st.session_state.setdefault(
+        "labor_mode",
+        _payload_labor_mode(payload),
     )
-    synced_direct = _sync_labor_rows_from_widgets("direct_labor_rows", direct_rows)
-    if synced_direct != direct_rows:
-        st.session_state["direct_labor_rows"] = synced_direct
-        direct_rows = synced_direct
-    _labor_rows_to_payload("direct", direct_rows, payload)
+    if labor_mode == "Basic":
+        direct_rows = st.session_state.setdefault(
+            "direct_labor_rows",
+            _mapping_to_rows(payload.get("labor", {}).get("direct", {}), "Role", "Annual Cost"),
+        )
+        synced_direct = _sync_labor_rows_from_widgets("direct_labor_rows", direct_rows)
+        if synced_direct != direct_rows:
+            st.session_state["direct_labor_rows"] = synced_direct
+            direct_rows = synced_direct
+        _labor_rows_to_payload("direct", direct_rows, payload)
 
-    indirect_rows = st.session_state.setdefault(
-        "indirect_labor_rows",
-        _mapping_to_rows(payload.get("labor", {}).get("indirect", {}), "Role", "Annual Cost"),
-    )
-    synced_indirect = _sync_labor_rows_from_widgets("indirect_labor_rows", indirect_rows)
-    if synced_indirect != indirect_rows:
-        st.session_state["indirect_labor_rows"] = synced_indirect
-        indirect_rows = synced_indirect
-    _labor_rows_to_payload("indirect", indirect_rows, payload)
+        indirect_rows = st.session_state.setdefault(
+            "indirect_labor_rows",
+            _mapping_to_rows(payload.get("labor", {}).get("indirect", {}), "Role", "Annual Cost"),
+        )
+        synced_indirect = _sync_labor_rows_from_widgets("indirect_labor_rows", indirect_rows)
+        if synced_indirect != indirect_rows:
+            st.session_state["indirect_labor_rows"] = synced_indirect
+            indirect_rows = synced_indirect
+        _labor_rows_to_payload("indirect", indirect_rows, payload)
+    else:
+        _labor_model_rows_to_payload(
+            st.session_state.setdefault("labor_model_rows", _payload_to_labor_model_rows(payload)),
+            payload,
+        )
+        _labor_model_settings_rows_to_payload(
+            st.session_state.setdefault(
+                "labor_model_settings_rows",
+                _payload_to_labor_model_settings_rows(payload),
+            ),
+            payload,
+        )
 
     cost_rows = st.session_state.setdefault(
         "fixed_variable_rows", _payload_to_fixed_variable_rows(payload)
@@ -1333,11 +1350,8 @@ def _render_inputs_tab(
     st.markdown("### Distributors Commission Input Table")
     _render_distributor_commission(payload)
 
-    st.markdown("### Direct Labour Structure")
-    _render_labor_section("direct", "direct_labor_rows", payload)
-
-    st.markdown("### Indirect Labour Structure")
-    _render_labor_section("indirect", "indirect_labor_rows", payload)
+    st.markdown("### Labour Structure")
+    _render_labor_mode_section(payload)
 
     st.markdown("### Fixed & Variable Costs Input Table")
     _render_fixed_variable_costs(payload)
@@ -1412,6 +1426,10 @@ def _render_dashboard_tab(
         "Profitability Index",
         "Weighted Average EBITDA Margin",
         "Investor Viability Score",
+        "Investor Gate Pass Ratio",
+        "Investor Gate Status",
+        "Average Labor Cost per Unit",
+        "Average Units per Labor Hour",
     ]
     filtered_pairs = [pair for pair in metric_pairs if pair[0] in preferred_metrics]
     if not filtered_pairs:
@@ -3237,6 +3255,223 @@ def _render_labor_section(section: str, state_key: str, payload: dict) -> None:
         for row in st.session_state.get(state_key, [])
         if row.get("Role")
     }
+
+
+def _payload_labor_mode(payload: Mapping) -> str:
+    labor = payload.get("labor", {}) if isinstance(payload, Mapping) else {}
+    if not isinstance(labor, Mapping):
+        return "Basic"
+    mode = str(labor.get("mode", "")).strip().lower()
+    if mode == "advanced":
+        return "Advanced"
+    model_v1 = labor.get("model_v1")
+    if isinstance(model_v1, Mapping) and model_v1.get("roles"):
+        return "Advanced"
+    return "Basic"
+
+
+def _payload_to_labor_model_rows(payload: Mapping) -> list[dict]:
+    labor = payload.get("labor", {}) if isinstance(payload, Mapping) else {}
+    model = labor.get("model_v1", {}) if isinstance(labor, Mapping) else {}
+    roles = model.get("roles", []) if isinstance(model, Mapping) else []
+    rows: list[dict] = []
+    if isinstance(roles, Sequence):
+        for role in roles:
+            if not isinstance(role, Mapping):
+                continue
+            rows.append(
+                {
+                    "Name": str(role.get("name", "") or "").strip(),
+                    "Labor Type": str(role.get("labor_type", "direct") or "direct"),
+                    "Behavior": str(role.get("behavior", "fixed") or "fixed"),
+                    "Headcount": float(role.get("headcount", 0.0) or 0.0),
+                    "Salary": float(role.get("salary", 0.0) or 0.0),
+                    "Planned Headcount": _format_float_list(role.get("planned_headcount", [])),
+                    "Benefits Rate": _format_float_list(role.get("benefits_rate", [])),
+                    "Overtime Rate": _format_float_list(role.get("overtime_rate", [])),
+                    "Burden Rate": _format_float_list(role.get("burden_rate", [])),
+                    "Productivity Target": _format_float_list(role.get("productivity_target", [])),
+                    "Source": str(role.get("source", "") or ""),
+                    "Owner": str(role.get("owner", "") or ""),
+                    "Benchmark Year": str(role.get("benchmark_year", "") or ""),
+                }
+            )
+    return rows
+
+
+def _payload_to_labor_model_settings_rows(payload: Mapping) -> list[dict]:
+    years = list(payload.get("years", [])) if isinstance(payload, Mapping) else []
+    labor = payload.get("labor", {}) if isinstance(payload, Mapping) else {}
+    model = labor.get("model_v1", {}) if isinstance(labor, Mapping) else {}
+    settings = model.get("settings", {}) if isinstance(model, Mapping) else {}
+
+    def _series(name: str, default: float = 0.0) -> list[float]:
+        values = settings.get(name, default) if isinstance(settings, Mapping) else default
+        if isinstance(values, Sequence) and not isinstance(values, (str, bytes)):
+            seq = [float(value) for value in values]
+        else:
+            seq = [float(values)]
+        return _resize_sequence(seq, len(years), fill=default)
+
+    if not years:
+        return []
+    shifts = _series("shifts", 1.0)
+    utilization = _series("utilization", 1.0)
+    operating_hours = _series("operating_hours_per_shift", 2080.0)
+    absenteeism = _series("absenteeism", 0.0)
+    overtime_cap = _series("overtime_cap", 0.0)
+    hiring_delay = _series("hiring_delay_quarters", 0.0)
+    contractor_hours = _series("contractor_hours", 0.0)
+    contractor_rate = _series("contractor_rate", 0.0)
+    transition_training_cost = _series("transition_training_cost", 0.0)
+    supervision_increment = _series("supervision_increment", 0.0)
+    shift_allowance = _series("shift_allowance", 0.0)
+    wage_direct = _series("wage_escalation_direct", 0.0)
+    wage_indirect = _series("wage_escalation_indirect", 0.0)
+
+    rows: list[dict] = []
+    for idx, year in enumerate(years):
+        rows.append(
+            {
+                "Year": int(year),
+                "Shifts": float(shifts[idx]),
+                "Utilization": float(utilization[idx]),
+                "Operating Hours / Shift": float(operating_hours[idx]),
+                "Absenteeism": float(absenteeism[idx]),
+                "Overtime Cap": float(overtime_cap[idx]),
+                "Hiring Delay Quarters": int(round(hiring_delay[idx])),
+                "Contractor Hours": float(contractor_hours[idx]),
+                "Contractor Rate": float(contractor_rate[idx]),
+                "Transition Training Cost": float(transition_training_cost[idx]),
+                "Supervision Increment": float(supervision_increment[idx]),
+                "Shift Allowance": float(shift_allowance[idx]),
+                "Wage Escalation Direct": float(wage_direct[idx]),
+                "Wage Escalation Indirect": float(wage_indirect[idx]),
+            }
+        )
+    return rows
+
+
+def _labor_model_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
+    labor = payload.setdefault("labor", {})
+    if not isinstance(labor, dict):
+        labor = {}
+        payload["labor"] = labor
+    model = labor.setdefault("model_v1", {})
+    if not isinstance(model, dict):
+        model = {}
+        labor["model_v1"] = model
+
+    role_rows: list[dict] = []
+    for row in rows:
+        name = str(row.get("Name", "") or "").strip()
+        if not name:
+            continue
+        role_rows.append(
+            {
+                "name": name,
+                "labor_type": str(row.get("Labor Type", "direct") or "direct").strip().lower(),
+                "behavior": str(row.get("Behavior", "fixed") or "fixed").strip().lower(),
+                "headcount": float(row.get("Headcount", 0.0) or 0.0),
+                "salary": float(row.get("Salary", 0.0) or 0.0),
+                "planned_headcount": _parse_float_list(str(row.get("Planned Headcount", "") or "")),
+                "benefits_rate": _parse_float_list(str(row.get("Benefits Rate", "") or "")),
+                "overtime_rate": _parse_float_list(str(row.get("Overtime Rate", "") or "")),
+                "burden_rate": _parse_float_list(str(row.get("Burden Rate", "") or "")),
+                "productivity_target": _parse_float_list(str(row.get("Productivity Target", "") or "")),
+                "source": str(row.get("Source", "") or ""),
+                "owner": str(row.get("Owner", "") or ""),
+                "benchmark_year": str(row.get("Benchmark Year", "") or ""),
+            }
+        )
+    model["roles"] = role_rows
+
+
+def _labor_model_settings_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
+    labor = payload.setdefault("labor", {})
+    if not isinstance(labor, dict):
+        labor = {}
+        payload["labor"] = labor
+    model = labor.setdefault("model_v1", {})
+    if not isinstance(model, dict):
+        model = {}
+        labor["model_v1"] = model
+    settings = model.setdefault("settings", {})
+    if not isinstance(settings, dict):
+        settings = {}
+        model["settings"] = settings
+
+    keys = [
+        ("shifts", "Shifts"),
+        ("utilization", "Utilization"),
+        ("operating_hours_per_shift", "Operating Hours / Shift"),
+        ("absenteeism", "Absenteeism"),
+        ("overtime_cap", "Overtime Cap"),
+        ("hiring_delay_quarters", "Hiring Delay Quarters"),
+        ("contractor_hours", "Contractor Hours"),
+        ("contractor_rate", "Contractor Rate"),
+        ("transition_training_cost", "Transition Training Cost"),
+        ("supervision_increment", "Supervision Increment"),
+        ("shift_allowance", "Shift Allowance"),
+        ("wage_escalation_direct", "Wage Escalation Direct"),
+        ("wage_escalation_indirect", "Wage Escalation Indirect"),
+    ]
+
+    for payload_key, column in keys:
+        if payload_key == "hiring_delay_quarters":
+            settings[payload_key] = [max(int(float(row.get(column, 0.0) or 0.0)), 0) for row in rows]
+        else:
+            settings[payload_key] = [float(row.get(column, 0.0) or 0.0) for row in rows]
+
+
+def _render_labor_mode_section(payload: dict) -> None:
+    labor_mode = st.radio(
+        "Labor Modeling Mode",
+        ["Basic", "Advanced"],
+        horizontal=True,
+        key="labor_mode",
+        help="Basic preserves legacy annual direct/indirect labor totals. Advanced enables role-level labor.model_v1 inputs.",
+    )
+
+    labor = payload.setdefault("labor", {})
+    if not isinstance(labor, dict):
+        labor = {}
+        payload["labor"] = labor
+    labor["mode"] = labor_mode.lower()
+
+    if labor_mode == "Basic":
+        st.markdown("### Direct Labour Structure")
+        _render_labor_section("direct", "direct_labor_rows", payload)
+        st.markdown("### Indirect Labour Structure")
+        _render_labor_section("indirect", "indirect_labor_rows", payload)
+        return
+
+    st.caption("Advanced mode writes `labor.model_v1.roles` and `labor.model_v1.settings` for the labor v1 engine.")
+    role_rows = st.session_state.setdefault("labor_model_rows", _payload_to_labor_model_rows(payload))
+    edited_roles = st.data_editor(
+        role_rows,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="labor_model_roles_editor",
+    )
+    if isinstance(edited_roles, list):
+        st.session_state["labor_model_rows"] = edited_roles
+        role_rows = edited_roles
+    _labor_model_rows_to_payload(role_rows, payload)
+
+    settings_rows = st.session_state.setdefault(
+        "labor_model_settings_rows", _payload_to_labor_model_settings_rows(payload)
+    )
+    edited_settings = st.data_editor(
+        settings_rows,
+        num_rows="fixed",
+        use_container_width=True,
+        key="labor_model_settings_editor",
+    )
+    if isinstance(edited_settings, list):
+        st.session_state["labor_model_settings_rows"] = edited_settings
+        settings_rows = edited_settings
+    _labor_model_settings_rows_to_payload(settings_rows, payload)
 
 
 def _render_fixed_variable_costs(payload: dict) -> None:
@@ -6673,6 +6908,7 @@ def _collect_asset_type_options(payload: Mapping, rows: Sequence[Mapping]) -> li
 
 def _initialise_session_payload(payload: dict) -> None:
     st.session_state["input_payload"] = payload
+    st.session_state["labor_mode"] = _payload_labor_mode(payload)
     st.session_state["core_assumption_rows"] = _payload_to_core_rows(payload)
     st.session_state["direct_labor_rows"] = _mapping_to_rows(
         payload.get("labor", {}).get("direct", {}),
@@ -6684,6 +6920,8 @@ def _initialise_session_payload(payload: dict) -> None:
         "Role",
         "Annual Cost",
     )
+    st.session_state["labor_model_rows"] = _payload_to_labor_model_rows(payload)
+    st.session_state["labor_model_settings_rows"] = _payload_to_labor_model_settings_rows(payload)
     st.session_state["utility_entries"] = _payload_to_utility_entries(payload)
     st.session_state["receivable_rows"] = _payload_to_receivable_rows(payload)
     st.session_state["break_even_rows"] = _payload_to_break_even_rows(payload)

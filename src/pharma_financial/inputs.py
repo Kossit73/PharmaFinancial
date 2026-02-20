@@ -201,6 +201,41 @@ class ViabilityParameters:
 
 
 @dataclass
+class LaborRoleParameters:
+    name: str
+    labor_type: str
+    behavior: str
+    base_headcount: float
+    base_salary: float
+    planned_headcount: List[float]
+    benefits_rate: List[float]
+    overtime_rate: List[float]
+    burden_rate: List[float]
+    productivity_target: List[float]
+    source: str = ""
+    owner: str = ""
+    benchmark_year: str = ""
+
+
+@dataclass
+class LaborModelParameters:
+    roles: List[LaborRoleParameters]
+    shifts: List[float]
+    utilization: List[float]
+    operating_hours_per_shift: List[float]
+    absenteeism: List[float]
+    overtime_cap: List[float]
+    hiring_delay_quarters: List[int]
+    contractor_hours: List[float]
+    contractor_rate: List[float]
+    transition_training_cost: List[float]
+    supervision_increment: List[float]
+    shift_allowance: List[float]
+    wage_escalation_direct: List[float]
+    wage_escalation_indirect: List[float]
+
+
+@dataclass
 class ModelInputs:
     years: List[int]
     production_estimate: Mapping[str, List[float]]
@@ -217,6 +252,7 @@ class ModelInputs:
     utility_schedule: UtilitySchedule
     direct_labor_costs: Mapping[str, float]
     indirect_labor_costs: Mapping[str, float]
+    labor_model: Optional[LaborModelParameters]
     depreciation_schedule: List[DepreciationRow]
     distributor_commission: List[DistributorCommissionRow]
     capital_expenditure: Mapping[str, float]
@@ -792,6 +828,75 @@ def _coerce_int_schedule(values: Iterable[float], length: int) -> List[int]:
     return [int(round(value)) for value in _coerce_schedule(values, length)]
 
 
+def _parse_labor_model(data: object, years: Sequence[int]) -> Optional[LaborModelParameters]:
+    if not isinstance(data, Mapping):
+        return None
+
+    length = len(years)
+    model_data = data.get("model_v1")
+    if not isinstance(model_data, Mapping):
+        return None
+
+    def _series(mapping: Mapping[str, object], key: str, default: float) -> List[float]:
+        raw = mapping.get(key, default)
+        if isinstance(raw, Iterable) and not isinstance(raw, (str, bytes, Mapping)):
+            values = [float(value) for value in raw]
+        else:
+            values = [float(raw)]
+        return _coerce_schedule(values, length)
+
+    roles: List[LaborRoleParameters] = []
+    raw_roles = model_data.get("roles", [])
+    if isinstance(raw_roles, Iterable) and not isinstance(raw_roles, (str, bytes, Mapping)):
+        for item in raw_roles:
+            if not isinstance(item, Mapping):
+                continue
+            name = str(item.get("name", "")).strip()
+            if not name:
+                continue
+            labor_type = str(item.get("labor_type", "direct")).strip().lower() or "direct"
+            behavior = str(item.get("behavior", "fixed")).strip().lower() or "fixed"
+            planned_headcount = _series(item, "planned_headcount", float(item.get("headcount", 0.0) or 0.0))
+            roles.append(
+                LaborRoleParameters(
+                    name=name,
+                    labor_type=labor_type,
+                    behavior=behavior,
+                    base_headcount=float(item.get("headcount", 0.0) or 0.0),
+                    base_salary=float(item.get("salary", 0.0) or 0.0),
+                    planned_headcount=planned_headcount,
+                    benefits_rate=_series(item, "benefits_rate", 0.0),
+                    overtime_rate=_series(item, "overtime_rate", 0.0),
+                    burden_rate=_series(item, "burden_rate", 0.0),
+                    productivity_target=_series(item, "productivity_target", 1.0),
+                    source=str(item.get("source", "") or ""),
+                    owner=str(item.get("owner", "") or ""),
+                    benchmark_year=str(item.get("benchmark_year", "") or ""),
+                )
+            )
+
+    if not roles:
+        return None
+
+    settings = model_data.get("settings", {}) if isinstance(model_data.get("settings"), Mapping) else {}
+    return LaborModelParameters(
+        roles=roles,
+        shifts=_series(settings, "shifts", 1.0),
+        utilization=_series(settings, "utilization", 1.0),
+        operating_hours_per_shift=_series(settings, "operating_hours_per_shift", 2080.0),
+        absenteeism=_series(settings, "absenteeism", 0.0),
+        overtime_cap=_series(settings, "overtime_cap", 0.0),
+        hiring_delay_quarters=_coerce_int_schedule(_series(settings, "hiring_delay_quarters", 0.0), length),
+        contractor_hours=_series(settings, "contractor_hours", 0.0),
+        contractor_rate=_series(settings, "contractor_rate", 0.0),
+        transition_training_cost=_series(settings, "transition_training_cost", 0.0),
+        supervision_increment=_series(settings, "supervision_increment", 0.0),
+        shift_allowance=_series(settings, "shift_allowance", 0.0),
+        wage_escalation_direct=_series(settings, "wage_escalation_direct", 0.0),
+        wage_escalation_indirect=_series(settings, "wage_escalation_indirect", 0.0),
+    )
+
+
 def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
     """Parse a mapping of raw inputs into :class:`ModelInputs`."""
     years = [int(year) for year in raw["years"]]
@@ -815,6 +920,8 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
     sensitivity = _parse_sensitivity(raw["sensitivity"]["variables"])
 
     utility_source = raw["utility_costs"]
+    labor_mapping = raw.get("labor", {}) if isinstance(raw.get("labor", {}), Mapping) else {}
+    labor_model = _parse_labor_model(labor_mapping, years)
     utility_rows = list(utility_source.get("years", [])) if isinstance(utility_source, Mapping) else []
 
     if utility_rows:
@@ -1054,8 +1161,9 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         inflation_series=inflation_series,
         raw_material_cost_per_unit=float(raw["raw_material_cost"]["per_unit"]),
         utility_schedule=utility,
-        direct_labor_costs=raw["labor"]["direct"],
-        indirect_labor_costs=raw["labor"]["indirect"],
+        direct_labor_costs=labor_mapping.get("direct", {}),
+        indirect_labor_costs=labor_mapping.get("indirect", {}),
+        labor_model=labor_model,
         depreciation_schedule=depreciation_schedule,
         distributor_commission=commission_rows,
         capital_expenditure=raw["capital_expenditure"],

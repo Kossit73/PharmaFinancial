@@ -10,7 +10,14 @@ import numpy as np
 
 from .ai import AIInsights, GenerativeAdvisor, MachineLearningAdvisor
 from .debt import amortise_entries
-from .inputs import BreakEvenRow, DebtEntry, ModelInputs, ProductParameters
+from .inputs import (
+    BreakEvenRow,
+    DebtEntry,
+    LaborModelParameters,
+    LaborRoleParameters,
+    ModelInputs,
+    ProductParameters,
+)
 from .table import Table, build_table
 
 
@@ -211,6 +218,8 @@ class FinancialModel:
         self._risk_revenue_array_cache: np.ndarray | None = None
         self._risk_cost_array_cache: np.ndarray | None = None
         self._utility_arrays_cache: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
+        self._labor_kpi_cache: Dict[str, float] | None = None
+        self._monte_carlo_cache: Table | None = None
 
     # ------------------------------------------------------------------ core
     def _build_inflation_factors(self, series: Iterable[Number]) -> List[float]:
@@ -256,6 +265,8 @@ class FinancialModel:
         self._risk_revenue_array_cache = None
         self._risk_cost_array_cache = None
         self._utility_arrays_cache = None
+        self._labor_kpi_cache = None
+        self._monte_carlo_cache = None
 
     def _inflation_array(self) -> np.ndarray:
         if self._inflation_array_cache is None:
@@ -465,6 +476,98 @@ class FinancialModel:
         self._revenue_schedule_cache = table
         return table
 
+    def _labor_headcount_for_role(
+        self,
+        role: LaborRoleParameters,
+        labor: LaborModelParameters,
+        total_units: np.ndarray,
+        year_index: int,
+    ) -> float:
+        planned = float(role.planned_headcount[year_index])
+        if role.behavior != "variable":
+            return max(planned, 0.0)
+
+        productivity = max(float(role.productivity_target[year_index]), 1e-9)
+        required_hours = float(total_units[year_index]) / productivity
+        base_hours = max(float(labor.operating_hours_per_shift[year_index]), 1.0)
+        shifts = max(float(labor.shifts[year_index]), 1.0)
+        utilization = max(float(labor.utilization[year_index]), 1e-6)
+        absenteeism = min(max(float(labor.absenteeism[year_index]), 0.0), 0.95)
+        capacity_hours = base_hours * shifts * utilization * (1.0 - absenteeism)
+        raw_fte = required_hours / max(capacity_hours, 1e-9)
+
+        delay_quarters = max(int(labor.hiring_delay_quarters[year_index]), 0)
+        lag_factor = min(delay_quarters / 4.0, 1.0)
+        previous = planned
+        if year_index > 0:
+            previous = float(role.planned_headcount[year_index - 1])
+        lagged_fte = previous + (raw_fte - previous) * (1.0 - lag_factor)
+        return max(math.ceil(max(lagged_fte, 0.0)), 0.0)
+
+    def _labor_series(self, total_units: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        labor = self.inputs.labor_model
+        year_count = len(self.years)
+        if labor is None or not labor.roles:
+            self._labor_kpi_cache = None
+            return np.zeros(year_count, dtype=float), np.zeros(year_count, dtype=float)
+
+        direct = np.zeros(year_count, dtype=float)
+        indirect = np.zeros(year_count, dtype=float)
+        total_hours = np.zeros(year_count, dtype=float)
+        fixed_cost = np.zeros(year_count, dtype=float)
+        variable_cost = np.zeros(year_count, dtype=float)
+
+        for role in labor.roles:
+            salary = float(role.base_salary)
+            for idx in range(year_count):
+                escalation = (
+                    float(labor.wage_escalation_direct[idx])
+                    if role.labor_type == "direct"
+                    else float(labor.wage_escalation_indirect[idx])
+                )
+                if idx > 0:
+                    salary *= 1.0 + escalation
+                benefits = max(float(role.benefits_rate[idx]), 0.0)
+                burden = max(float(role.burden_rate[idx]), 0.0)
+                overtime = max(float(role.overtime_rate[idx]), 0.0)
+                overtime_cap = max(float(labor.overtime_cap[idx]), 0.0)
+                effective_salary = salary * (1.0 + benefits + burden) * (1.0 + min(overtime, overtime_cap))
+                headcount = self._labor_headcount_for_role(role, labor, total_units, idx)
+                role_cost = headcount * effective_salary
+
+                if role.labor_type == "direct":
+                    direct[idx] += role_cost
+                else:
+                    indirect[idx] += role_cost
+
+                if role.behavior == "fixed":
+                    fixed_cost[idx] += role_cost
+                else:
+                    variable_cost[idx] += role_cost
+
+                hours_per_fte = max(float(labor.operating_hours_per_shift[idx]) * max(float(labor.shifts[idx]), 1.0), 1.0)
+                total_hours[idx] += headcount * hours_per_fte
+
+        contractor = np.array(labor.contractor_hours, dtype=float) * np.array(labor.contractor_rate, dtype=float)
+        step_cost = np.array(labor.transition_training_cost, dtype=float) + np.array(labor.supervision_increment, dtype=float) + np.array(labor.shift_allowance, dtype=float)
+        for idx in range(1, year_count):
+            if float(labor.shifts[idx]) <= float(labor.shifts[idx - 1]):
+                step_cost[idx] = 0.0
+
+        direct += contractor + step_cost
+        total_labor = direct + indirect
+
+        produced_units = np.maximum(total_units, 1e-9)
+        labor_cost_per_unit = total_labor / produced_units
+        units_per_labor_hour = produced_units / np.maximum(total_hours, 1e-9)
+
+        self._labor_kpi_cache = {
+            "Average Labor Cost per Unit": float(np.mean(labor_cost_per_unit)),
+            "Average Units per Labor Hour": float(np.mean(units_per_labor_hour)),
+            "Average Fixed Labor Share": float(np.mean(fixed_cost / np.maximum(fixed_cost + variable_cost, 1e-9))),
+        }
+        return direct, indirect
+
     def cost_structure(self) -> Table:
         if self._cost_structure_cache is not None:
             return self._cost_structure_cache
@@ -489,18 +592,23 @@ class FinancialModel:
         electricity, water, steam = self._utility_arrays()
         utilities = (electricity + water + steam).tolist()
 
-        base_direct = sum(self.inputs.direct_labor_costs.values())
-        baseline_units = total_units[0] or 1.0
         total_units_array = np.array(total_units, dtype=float)
-        direct_labor = (
-            base_direct
-            * (total_units_array / baseline_units)
-            * inflation_array
-            * risk_array
-        ).tolist()
+        if self.inputs.labor_model is not None:
+            direct_array, indirect_array = self._labor_series(total_units_array)
+            direct_labor = (direct_array * inflation_array * risk_array).tolist()
+            indirect_labor = (indirect_array * inflation_array * risk_array).tolist()
+        else:
+            base_direct = sum(self.inputs.direct_labor_costs.values())
+            baseline_units = total_units[0] or 1.0
+            direct_labor = (
+                base_direct
+                * (total_units_array / baseline_units)
+                * inflation_array
+                * risk_array
+            ).tolist()
 
-        base_indirect = sum(self.inputs.indirect_labor_costs.values())
-        indirect_labor = (base_indirect * inflation_array * risk_array).tolist()
+            base_indirect = sum(self.inputs.indirect_labor_costs.values())
+            indirect_labor = (base_indirect * inflation_array * risk_array).tolist()
 
         utility_cost_share = self.inputs.utility_cost_of_sales_share
         utility_cost_of_sales = [value * utility_cost_share for value in utilities]
@@ -1716,6 +1824,27 @@ class FinancialModel:
                     scenario_inputs.variable_cost_overrides = scaled
                 elif variable == "discount_rate":
                     scenario_inputs.financing.discount_rate = multiplier
+                elif variable in {
+                    "wage_direct",
+                    "wage_indirect",
+                    "absenteeism",
+                    "overtime_cap",
+                    "hiring_delay",
+                } and scenario_inputs.labor_model is not None:
+                    labor_model = scenario_inputs.labor_model
+                    if variable == "wage_direct":
+                        labor_model.wage_escalation_direct = [value * multiplier for value in labor_model.wage_escalation_direct]
+                    elif variable == "wage_indirect":
+                        labor_model.wage_escalation_indirect = [value * multiplier for value in labor_model.wage_escalation_indirect]
+                    elif variable == "absenteeism":
+                        labor_model.absenteeism = [min(max(value * multiplier, 0.0), 0.95) for value in labor_model.absenteeism]
+                    elif variable == "overtime_cap":
+                        labor_model.overtime_cap = [max(value * multiplier, 0.0) for value in labor_model.overtime_cap]
+                    elif variable == "hiring_delay":
+                        labor_model.hiring_delay_quarters = [
+                            max(int(round(value * multiplier)), 0)
+                            for value in labor_model.hiring_delay_quarters
+                        ]
 
                 scenario_model = FinancialModel(scenario_inputs)
                 metrics = scenario_model.summary_metrics()
@@ -1727,6 +1856,9 @@ class FinancialModel:
         return results
 
     def monte_carlo_simulation(self) -> Table:
+        if self._monte_carlo_cache is not None:
+            return self._monte_carlo_cache
+
         params = self.inputs.monte_carlo
         iterations = params.iterations
         bounds = [float(value) for value in params.revenue_growth_range]
@@ -1995,6 +2127,17 @@ class FinancialModel:
             labor_factor = 1.0
             if "labor_cost" in variable_codes and not deterministic:
                 labor_factor += _sample_value("labor_cost", shock=shocks.get("labor_cost"))
+            if "wage_direct" in variable_codes and not deterministic:
+                labor_factor += _sample_value("wage_direct", shock=shocks.get("wage_direct"))
+            if "wage_indirect" in variable_codes and not deterministic:
+                labor_factor += _sample_value("wage_indirect", shock=shocks.get("wage_indirect"))
+            if "absenteeism" in variable_codes and not deterministic:
+                labor_factor += max(_sample_value("absenteeism", shock=shocks.get("absenteeism")), -0.5)
+            if "overtime_cap" in variable_codes and not deterministic:
+                labor_factor += _sample_value("overtime_cap", shock=shocks.get("overtime_cap"))
+            if "hiring_delay" in variable_codes and not deterministic:
+                labor_factor += _sample_value("hiring_delay", shock=shocks.get("hiring_delay")) * 0.25
+            labor_factor = max(labor_factor, 0.0)
             utility_factor = 1.0
             if "utility_cost" in variable_codes and not deterministic:
                 utility_factor += _sample_value("utility_cost", shock=shocks.get("utility_cost"))
@@ -2148,7 +2291,119 @@ class FinancialModel:
                 else:
                     results[metric].append(averages[metric])
 
-        return build_table(range(1, iterations + 1), results, index_name="Iteration")
+        self._monte_carlo_cache = build_table(range(1, iterations + 1), results, index_name="Iteration")
+        return self._monte_carlo_cache
+
+    def _assumption_data_quality_score(self) -> float:
+        checks: List[tuple[bool, float]] = []
+        financing = self.inputs.financing
+        checks.append((0.0 < float(financing.discount_rate) < 0.5, 15.0))
+        checks.append((0.0 <= float(financing.senior_debt_interest) < 0.5, 10.0))
+        checks.append((0.0 <= float(financing.revolver_interest) < 0.6, 8.0))
+        checks.append((0.0 <= float(financing.cash_interest) < 0.5, 8.0))
+        checks.append((float(financing.senior_debt_interest) >= float(financing.cash_interest), 8.0))
+
+        placeholder_hits = 0
+        placeholder_total = 0
+        for value in (
+            financing.discount_rate,
+            financing.senior_debt_interest,
+            financing.revolver_interest,
+            financing.cash_interest,
+            financing.dividend_payout,
+            financing.share_capital,
+        ):
+            placeholder_total += 1
+            if abs(float(value) - 1.0) < 1e-9:
+                placeholder_hits += 1
+        dep_rates = [float(row.depreciation_rate) for row in self.inputs.depreciation_schedule]
+        if dep_rates:
+            placeholder_total += len(dep_rates)
+            placeholder_hits += sum(1 for value in dep_rates if abs(value - 1.0) < 1e-9)
+        placeholder_ratio = (placeholder_hits / placeholder_total) if placeholder_total else 0.0
+        checks.append((placeholder_ratio <= 0.25, 25.0))
+
+        labor = self.inputs.labor_model
+        if labor is not None and labor.roles:
+            metadata_completion = sum(
+                1
+                for role in labor.roles
+                if role.source.strip() and role.owner.strip() and role.benchmark_year.strip()
+            ) / max(len(labor.roles), 1)
+            checks.append((metadata_completion >= 0.8, 10.0))
+
+        score = 100.0
+        for passed, penalty in checks:
+            if not passed:
+                score -= penalty
+        return max(0.0, min(score, 100.0))
+
+    def _investor_gate_metrics(
+        self,
+        *,
+        npv_value: float,
+        irr_value: float,
+        discounted_payback_years: float,
+        average_dscr: float,
+        cash_end: Sequence[Number],
+    ) -> Dict[str, float]:
+        viability_config = self.inputs.viability
+        irr_gate = viability_config.metrics.get("IRR", None)
+        dscr_gate = viability_config.metrics.get("DSCR", None)
+        payback_gate = viability_config.metrics.get("Payback", None)
+
+        irr_hurdle = max(float(self.inputs.financing.discount_rate), float(irr_gate.low if irr_gate else 0.12))
+        dscr_min = float(dscr_gate.low if dscr_gate else 1.2)
+        payback_max = float(payback_gate.high if payback_gate else 8.0)
+        liquidity_ok = not any(float(value) < 0.0 for value in cash_end)
+
+        gates = [
+            npv_value > 0.0,
+            _is_finite(irr_value) and irr_value >= irr_hurdle,
+            _is_finite(average_dscr) and average_dscr >= dscr_min,
+            _is_finite(discounted_payback_years) and discounted_payback_years <= payback_max,
+            liquidity_ok,
+        ]
+        passed = sum(1 for flag in gates if flag)
+        ratio = passed / len(gates) if gates else float("nan")
+        return {
+            "Investor Gate Pass Count": float(passed),
+            "Investor Gate Pass Ratio": ratio,
+            "Investor Gate Status": 1.0 if passed == len(gates) else 0.0,
+            "IRR Hurdle": irr_hurdle,
+        }
+
+    def _investor_risk_metrics(self, irr_hurdle: float) -> Dict[str, float]:
+        monte = self.monte_carlo_simulation()
+        if not monte.index:
+            return {}
+
+        def _clean(values: Sequence[Number]) -> List[float]:
+            cleaned: List[float] = []
+            for value in values:
+                numeric = float(value)
+                if _is_finite(numeric):
+                    cleaned.append(numeric)
+            return cleaned
+
+        result: Dict[str, float] = {}
+        if "NPV" in monte.data:
+            npv_values = _clean(monte.column("NPV"))
+            if npv_values:
+                npv_array = np.array(npv_values, dtype=float)
+                result["Probability NPV < 0"] = float(np.mean(npv_array < 0.0))
+                result["NPV P10"] = float(np.percentile(npv_array, 10))
+                result["NPV P50"] = float(np.percentile(npv_array, 50))
+                result["NPV P90"] = float(np.percentile(npv_array, 90))
+        if "IRR" in monte.data:
+            irr_values = _clean(monte.column("IRR"))
+            if irr_values:
+                irr_array = np.array(irr_values, dtype=float)
+                result["Probability IRR < Hurdle"] = float(np.mean(irr_array < irr_hurdle))
+                result["IRR P10"] = float(np.percentile(irr_array, 10))
+                result["IRR P50"] = float(np.percentile(irr_array, 50))
+                result["IRR P90"] = float(np.percentile(irr_array, 90))
+        return result
 
     def summary_metrics(self) -> Table:
         if self._summary_metrics_cache is not None:
@@ -2250,41 +2505,86 @@ class FinancialModel:
         }
         viability_score = _weighted_score(viability_scores, viability_config.weights) * 100
 
+        metric_names = [
+            "NPV",
+            "IRR",
+            "Payback Period",
+            "Discounted Payback",
+            "Profitability Index",
+            "Revenue CAGR",
+            "Mid-period Revenue CAGR",
+            "Rolling Revenue CAGR (3Y Avg)",
+            "Weighted Average Gross Margin",
+            "Weighted Average EBITDA Margin",
+            "Weighted Average Net Margin",
+            "Weighted Average Operating Cash Flow Margin",
+            "Average Debt Service Coverage",
+            "Investor Viability Score",
+        ]
+        metric_values = [
+            npv_value,
+            irr_value,
+            payback_years,
+            discounted_payback_years,
+            profitability_index,
+            revenue_cagr,
+            mid_period_cagr,
+            rolling_cagr,
+            weighted_gross_margin,
+            weighted_ebitda_margin,
+            weighted_net_margin,
+            operating_cash_margin,
+            average_dscr,
+            viability_score,
+        ]
+
+        labor_kpis = self._labor_kpi_cache or {}
+        for label in (
+            "Average Labor Cost per Unit",
+            "Average Units per Labor Hour",
+            "Average Fixed Labor Share",
+        ):
+            if label in labor_kpis:
+                metric_names.append(label)
+                metric_values.append(float(labor_kpis[label]))
+
+        cash_end = cash_flow_table.column(CASH_FLOW_END_COLUMN)
+        gate_metrics = self._investor_gate_metrics(
+            npv_value=npv_value,
+            irr_value=irr_value,
+            discounted_payback_years=discounted_payback_years,
+            average_dscr=average_dscr,
+            cash_end=cash_end,
+        )
+        quality_score = self._assumption_data_quality_score()
+        risk_metrics = self._investor_risk_metrics(gate_metrics.get("IRR Hurdle", float(self.inputs.financing.discount_rate)))
+
+        for label, value in gate_metrics.items():
+            if label == "IRR Hurdle":
+                continue
+            metric_names.append(label)
+            metric_values.append(float(value))
+
+        metric_names.append("Assumption Data Quality Score")
+        metric_values.append(float(quality_score))
+
+        for label in (
+            "Probability NPV < 0",
+            "Probability IRR < Hurdle",
+            "NPV P10",
+            "NPV P50",
+            "NPV P90",
+            "IRR P10",
+            "IRR P50",
+            "IRR P90",
+        ):
+            if label in risk_metrics:
+                metric_names.append(label)
+                metric_values.append(float(risk_metrics[label]))
+
         table = build_table(
-            [
-                "NPV",
-                "IRR",
-                "Payback Period",
-                "Discounted Payback",
-                "Profitability Index",
-                "Revenue CAGR",
-                "Mid-period Revenue CAGR",
-                "Rolling Revenue CAGR (3Y Avg)",
-                "Weighted Average Gross Margin",
-                "Weighted Average EBITDA Margin",
-                "Weighted Average Net Margin",
-                "Weighted Average Operating Cash Flow Margin",
-                "Average Debt Service Coverage",
-                "Investor Viability Score",
-            ],
-            {
-                "Value": [
-                    npv_value,
-                    irr_value,
-                    payback_years,
-                    discounted_payback_years,
-                    profitability_index,
-                    revenue_cagr,
-                    mid_period_cagr,
-                    rolling_cagr,
-                    weighted_gross_margin,
-                    weighted_ebitda_margin,
-                    weighted_net_margin,
-                    operating_cash_margin,
-                    average_dscr,
-                    viability_score,
-                ]
-            },
+            metric_names,
+            {"Value": metric_values},
             index_name="Metric",
         )
         self._summary_metrics_cache = table

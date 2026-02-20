@@ -43,6 +43,18 @@ This project provides a Python implementation of the Pharmaceuticals financial m
    streamlit run streamlit_app.py
    ```
 
+   > **Frontend reliability tip:** this project pins Streamlit in
+   > `requirements.txt` to avoid frontend/backend asset mismatches that can
+   > trigger the "Cannot load Streamlit frontend code" error after in-place
+   > upgrades. If you still encounter that message, stop all running Streamlit
+   > processes and restart the app from a clean environment:
+   >
+   > ```bash
+   > pkill -f "streamlit run streamlit_app.py" || true
+   > pip install -r requirements.txt
+   > streamlit run streamlit_app.py
+   > ```
+
    The Streamlit application includes dedicated tabs for:
 
    1. An input landing page summarising unit economics and labour structures.
