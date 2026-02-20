@@ -97,68 +97,105 @@ Top-line growth alone is not investment-grade evidence; investors want margin du
 - Explicit ramp curves for new SKUs with launch risk factors.
 
 
-## 7) Labor model redesign (requested implementation focus)
+## 7) Labor model redesign — algorithm specification
 
-### Why this matters
-Labor is often the largest controllable operating cost in pharma manufacturing. If labor is modeled too smoothly or too aggregated, break-even, stress testing, and covenant analysis become unreliable.
+### Objective
+Convert labor planning from a static cost line into a role-level, shift-aware engine that produces realistic break-even behavior, stress behavior, and covenant-resilient cash flow forecasts.
 
-### 1. Split labor into fixed vs variable by role
-- Keep managers/admin mostly fixed.
-- Scale operators/technicians with volume or shifts.
-- This improves break-even and stress behavior.
+### Inputs (per role `r`, year `y`)
+- `role_type[r] ∈ {fixed, variable}`
+- `base_headcount[r, y0]`
+- `base_salary[r, y0]`
+- `benefits_rate[r, y]`
+- `overtime_rate[r, y]`
+- `burden_rate[r, y]` (statutory + insurance + pension + bonus + training)
+- `wage_escalation_direct[y]`, `wage_escalation_indirect[y]`
+- `productivity_target[r, y]` (units/labor-hour)
+- `utilization[y]`, `operating_hours[y]`, `shifts[y]`
+- `contractor_hours[y]`, `contractor_rate[y]`
+- `absenteeism[y]`, `overtime_cap[y]`, `hiring_delay_quarters[y]`
 
-### 2. Model headcount explicitly (not only cost totals)
-Add per-role fields:
-- headcount,
-- salary,
-- benefits %,
-- overtime %.
+### Algorithm 1: Role-level loaded compensation
+For each role and year:
+1. Escalate salary with role-specific wage inflation:
+   - If `r` is direct labor: `salary[r,y] = salary[r,y-1] * (1 + wage_escalation_direct[y])`
+   - Else: `salary[r,y] = salary[r,y-1] * (1 + wage_escalation_indirect[y])`
+2. Compute loaded annual salary:
+   - `loaded_salary[r,y] = salary[r,y] * (1 + benefits_rate[r,y] + burden_rate[r,y])`
+3. Compute overtime-adjusted effective salary:
+   - `effective_salary[r,y] = loaded_salary[r,y] * (1 + min(overtime_rate[r,y], overtime_cap[y]))`
 
-This lets the model test hiring plans and productivity scenarios.
+### Algorithm 2: Fixed vs variable headcount engine
+For each role and year:
+1. If `role_type[r] = fixed`:
+   - `headcount[r,y] = planned_headcount[r,y]` (step changes allowed by hiring milestones).
+2. If `role_type[r] = variable`:
+   - Required labor hours:
+     - `required_hours[r,y] = demand_units[y] / productivity_target[r,y]`
+   - Shift-capacity hours:
+     - `capacity_hours[r,y] = FTE_hours_per_shift * shifts[y] * utilization[y] * (1 - absenteeism[y])`
+   - Raw required FTE:
+     - `raw_fte[r,y] = required_hours[r,y] / capacity_hours[r,y]`
+   - Apply hiring lag and step logic:
+     - `headcount[r,y] = ceil_with_lag(raw_fte[r,y], hiring_delay_quarters[y], milestone_rules)`
 
-### 3. Add shift-based staffing logic
-- Tie direct labor needs to operating hours and utilization.
-- Example: a 1-shift to 2-shift transition triggers discrete cost jumps.
+### Algorithm 3: Shift transition cost step-up
+For each year:
+1. Detect shift transition:
+   - If `shifts[y] > shifts[y-1]`, trigger step costs.
+2. Apply discrete uplifts:
+   - `step_cost[y] = transition_training_cost[y] + supervision_increment[y] + shift_allowance[y]`
+3. Add to direct labor cost in transition year (no smoothing).
 
-### 4. Include payroll on-costs
-- Add statutory benefits, insurance, pension, bonus, and training.
-- Use loaded cost formula: `base_salary * (1 + burden_rate)`.
+### Algorithm 4: Contractor/temporary labor module
+For each year:
+1. Calculate contractor cost:
+   - `contractor_cost[y] = contractor_hours[y] * contractor_rate[y]`
+2. Use contractor hours for ramp-up, shutdown, maintenance, or hiring delay coverage.
+3. Apply premium multiplier vs employee hourly cost for realism.
 
-### 5. Separate annual escalation drivers
-- Wage inflation for labor should be distinct from general inflation.
-- Apply different escalation rates for direct vs indirect labor.
+### Algorithm 5: Total labor cost aggregation
+For each year:
+1. Employee labor cost:
+   - `employee_cost[y] = Σ_r(headcount[r,y] * effective_salary[r,y])`
+2. Add overtime, shift step-up, and contractor costs:
+   - `total_labor_cost[y] = employee_cost[y] + step_cost[y] + contractor_cost[y]`
+3. Split output:
+   - `direct_labor_cost[y]`, `indirect_labor_cost[y]`, `fixed_labor_cost[y]`, `variable_labor_cost[y]`
 
-### 6. Add contractor/temporary labor bucket
-- Use for ramp-up years and maintenance shutdowns.
-- Model at higher unit cost but high flexibility.
+### Algorithm 6: Capacity-linked KPI engine
+For each year:
+1. `labor_cost_per_unit[y] = total_labor_cost[y] / produced_units[y]`
+2. `units_per_labor_hour[y] = produced_units[y] / total_labor_hours[y]`
+3. `labor_variance[y] = labor_cost_per_unit[y] - labor_cost_per_unit[y-1]`
+4. Flag deterioration if:
+   - `labor_cost_per_unit` rises above threshold, or
+   - `units_per_labor_hour` falls below threshold.
 
-### 7. Capacity-linked productivity metric
-- Track labor cost per unit and units per labor-hour.
-- Flag deterioration automatically in the dashboard.
+### Algorithm 7: Scenario/sensitivity hooks (labor-specific)
+For each scenario `s`:
+1. Apply shocks:
+   - Wage shock: `wage_escalation += Δwage_s`
+   - Absenteeism shock: `absenteeism += Δabsenteeism_s`
+   - Overtime cap shock: `overtime_cap += Δotcap_s`
+   - Hiring delay shock: `hiring_delay_quarters += Δdelay_s`
+2. Re-run Algorithms 1–6.
+3. Record impact on:
+   - NPV, IRR, DSCR min/avg, payback, and liquidity headroom.
 
-### 8. Hiring lag / step changes
-- Support hiring in quarters or planned milestones.
-- Prevent unrealistically smooth labor curves.
+### Algorithm 8: Governance and auditability
+For each labor assumption record:
+1. Store metadata:
+   - `source`, `owner`, `benchmark_year`, `last_updated`, `confidence_score`.
+2. Run validation checks:
+   - Missing metadata => warning.
+   - Out-of-range salary/escalation => error.
+3. Emit audit table for IC/lender pack.
 
-### 9. Scenario hooks
-Add labor-specific sensitivities:
-- wage +/- x%,
-- absenteeism,
-- overtime cap,
-- hiring delay.
-
-These labor shocks often have high NPV impact.
-
-### 10. Governance / auditability
-- Add source and owner metadata per role assumption (HR, payroll, benchmark year).
-- Keep labor assumptions defendable for investment committees.
-
-### Practical v1 implementation recommended
-Implement first:
-- fixed/variable role split,
-- wage escalation (direct vs indirect),
-- loaded-cost burden,
-- labor KPIs in summary/dashboard.
+### Practical v1 build order
+1. Implement Algorithms 1, 2, and 5 first (core economics).
+2. Add Algorithms 3 and 4 (realistic step behavior + flexibility).
+3. Add Algorithms 6–8 (decision-grade analytics, stress, and governance).
 
 ## 8) Financing strategy and covenant engineering
 
