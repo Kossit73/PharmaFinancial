@@ -385,6 +385,26 @@ class RerunHelperTest(unittest.TestCase):
         self.assertIs(same_model, base_model)
         self.assertIs(same_outputs, base_outputs)
 
+    def test_ensure_dataframe_sanitises_unserialisable_values(self):
+        if self.app.pd is None:
+            self.skipTest("pandas is required for dataframe sanitisation")
+
+        frame = self.app.pd.DataFrame(
+            [
+                {"value": float("nan"), "blob": b"hello", "nested": {"a": 1}},
+                {"value": float("inf"), "blob": b"\xff", "nested": [1, 2, 3]},
+            ]
+        )
+
+        cleaned = self.app._ensure_dataframe(frame)
+
+        self.assertIsNone(cleaned.loc[0, "value"])
+        self.assertIsNone(cleaned.loc[1, "value"])
+        self.assertEqual(cleaned.loc[0, "blob"], "hello")
+        self.assertEqual(cleaned.loc[1, "blob"], "\ufffd")
+        self.assertEqual(cleaned.loc[0, "nested"], "{\"a\": 1}")
+        self.assertEqual(cleaned.loc[1, "nested"], "[1, 2, 3]")
+
     def test_generate_excel_bytes_returns_workbook(self):
         payload = json.loads(
             Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
