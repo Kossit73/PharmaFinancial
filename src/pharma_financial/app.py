@@ -2006,11 +2006,14 @@ def _dict_to_dataframe(data: Mapping[str, float], index_label: str, value_label:
         .reset_index(drop=True)
     )
 
-
-def _with_year(df: pd.DataFrame) -> pd.DataFrame:
-    table = df.copy()
-    if "Year" not in table.columns and not isinstance(df.index, pd.RangeIndex):
-        table.insert(0, "Year", list(df.index))
+def _with_year(df: object) -> object:
+    table = _ensure_dataframe(df)
+    if pd is None or not isinstance(table, pd.DataFrame):
+        return table
+    if "Year" not in table.columns and not isinstance(table.index, pd.RangeIndex):
+        table = table.copy()
+        table.insert(0, "Year", list(table.index))
+    return table.reset_index(drop=True)
     return table.reset_index(drop=True)
 
 
@@ -2415,6 +2418,58 @@ def _format_percentage(value: float, decimals: int = 2) -> str:
     if value is None or value != value:
         return "N/A"
     return f"{value * 100:,.{decimals}f}%"
+def _normalise_frame_columns(frame: "pd.DataFrame") -> "pd.DataFrame":
+    columns: list[str] = []
+    seen: dict[str, int] = {}
+    for raw in frame.columns:
+        base = str(raw)
+        count = seen.get(base, 0)
+        if count == 0:
+            columns.append(base)
+        else:
+            columns.append(f"{base}_{count}")
+        seen[base] = count + 1
+    frame.columns = columns
+    return frame
+
+def _ensure_dataframe(data: object) -> object:
+    if pd is None:
+        if isinstance(data, Table):
+            rows: list[dict[str, object]] = []
+            for idx, year in enumerate(data.index):
+                row: dict[str, object] = {str(data.index_name or "Year"): year}
+                for column, values in data.data.items():
+                    row[str(column)] = values[idx] if idx < len(values) else None
+                rows.append(row)
+            return rows
+        if isinstance(data, Mapping):
+            return [dict(data)]
+        if isinstance(data, Sequence) and not isinstance(data, (str, bytes)):
+            return list(data)
+        return [{"Value": data}]
+
+    if isinstance(data, pd.DataFrame):
+        frame = data.copy()
+    elif isinstance(data, Table):
+        frame = data.to_frame().reset_index()
+    elif isinstance(data, Mapping):
+        frame = pd.DataFrame([dict(data)])
+    elif isinstance(data, Sequence) and not isinstance(data, (str, bytes)):
+        frame = pd.DataFrame(list(data))
+    else:
+        frame = pd.DataFrame([{"Value": data}])
+
+    frame = _normalise_frame_columns(frame)
+    object_columns = [
+        column for column in frame.columns if pd.api.types.is_object_dtype(frame[column])
+    ]
+    for column in object_columns:
+        frame[column] = frame[column].map(
+            lambda value: json.dumps(value, sort_keys=True)
+            if isinstance(value, (dict, list, tuple, set))
+            else value
+        )
+    return frame
 
 
 def _mapping_to_rows(mapping: Mapping[str, float], key_label: str, value_label: str) -> list[dict]:
