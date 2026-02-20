@@ -170,15 +170,40 @@ class FinancialModelTest(unittest.TestCase):
 
     def test_summary_metrics_index(self):
         summary = self.outputs.summary_metrics
-        expected = ["NPV", "IRR", "Payback Period", "Discounted Payback"]
+        expected = [
+            "NPV",
+            "Project NPV",
+            "IRR",
+            "Project IRR",
+            "Payback Period",
+            "Discounted Payback",
+            "Profitability Index",
+            "Revenue CAGR",
+            "Mid-period Revenue CAGR",
+            "Rolling Revenue CAGR (3Y Avg)",
+            "Weighted Average Gross Margin",
+            "Weighted Average EBITDA Margin",
+            "Weighted Average Net Margin",
+            "Weighted Average Operating Cash Flow Margin",
+            "Average Debt Service Coverage",
+            "Average Labor Cost per Unit",
+            "Direct Labor Share of Expenses",
+            "Indirect Labor Share of Expenses",
+            "Configured Labor Burden Rate",
+            "Monte Carlo Loss Probability",
+            "Monte Carlo NPV P10",
+            "Monte Carlo NPV P50",
+            "Monte Carlo NPV P90",
+            "Investor Viability Score",
+        ]
         self.assertEqual(summary.index, expected)
 
     def test_summary_metrics_regression(self):
         summary = self.outputs.summary_metrics.column("Value")
         self.assertAlmostEqual(summary[0], -70.3921342450854, places=6)
-        self.assertTrue(math.isnan(summary[1]))
         self.assertTrue(math.isnan(summary[2]))
         self.assertTrue(math.isnan(summary[3]))
+        self.assertTrue(math.isnan(summary[4]))
 
     def test_production_schedule_matches_inputs(self):
         production = self.model._production()
@@ -242,6 +267,52 @@ class FinancialModelTest(unittest.TestCase):
             self.assertTrue(result.rows)
             self.assertIsInstance(result.interpretation, str)
             self.assertTrue(result.interpretation.strip())
+
+    def test_sensitivity_outputs_include_delta_columns(self):
+        sensitivity = self.outputs.sensitivity_results
+        self.assertTrue(sensitivity)
+        for table in sensitivity.values():
+            self.assertIn("Delta NPV vs Base", table.data)
+            self.assertIn("Delta IRR vs Base", table.data)
+
+    def test_currency_scale_scales_monetary_inputs(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+        )
+        payload["currency_scale"] = 1_000.0
+        base_inputs = parse_inputs(json.loads(Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")))
+        scaled_inputs = parse_inputs(payload)
+        self.assertAlmostEqual(
+            scaled_inputs.unit_costs["Tablets"].selling_price,
+            base_inputs.unit_costs["Tablets"].selling_price * 1_000.0,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            scaled_inputs.financing.initial_investment,
+            base_inputs.financing.initial_investment * 1_000.0,
+            places=6,
+        )
+
+    def test_assumption_audit_output_available(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+        )
+        payload["assumption_metadata"] = {
+            "discount_rate": {
+                "source": "Finance Committee",
+                "owner": "Treasury",
+                "date": "2026-01-15",
+                "confidence": 0.8,
+            }
+        }
+        parsed = parse_inputs(payload)
+        model = FinancialModel(parsed)
+        audit = model.assumption_audit()
+        self.assertIn("discount_rate", audit.index)
+        idx = audit.index.index("discount_rate")
+        self.assertEqual(audit.data["Has Source"][idx], 1.0)
+        self.assertEqual(audit.data["Has Owner"][idx], 1.0)
+        self.assertEqual(audit.data["Has Date"][idx], 1.0)
 
     def test_npf_irr_handles_short_series(self):
         result = npf_irr([100])

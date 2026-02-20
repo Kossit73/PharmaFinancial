@@ -369,15 +369,22 @@ class GenerativeAdvisor:
                 "and provide an API key to generate automated commentary."
             )
 
+        evidence = self._collect_evidence(summary, income, cash_flow, ml_table)
+        self.metadata["evidence"] = evidence
+
         prompt = self._build_prompt(summary, income, cash_flow, ml_table)
         self.metadata["prompt"] = prompt
         response = self._invoke_model(prompt)
         if response:
             filtered = self._filter_response(prompt, response)
             if filtered is not None:
-                self.metadata["status"] = "model_response"
-                self.metadata["response"] = filtered
-                return filtered
+                audit = self._audit_pharma_management_alignment(filtered)
+                self.metadata["pharma_management_audit"] = audit
+                if audit.get("passed"):
+                    anchored = self._append_evidence(filtered, evidence)
+                    self.metadata["status"] = "model_response"
+                    self.metadata["response"] = anchored
+                    return anchored
 
         self.metadata.setdefault("status", "fallback")
         return self._fallback(summary, income, cash_flow, ml_table)
@@ -456,6 +463,14 @@ class GenerativeAdvisor:
                         model=self.parameters.model,
                         messages=[
                             {"role": "system", "content": "You are a financial analyst."},
+                            {
+                                "role": "system",
+                                "content": (
+                                    "Prioritise pharmaceutical management best practices: "
+                                    "patient safety, GMP quality controls, regulatory readiness, "
+                                    "supply resilience, and prudent working-capital stewardship."
+                                ),
+                            },
                             {"role": "user", "content": prompt},
                         ],
                         temperature=0.2,
@@ -471,6 +486,14 @@ class GenerativeAdvisor:
                         model=self.parameters.model,
                         messages=[
                             {"role": "system", "content": "You are a financial analyst."},
+                            {
+                                "role": "system",
+                                "content": (
+                                    "Prioritise pharmaceutical management best practices: "
+                                    "patient safety, GMP quality controls, regulatory readiness, "
+                                    "supply resilience, and prudent working-capital stewardship."
+                                ),
+                            },
                             {"role": "user", "content": prompt},
                         ],
                         temperature=0.2,
@@ -506,6 +529,122 @@ class GenerativeAdvisor:
                 return None
         self.metadata["numeric_fidelity"] = "passed"
         return response
+
+    def _audit_pharma_management_alignment(self, response: str) -> Mapping[str, Any]:
+        rubric = {
+            "patient_safety": {
+                "keywords": ("patient safety", "pharmacovigilance", "adverse event", "product quality complaint"),
+                "action_words": ("monitor", "mitigate", "escalate", "prevent", "investigate"),
+            },
+            "quality_and_gmp": {
+                "keywords": ("gmp", "quality system", "batch release", "validation", "deviation", "capa"),
+                "action_words": ("validate", "document", "review", "correct", "control"),
+            },
+            "regulatory": {
+                "keywords": ("regulatory", "compliance", "inspection", "authority", "submission"),
+                "action_words": ("align", "prepare", "submit", "remediate", "audit"),
+            },
+            "supply_continuity": {
+                "keywords": ("supply continuity", "inventory", "stockout", "shortage", "supplier"),
+                "action_words": ("buffer", "dual-source", "monitor", "secure", "forecast"),
+            },
+        }
+        lowered = response.lower()
+        domain_scores: dict[str, float] = {}
+        domain_details: dict[str, Mapping[str, Any]] = {}
+        passed_domains = 0
+        for domain, config in rubric.items():
+            keywords = config["keywords"]
+            actions = config["action_words"]
+            keyword_hits = [word for word in keywords if word in lowered]
+            action_hits = [word for word in actions if word in lowered]
+            score = 0.0
+            if keyword_hits:
+                score += 0.6
+            if action_hits:
+                score += 0.4
+            domain_scores[domain] = score
+            domain_details[domain] = {
+                "keyword_hits": keyword_hits,
+                "action_hits": action_hits,
+                "score": score,
+            }
+            if score >= 0.6:
+                passed_domains += 1
+
+        aggregate_score = sum(domain_scores.values()) / len(domain_scores) if domain_scores else 0.0
+        passed = passed_domains == len(rubric) and aggregate_score >= 0.75
+        self.metadata["pharma_management_audit_status"] = "passed" if passed else "failed"
+        if not passed:
+            self.metadata["warning"] = (
+                "Model response did not satisfy the pharmaceutical-management rubric; "
+                "using deterministic best-practice fallback."
+            )
+        return {
+            "domains": domain_details,
+            "domain_scores": domain_scores,
+            "aggregate_score": aggregate_score,
+            "passed": passed,
+        }
+
+    def _collect_evidence(
+        self,
+        summary: Table,
+        income: Table,
+        cash_flow: Table,
+        ml_table: Optional[Table],
+    ) -> Mapping[str, Any]:
+        metrics = summary.as_dict().get("Value", [])
+        metric_pairs = {label: float(value) for label, value in zip(summary.index, metrics)}
+        latest_year = income.index[-1] if income.index else "latest year"
+        net_revenue = income.column("Net Revenue")[-1] if "Net Revenue" in income.data else 0.0
+        ebitda = income.column("EBITDA")[-1] if "EBITDA" in income.data else 0.0
+        net_income = income.column("Net Income")[-1] if "Net Income" in income.data else 0.0
+
+        if "Ending Cash" in cash_flow.data:
+            ending_cash = cash_flow.column("Ending Cash")[-1]
+        elif "Cash and Cash Equivalents at the End of the Period" in cash_flow.data:
+            ending_cash = cash_flow.column("Cash and Cash Equivalents at the End of the Period")[-1]
+        else:
+            ending_cash = 0.0
+
+        forecast_points: dict[str, float] = {}
+        if ml_table is not None:
+            for column in ml_table.columns():
+                if column == "Historical Net Revenue":
+                    continue
+                forecast_points[column] = float(ml_table.data[column][-1])
+
+        return {
+            "latest_year": latest_year,
+            "latest_net_revenue": float(net_revenue),
+            "latest_ebitda": float(ebitda),
+            "latest_net_income": float(net_income),
+            "ending_cash": float(ending_cash),
+            "summary_metrics": metric_pairs,
+            "forecast": forecast_points,
+        }
+
+    def _append_evidence(self, text: str, evidence: Mapping[str, Any]) -> str:
+        metric_pairs = evidence.get("summary_metrics", {})
+        forecast = evidence.get("forecast", {})
+        lines = [
+            "",
+            "Evidence anchors:",
+            f"- Latest Year ({evidence.get('latest_year')}): Net Revenue {self._format_currency(float(evidence.get('latest_net_revenue', 0.0)))}, EBITDA {self._format_currency(float(evidence.get('latest_ebitda', 0.0)))}, Net Income {self._format_currency(float(evidence.get('latest_net_income', 0.0)))}.",
+            f"- Liquidity: Ending Cash {self._format_currency(float(evidence.get('ending_cash', 0.0)))}.",
+        ]
+        if isinstance(metric_pairs, Mapping):
+            npv = float(metric_pairs.get("NPV", float("nan")))
+            irr = float(metric_pairs.get("IRR", float("nan")))
+            payback = float(metric_pairs.get("Payback Period", float("nan")))
+            lines.append(
+                f"- Core Metrics: NPV {self._format_currency(npv)}, IRR {self._format_percentage(irr)}, Payback {self._format_years(payback)}."
+            )
+        if isinstance(forecast, Mapping) and forecast:
+            first = next(iter(forecast.items()))
+            lines.append(f"- Forecast Anchor: {first[0]} = {first[1]:,.2f}.")
+        return text.rstrip() + "\n" + "\n".join(lines)
 
     def _extract_numbers(self, text: str) -> List[float]:
         matches = re.findall(r"[-+]?(?:\\d+\\.?\\d*|\\d*\\.\\d+)", text)
@@ -574,9 +713,22 @@ class GenerativeAdvisor:
         if forecast_note:
             lines.append(f"- {forecast_note}")
 
+        lines.extend(
+            [
+                "- Pharmaceutical management practice review:",
+                "  - Patient safety and product-quality controls should remain the first operational priority.",
+                "  - GMP readiness requires documented deviations, validated processes, and audit-ready records.",
+                "  - Regulatory planning should include proactive authority engagement and submission timelines.",
+                "  - Supply resilience should be monitored via inventory cover, critical suppliers, and shortage alerts.",
+            ]
+        )
+
         lines.append(
             "These figures indicate the profitability profile and liquidity runway based on the configured assumptions."
         )
+        evidence_text = self._append_evidence("", self._collect_evidence(summary, income, cash_flow, ml_table)).strip()
+        if evidence_text:
+            lines.append(evidence_text)
         return "\n".join(lines)
 
     def _format_currency(self, value: float) -> str:

@@ -12,7 +12,15 @@
               "Value": -70.3921342450854
             },
             {
+              "Metric": "Project NPV",
+              "Value": -66.89213424508539
+            },
+            {
               "Metric": "IRR",
+              "Value": NaN
+            },
+            {
+              "Metric": "Project IRR",
               "Value": NaN
             },
             {
@@ -22,6 +30,78 @@
             {
               "Metric": "Discounted Payback",
               "Value": NaN
+            },
+            {
+              "Metric": "Profitability Index",
+              "Value": -6.0392134245085405
+            },
+            {
+              "Metric": "Revenue CAGR",
+              "Value": 0.3870067101279189
+            },
+            {
+              "Metric": "Mid-period Revenue CAGR",
+              "Value": 0.33621601567775405
+            },
+            {
+              "Metric": "Rolling Revenue CAGR (3Y Avg)",
+              "Value": 0.37539780357192554
+            },
+            {
+              "Metric": "Weighted Average Gross Margin",
+              "Value": -4.619456326226541
+            },
+            {
+              "Metric": "Weighted Average EBITDA Margin",
+              "Value": -6.015683279767449
+            },
+            {
+              "Metric": "Weighted Average Net Margin",
+              "Value": -6.089913605902795
+            },
+            {
+              "Metric": "Weighted Average Operating Cash Flow Margin",
+              "Value": -6.1311925522778745
+            },
+            {
+              "Metric": "Average Debt Service Coverage",
+              "Value": -9.572340538530483
+            },
+            {
+              "Metric": "Average Labor Cost per Unit",
+              "Value": 0.3972797973234864
+            },
+            {
+              "Metric": "Direct Labor Share of Expenses",
+              "Value": 0.6648303598522711
+            },
+            {
+              "Metric": "Indirect Labor Share of Expenses",
+              "Value": 0.16435999563130485
+            },
+            {
+              "Metric": "Configured Labor Burden Rate",
+              "Value": 0.0
+            },
+            {
+              "Metric": "Monte Carlo Loss Probability",
+              "Value": 1.0
+            },
+            {
+              "Metric": "Monte Carlo NPV P10",
+              "Value": -430.44794276303816
+            },
+            {
+              "Metric": "Monte Carlo NPV P50",
+              "Value": -392.4318689426412
+            },
+            {
+              "Metric": "Monte Carlo NPV P90",
+              "Value": -390.30339941558987
+            },
+            {
+              "Metric": "Investor Viability Score",
+              "Value": 23.076923076923077
             }
           ]
         }

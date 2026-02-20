@@ -1,6 +1,8 @@
 import hashlib
 import json
 import os
+import re
+import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -8,7 +10,7 @@ import faiss
 import pandas as pd
 import pypdf
 from docx import Document as DocxDocument
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from pptx import Presentation
@@ -23,6 +25,13 @@ TOP_K = 12
 RERANK_K = 5
 
 DATA_DIR = os.getenv("DATA_DIR", "./projects")
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "50"))
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".txt", ".md", ".xlsx", ".xls", ".csv"}
+SAFE_PROJECT_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
+_INDEX_CACHE: Dict[str, "VectorIndex"] = {}
+_INDEX_CACHE_LOCK = threading.Lock()
 
 
 class LLMClient:
@@ -42,6 +51,8 @@ def sha256_file(path: str) -> str:
 
 
 def ensure_dirs(project_id: str) -> str:
+    if not SAFE_PROJECT_ID.match(project_id):
+        raise HTTPException(status_code=400, detail="Invalid project_id format.")
     base = os.path.join(DATA_DIR, project_id)
     os.makedirs(os.path.join(base, "uploads"), exist_ok=True)
     os.makedirs(os.path.join(base, "parsed"), exist_ok=True)
@@ -50,27 +61,49 @@ def ensure_dirs(project_id: str) -> str:
     return base
 
 
-async def stream_save(upload: UploadFile, dest_path: str) -> None:
+async def stream_save(upload: UploadFile, dest_path: str, max_bytes: int = MAX_UPLOAD_BYTES) -> None:
+    size = 0
     with open(dest_path, "wb") as out:
         while True:
             chunk = await upload.read(1024 * 1024)
             if not chunk:
                 break
+            size += len(chunk)
+            if size > max_bytes:
+                out.close()
+                try:
+                    os.remove(dest_path)
+                except OSError:
+                    pass
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Upload exceeds max size of {MAX_UPLOAD_MB}MB.",
+                )
             out.write(chunk)
 
 
-def simple_tokenizer(text: str) -> List[str]:
-    return text.split()
+def simple_tokenizer(text: str) -> List[tuple[str, int, int]]:
+    tokens: List[tuple[str, int, int]] = []
+    for match in re.finditer(r"\S+", text):
+        tokens.append((match.group(0), match.start(), match.end()))
+    return tokens
 
 
-def chunk_text(text: str, chunk_tokens: int = CHUNK_TOKENS, overlap: int = CHUNK_OVERLAP) -> List[str]:
+def chunk_text(
+    text: str, chunk_tokens: int = CHUNK_TOKENS, overlap: int = CHUNK_OVERLAP
+) -> List[Dict[str, Any]]:
     tokens = simple_tokenizer(text)
-    chunks: List[str] = []
+    chunks: List[Dict[str, Any]] = []
     start = 0
     while start < len(tokens):
         end = min(len(tokens), start + chunk_tokens)
-        chunk = " ".join(tokens[start:end])
-        chunks.append(chunk)
+        token_slice = tokens[start:end]
+        if not token_slice:
+            break
+        char_start = token_slice[0][1]
+        char_end = token_slice[-1][2]
+        chunk = text[char_start:char_end]
+        chunks.append({"text": chunk, "char_start": char_start, "char_end": char_end})
         if end == len(tokens):
             break
         start = max(0, end - overlap)
@@ -184,14 +217,21 @@ def parse_excel_metrics(path: str) -> Dict[str, Any]:
 
 
 class VectorIndex:
+    _model: Optional[SentenceTransformer] = None
+    _model_lock = threading.Lock()
     def __init__(self, project_dir: str) -> None:
         self.project_dir = project_dir
         self.index_dir = os.path.join(project_dir, "index")
         self.index_path = os.path.join(self.index_dir, "faiss.index")
         self.meta_path = os.path.join(self.index_dir, "meta.jsonl")
-        self.model = SentenceTransformer(EMBED_MODEL_NAME)
+        if VectorIndex._model is None:
+            with VectorIndex._model_lock:
+                if VectorIndex._model is None:
+                    VectorIndex._model = SentenceTransformer(EMBED_MODEL_NAME)
+        self.model = VectorIndex._model
         self.dim = self.model.get_sentence_embedding_dimension()
         self.index = None
+        self._known_hashes: Optional[set[str]] = None
         self._load()
 
     def _load(self) -> None:
@@ -205,12 +245,40 @@ class VectorIndex:
     def _save(self) -> None:
         faiss.write_index(self.index, self.index_path)
 
+    def _ensure_known_hashes(self) -> None:
+        if self._known_hashes is not None:
+            return
+        hashes: set[str] = set()
+        with open(self.meta_path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                meta = payload.get("meta", {})
+                file_hash = meta.get("hash")
+                if isinstance(file_hash, str) and file_hash:
+                    hashes.add(file_hash)
+        self._known_hashes = hashes
+
+    def has_hash(self, file_hash: str) -> bool:
+        self._ensure_known_hashes()
+        return file_hash in (self._known_hashes or set())
+
     def add(self, texts: List[str], metas: List[Dict[str, Any]]) -> None:
         embeddings = self.model.encode(texts, normalize_embeddings=True)
         self.index.add(embeddings)
         with open(self.meta_path, "a", encoding="utf-8") as handle:
             for meta, text in zip(metas, texts):
                 handle.write(json.dumps({"meta": meta, "text": text}) + "\n")
+                file_hash = meta.get("hash")
+                if isinstance(file_hash, str) and file_hash:
+                    if self._known_hashes is None:
+                        self._known_hashes = set()
+                    self._known_hashes.add(file_hash)
         self._save()
 
     def search(self, query: str, top_k: int = TOP_K) -> List[Dict[str, Any]]:
@@ -299,17 +367,40 @@ app = FastAPI(title="RAG Feasibility Study Generator")
 llm = LLMClient()
 
 
+def _sanitize_filename(filename: str) -> str:
+    base = os.path.basename(filename or "upload")
+    safe = SAFE_FILENAME.sub("_", base).strip("._")
+    return safe or "upload"
+
+
+def _get_vector_index(project_dir: str) -> VectorIndex:
+    with _INDEX_CACHE_LOCK:
+        index = _INDEX_CACHE.get(project_dir)
+        if index is None:
+            index = VectorIndex(project_dir)
+            _INDEX_CACHE[project_dir] = index
+        return index
+
+
 @app.post("/ingest", response_model=IngestResponse)
 async def ingest(project_id: str = Form(...), files: List[UploadFile] = File(...)) -> IngestResponse:
     base = ensure_dirs(project_id)
+    vi = _get_vector_index(base)
     saved: List[str] = []
     for file in files:
-        dest = os.path.join(base, "uploads", file.filename)
-        await stream_save(file, dest)
+        safe_name = _sanitize_filename(file.filename)
+        ext = os.path.splitext(safe_name)[1].lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
+        dest = os.path.join(base, "uploads", safe_name)
+        await stream_save(file, dest, max_bytes=MAX_UPLOAD_BYTES)
+        file_hash = sha256_file(dest)
+        if vi.has_hash(file_hash):
+            saved.append(dest)
+            continue
         saved.append(dest)
 
         parsed_items: List[Dict[str, Any]] = []
-        ext = os.path.splitext(file.filename)[1].lower()
         if ext == ".pdf":
             parsed_items = parse_pdf(dest)
         elif ext == ".docx":
@@ -338,13 +429,13 @@ async def ingest(project_id: str = Form(...), files: List[UploadFile] = File(...
             for item in parsed_items:
                 out.write(json.dumps(item) + "\n")
 
-        vi = VectorIndex(base)
         texts: List[str] = []
         metas: List[Dict[str, Any]] = []
         for item in parsed_items:
             chunks = chunk_text(item.get("text", ""))
-            for chunk in chunks:
-                texts.append(chunk)
+            for chunk_idx, chunk in enumerate(chunks):
+                text = chunk.get("text", "")
+                texts.append(text)
                 metas.append(
                     {
                         "project_id": project_id,
@@ -352,9 +443,10 @@ async def ingest(project_id: str = Form(...), files: List[UploadFile] = File(...
                         "file_type": ext[1:],
                         "page_or_sheet": item.get("page_or_sheet"),
                         "section": None,
-                        "char_start": 0,
-                        "char_end": len(chunk),
-                        "hash": sha256_file(dest),
+                        "char_start": int(chunk.get("char_start", 0)),
+                        "char_end": int(chunk.get("char_end", len(text))),
+                        "chunk_id": f"{safe_name}:{item.get('page_or_sheet')}:{chunk_idx}",
+                        "hash": file_hash,
                     }
                 )
         if texts:
@@ -371,7 +463,7 @@ async def ingest(project_id: str = Form(...), files: List[UploadFile] = File(...
 @app.post("/generate")
 def generate(req: GenerateRequest) -> JSONResponse:
     base = ensure_dirs(req.project_id)
-    vi = VectorIndex(base)
+    vi = _get_vector_index(base)
     reranker = Reranker()
 
     snap_path = os.path.join(base, "financial", "snapshot.json")
