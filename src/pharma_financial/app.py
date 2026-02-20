@@ -1083,19 +1083,19 @@ def _render_inputs_tab(
         }
         for name, params in inputs.unit_costs.items()
     ]
-    st.dataframe(pd.DataFrame(assumption_rows), use_container_width=True)
+    st.dataframe(_ensure_dataframe(assumption_rows), use_container_width=True)
 
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("### Direct Labour Structure")
         st.dataframe(
-            _dict_to_dataframe(inputs.direct_labor_costs, "Role", "Annual Cost"),
+            _ensure_dataframe(_dict_to_dataframe(inputs.direct_labor_costs, "Role", "Annual Cost")),
             use_container_width=True,
         )
     with col2:
         st.markdown("### Indirect Labour Structure")
         st.dataframe(
-            _dict_to_dataframe(inputs.indirect_labor_costs, "Role", "Annual Cost"),
+            _ensure_dataframe(_dict_to_dataframe(inputs.indirect_labor_costs, "Role", "Annual Cost")),
             use_container_width=True,
         )
 
@@ -1116,8 +1116,7 @@ def _render_inputs_tab(
                 "Operating Hours": hours,
             }
         )
-    utility_df = pd.DataFrame(utility_rows)
-    st.dataframe(utility_df, use_container_width=True)
+    st.dataframe(_ensure_dataframe(utility_rows), use_container_width=True)
 
 
 def _render_dashboard_tab(
@@ -2000,11 +1999,15 @@ def _render_break_even(outputs: FinancialOutputs) -> None:
 
 
 def _dict_to_dataframe(data: Mapping[str, float], index_label: str, value_label: str) -> pd.DataFrame:
-    return (
+    frame = (
         pd.DataFrame(list(data.items()), columns=[index_label, value_label])
         .sort_values(index_label)
         .reset_index(drop=True)
     )
+    for column in frame.columns:
+        if pd.api.types.is_extension_array_dtype(frame[column].dtype):
+            frame[column] = frame[column].astype(object).where(frame[column].notna(), None)
+    return frame
 
 def _with_year(df: object) -> object:
     table = _ensure_dataframe(df)
