@@ -12,7 +12,15 @@
               "Value": -70.3921342450854
             },
             {
+              "Metric": "Project NPV",
+              "Value": -66.89213424508539
+            },
+            {
               "Metric": "IRR",
+              "Value": NaN
+            },
+            {
+              "Metric": "Project IRR",
               "Value": NaN
             },
             {
@@ -58,6 +66,38 @@
             {
               "Metric": "Average Debt Service Coverage",
               "Value": -9.572340538530483
+            },
+            {
+              "Metric": "Average Labor Cost per Unit",
+              "Value": 0.3972797973234864
+            },
+            {
+              "Metric": "Direct Labor Share of Expenses",
+              "Value": 0.6648303598522711
+            },
+            {
+              "Metric": "Indirect Labor Share of Expenses",
+              "Value": 0.16435999563130485
+            },
+            {
+              "Metric": "Configured Labor Burden Rate",
+              "Value": 0.0
+            },
+            {
+              "Metric": "Monte Carlo Loss Probability",
+              "Value": 1.0
+            },
+            {
+              "Metric": "Monte Carlo NPV P10",
+              "Value": -430.44794276303816
+            },
+            {
+              "Metric": "Monte Carlo NPV P50",
+              "Value": -392.4318689426412
+            },
+            {
+              "Metric": "Monte Carlo NPV P90",
+              "Value": -390.30339941558987
             },
             {
               "Metric": "Investor Viability Score",

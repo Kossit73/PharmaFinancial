@@ -217,6 +217,7 @@ class ModelInputs:
     utility_schedule: UtilitySchedule
     direct_labor_costs: Mapping[str, float]
     indirect_labor_costs: Mapping[str, float]
+    labor_settings: Mapping[str, float]
     depreciation_schedule: List[DepreciationRow]
     distributor_commission: List[DistributorCommissionRow]
     capital_expenditure: Mapping[str, float]
@@ -236,6 +237,8 @@ class ModelInputs:
     goal_seek: Optional[GoalSeekParameters]
     ai: AIParameters
     utility_cost_of_sales_share: float
+    currency_scale: float
+    assumption_metadata: Mapping[str, Mapping[str, object]]
     viability: ViabilityParameters
 
     @property
@@ -1034,11 +1037,101 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
 
     ai_params = _parse_ai(raw.get("ai", {}))
     viability = _parse_viability(raw.get("viability", {}))
+    labor_block = raw.get("labor", {})
+    settings_source: Mapping[str, object] = {}
+    if isinstance(labor_block, Mapping):
+        candidate = labor_block.get("settings", {})
+        if isinstance(candidate, Mapping):
+            settings_source = candidate
+    top_level_labor_settings = raw.get("labor_settings", {})
+    if isinstance(top_level_labor_settings, Mapping):
+        settings_source = {**settings_source, **top_level_labor_settings}
+    labor_settings: Dict[str, float] = {}
+    for key in (
+        "direct_fixed_share",
+        "indirect_variable_share",
+        "direct_wage_escalation",
+        "indirect_wage_escalation",
+        "direct_burden_rate",
+        "indirect_burden_rate",
+        "productivity_gain",
+    ):
+        try:
+            labor_settings[key] = float(settings_source.get(key, 0.0))
+        except (TypeError, ValueError):
+            labor_settings[key] = 0.0
+    currency_raw = raw.get("currency_scale", raw.get("units_scale", 1.0))
+    try:
+        currency_scale = float(currency_raw)
+    except (TypeError, ValueError):
+        currency_scale = 1.0
+    if currency_scale == 0:
+        currency_scale = 1.0
+    if currency_scale < 0:
+        currency_scale = abs(currency_scale)
+    metadata_raw = raw.get("assumption_metadata", {})
+    assumption_metadata: Dict[str, Mapping[str, object]] = {}
+    if isinstance(metadata_raw, Mapping):
+        for key, value in metadata_raw.items():
+            if isinstance(value, Mapping):
+                assumption_metadata[str(key)] = dict(value)
 
     if not production_estimate:
         production_estimate = {
             str(name): _coerce_schedule([], len(years)) for name in unit_costs.keys()
         }
+
+    if currency_scale != 1.0:
+        for params in unit_costs.values():
+            params.production_cost *= currency_scale
+            params.selling_price *= currency_scale
+            params.freight_cost *= currency_scale
+        fixed_overrides = {
+            name: float(value) * currency_scale for name, value in fixed_overrides.items()
+        }
+        variable_overrides = {
+            name: float(value) * currency_scale for name, value in variable_overrides.items()
+        }
+        for row in break_even_rows:
+            row.fixed_cost *= currency_scale
+            row.selling_price *= currency_scale
+            row.variable_cost *= currency_scale
+            row.target_profit *= currency_scale
+        for row in depreciation_schedule:
+            row.acquisition *= currency_scale
+            row.opening_net_book *= currency_scale
+            row.opening_cumulative *= currency_scale
+        direct_labor_costs = {
+            role: float(value) * currency_scale for role, value in raw["labor"]["direct"].items()
+        }
+        indirect_labor_costs = {
+            role: float(value) * currency_scale for role, value in raw["labor"]["indirect"].items()
+        }
+        scaled_capital_expenditure: Dict[str, object] = {}
+        for key, value in raw["capital_expenditure"].items():
+            if key == "annual_additions" and isinstance(value, Mapping):
+                scaled_capital_expenditure[key] = {
+                    year: float(amount) * currency_scale for year, amount in value.items()
+                }
+            else:
+                scaled_capital_expenditure[key] = float(value) * currency_scale
+        capital_expenditure = scaled_capital_expenditure
+        financing.initial_investment *= currency_scale
+        financing.share_capital *= currency_scale
+        for entries in (
+            financing.senior_debt_entries,
+            financing.revolver_entries,
+            financing.overdraft_entries,
+        ):
+            for entry in entries:
+                entry.amount *= currency_scale
+                entry.outstanding *= currency_scale
+        raw_material_cost_per_unit = float(raw["raw_material_cost"]["per_unit"]) * currency_scale
+    else:
+        direct_labor_costs = raw["labor"]["direct"]
+        indirect_labor_costs = raw["labor"]["indirect"]
+        capital_expenditure = raw["capital_expenditure"]
+        raw_material_cost_per_unit = float(raw["raw_material_cost"]["per_unit"])
 
     return ModelInputs(
         years=years,
@@ -1052,13 +1145,14 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         fixed_cost_overrides=fixed_overrides,
         variable_cost_overrides=variable_overrides,
         inflation_series=inflation_series,
-        raw_material_cost_per_unit=float(raw["raw_material_cost"]["per_unit"]),
+        raw_material_cost_per_unit=raw_material_cost_per_unit,
         utility_schedule=utility,
-        direct_labor_costs=raw["labor"]["direct"],
-        indirect_labor_costs=raw["labor"]["indirect"],
+        direct_labor_costs=direct_labor_costs,
+        indirect_labor_costs=indirect_labor_costs,
+        labor_settings=labor_settings,
         depreciation_schedule=depreciation_schedule,
         distributor_commission=commission_rows,
-        capital_expenditure=raw["capital_expenditure"],
+        capital_expenditure=capital_expenditure,
         financing=financing,
         working_capital_days=working_capital,
         tax_rate=float(tax_data.get("rate", 0.0)),
@@ -1075,6 +1169,8 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         goal_seek=goal_seek,
         ai=ai_params,
         utility_cost_of_sales_share=cost_share_value,
+        currency_scale=currency_scale,
+        assumption_metadata=assumption_metadata,
         viability=viability,
     )
 

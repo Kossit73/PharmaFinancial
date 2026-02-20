@@ -15,22 +15,9 @@ import math
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, cast
 from zipfile import ZipFile
 
-try:  # pragma: no cover - allow importing helper functions without Streamlit installed
-    import streamlit as st
-except Exception:  # pragma: no cover - lightweight stub for non-Streamlit environments
-    class _StreamlitStub:
-        session_state: dict = {}
-
-        def __getattr__(self, name: str):  # noqa: D401 - simple runtime guard
-            def _missing(*args, **kwargs):
-                raise RuntimeError(
-                    "Streamlit runtime is required for UI operations."
-                )
-
-            return _missing
-
-    st = _StreamlitStub()  # type: ignore
-    st.sidebar = _StreamlitStub()  # type: ignore[attr-defined]
+import pandas as pd
+import plotly.express as px
+import streamlit as st
 
 if TYPE_CHECKING:  # pragma: no cover - typing aid only
     from streamlit.delta_generator import DeltaGenerator
@@ -40,25 +27,8 @@ else:  # pragma: no cover - used when Streamlit isn't fully available
 from .ai import AIInsights
 from .debt import amortise_entries
 from .inputs import DebtEntry, ModelInputs, parse_inputs
-from .model import (
-    CASH_FLOW_BEGIN_COLUMN,
-    CASH_FLOW_END_COLUMN,
-    CASH_FLOW_NET_COLUMN,
-    FinancialModel,
-    FinancialOutputs,
-)
-from .report import ReportSection, ReportTable, collect_report_sections, generate_report
-from .table import Table
-
-try:  # pragma: no cover - executed in environments with pandas available
-    import pandas as pd
-except Exception:  # pragma: no cover - fallback for environments without pandas
-    pd = None  # type: ignore
-else:  # pragma: no cover - runtime configuration
-    try:
-        pd.set_option("mode.string_storage", "python")
-    except Exception:
-        pass
+from .model import FinancialModel, FinancialOutputs
+from .report import collect_report_sections, generate_report
 
 try:  # pragma: no cover - optional dependency for charting
     import plotly.express as px
@@ -1103,283 +1073,51 @@ def _render_inputs_tab(
     _render_projection_horizon(payload)
 
     st.subheader("Core Assumptions")
-    rows: List[dict] = st.session_state.get("core_assumption_rows", [])
-    _prime_core_widget_state(rows)
+    assumption_rows = [
+        {
+            "Product": name.title(),
+            "Production Cost": params.production_cost,
+            "Selling Price": params.selling_price,
+            "Freight Cost": params.freight_cost,
+            "Markup": params.markup,
+        }
+        for name, params in inputs.unit_costs.items()
+    ]
+    st.dataframe(pd.DataFrame(assumption_rows), use_container_width=True)
 
-    if not rows:
-        st.info("No core assumptions configured. Use the form below to add entries.")
-
-    production_estimate = payload.get("production_estimate", {})
-    total_unit_defaults = payload.get("total_production_units", {})
-    capacity_defaults = payload.get("production_capacity", {})
-    inflation_factors = _inflation_factors_from_payload(payload)
-    risk_factors = _risk_factors_from_payload(payload)
-
-    updated_rows: list[dict] = []
-    for index, row in enumerate(rows):
-        container = st.container()
-        with container:
-            row_product = str(row.get("Product", ""))
-            default_units = float(row.get("Total Production Units", 0.0))
-            if default_units == 0.0:
-                if row_product in total_unit_defaults:
-                    default_units = float(total_unit_defaults[row_product])
-                elif isinstance(production_estimate, Mapping) and row_product in production_estimate:
-                    default_units = sum(
-                        float(value)
-                        for value in production_estimate.get(row_product, [])
-                    )
-            default_capacity = float(row.get("Max Capacity", 0.0))
-            if default_capacity == 0.0 and row_product in capacity_defaults:
-                default_capacity = float(capacity_defaults[row_product])
-
-            cols = st.columns([3, 2, 2, 2, 2, 2, 2, 2, 2, 1])
-            desc_key = f"core_desc_{index}"
-            prod_key = f"core_prod_{index}"
-            sell_key = f"core_sell_{index}"
-            freight_key = f"core_freight_{index}"
-            markup_key = f"core_markup_{index}"
-            units_key = f"core_units_{index}"
-            capacity_key = f"core_capacity_{index}"
-
-            _ensure_widget_default(desc_key, row.get("Product", ""))
-            _ensure_widget_default(prod_key, float(row.get("Production Cost", 0.0)))
-            _ensure_widget_default(sell_key, float(row.get("Selling Price", 0.0)))
-            _ensure_widget_default(freight_key, float(row.get("Freight Cost", 0.0)))
-            _ensure_widget_default(markup_key, float(row.get("Markup", 0.0)))
-            _ensure_widget_default(units_key, default_units)
-            _ensure_widget_default(capacity_key, default_capacity)
-
-            description = cols[0].text_input(
-                "Description",
-                value=str(st.session_state.get(desc_key, "")),
-                key=desc_key,
-                help="Name of the product or assumption this row represents.",
-            )
-            production = cols[1].number_input(
-                "Production Cost",
-                value=float(st.session_state.get(prod_key, 0.0)),
-                key=prod_key,
-                step=0.001,
-                format="%.4f",
-            )
-            selling = cols[2].number_input(
-                "Selling Price",
-                value=float(st.session_state.get(sell_key, 0.0)),
-                key=sell_key,
-                step=0.001,
-                format="%.4f",
-            )
-            freight = cols[3].number_input(
-                "Freight Cost",
-                value=float(st.session_state.get(freight_key, 0.0)),
-                key=freight_key,
-                step=0.001,
-                format="%.4f",
-            )
-            markup = cols[4].number_input(
-                "Markup",
-                value=float(st.session_state.get(markup_key, 0.0)),
-                key=markup_key,
-                step=0.01,
-                format="%.2f",
-            )
-            total_units = cols[5].number_input(
-                "Total Production Units",
-                value=float(st.session_state.get(units_key, default_units)),
-                key=units_key,
-                step=1.0,
-                format="%.4f",
-                min_value=0.0,
-            )
-            max_capacity = cols[6].number_input(
-                "Max Capacity",
-                value=float(st.session_state.get(capacity_key, default_capacity)),
-                key=capacity_key,
-                step=1.0,
-                format="%.4f",
-                min_value=0.0,
-            )
-
-            clamped_units = float(total_units)
-            if max_capacity > 0.0 and clamped_units > max_capacity + 1e-9:
-                cols[5].error("Capacity exceeded")
-                clamped_units = max_capacity
-
-            scaled_series = _scaled_production_series(
-                description.strip(),
-                clamped_units,
-                payload.get("years", []),
-                production_estimate,
-            )
-            total_revenue = float(clamped_units) * float(selling)
-            total_cost = float(clamped_units) * (
-                float(production) + float(freight) + float(markup)
-            )
-
-            revenue_key = f"core_revenue_{index}"
-            cost_key = f"core_cost_{index}"
-            _set_widget_value(revenue_key, total_revenue)
-            _set_widget_value(cost_key, total_cost)
-
-            cols[7].number_input(
-                "Total Revenue",
-                key=revenue_key,
-                format="%.4f",
-                disabled=True,
-            )
-            cols[8].number_input(
-                "Total Cost",
-                key=cost_key,
-                format="%.4f",
-                disabled=True,
-            )
-            if cols[9].button("Remove", key=f"core_remove_{index}"):
-                del rows[index]
-                st.session_state["core_assumption_rows"] = rows
-                _prime_core_widget_state(rows)
-                _rerun()
-
-        updated_rows.append(
-            {
-                "Product": description.strip(),
-                "Production Cost": production,
-                "Selling Price": selling,
-                "Freight Cost": freight,
-                "Markup": markup,
-                "Total Production Units": clamped_units,
-                "Max Capacity": max_capacity,
-                "Total Revenue": total_revenue,
-                "Total Cost": total_cost,
-            }
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("### Direct Labour Structure")
+        st.dataframe(
+            _dict_to_dataframe(inputs.direct_labor_costs, "Role", "Annual Cost"),
+            use_container_width=True,
         )
-
-    if updated_rows != rows:
-        st.session_state["core_assumption_rows"] = updated_rows
-        _prime_core_widget_state(updated_rows)
-
-    st.markdown("#### Add a core assumption")
-    with st.form("add_core_assumption"):
-        new_description = st.text_input(
-            "Description", key="core_new_description", help="Label for the new row."
+    with col2:
+        st.markdown("### Indirect Labour Structure")
+        st.dataframe(
+            _dict_to_dataframe(inputs.indirect_labor_costs, "Role", "Annual Cost"),
+            use_container_width=True,
         )
-        new_production = st.number_input(
-            "Production Cost", value=0.0, step=0.001, format="%.4f", key="core_new_prod"
-        )
-        new_selling = st.number_input(
-            "Selling Price", value=0.0, step=0.001, format="%.4f", key="core_new_sell"
-        )
-        new_freight = st.number_input(
-            "Freight Cost", value=0.0, step=0.001, format="%.4f", key="core_new_freight"
-        )
-        new_markup = st.number_input(
-            "Markup", value=0.0, step=0.01, format="%.2f", key="core_new_markup"
-        )
-        new_units = st.number_input(
-            "Total Production Units",
-            value=0.0,
-            step=1.0,
-            format="%.4f",
-            key="core_new_units",
-            min_value=0.0,
-        )
-        new_capacity = st.number_input(
-            "Max Capacity",
-            value=0.0,
-            step=1.0,
-            format="%.4f",
-            key="core_new_capacity",
-            min_value=0.0,
-        )
-        submitted = st.form_submit_button("Add")
-
-    if submitted:
-        if not new_description.strip():
-            st.warning("Description is required to add a core assumption.")
-        else:
-            clamped_units = new_units
-            if new_capacity > 0.0 and new_units > new_capacity + 1e-9:
-                st.error("Capacity exceeded")
-                clamped_units = new_capacity
-            total_revenue = clamped_units * new_selling
-            total_cost = clamped_units * (new_production + new_freight + new_markup)
-            rows.append(
-                {
-                    "Product": new_description.strip(),
-                    "Production Cost": new_production,
-                    "Selling Price": new_selling,
-                    "Freight Cost": new_freight,
-                    "Markup": new_markup,
-                    "Total Production Units": clamped_units,
-                    "Max Capacity": new_capacity,
-                    "Total Revenue": total_revenue,
-                    "Total Cost": total_cost,
-                }
-            )
-            st.session_state["core_assumption_rows"] = rows
-            _prime_core_widget_state(rows)
-            for key in (
-                "core_new_description",
-                "core_new_prod",
-                "core_new_sell",
-                "core_new_freight",
-                "core_new_markup",
-                "core_new_units",
-                "core_new_capacity",
-            ):
-                st.session_state.pop(key, None)
-            _rerun()
-
-    st.markdown("### Distributors Commission Input Table")
-    _render_distributor_commission(payload)
-
-    st.markdown("### Direct Labour Structure")
-    _render_labor_section("direct", "direct_labor_rows", payload)
-
-    st.markdown("### Indirect Labour Structure")
-    _render_labor_section("indirect", "indirect_labor_rows", payload)
 
     st.markdown("### Fixed & Variable Costs Input Table")
     _render_fixed_variable_costs(payload)
 
-    _render_utility_schedule(payload)
-
-    st.markdown("### Accounts Receivable Input Table")
-    _render_receivable_inputs(payload)
-
-    st.markdown("### Inventory & Accounts Payable Input Table")
-    _render_inventory_inputs(payload)
-
-    st.markdown("### Fixed Assets Schedule")
-    _render_depreciation_schedule(payload)
-
-    st.markdown("### Cost & Financing Assumptions")
-    _render_cost_and_financing(payload)
-
-    st.markdown("### Tax Schedule")
-    _render_tax_schedule(payload)
-
-    st.markdown("### Inflation Schedule")
-    _render_inflation_schedule(payload)
-
-    st.markdown("### Risk Schedule")
-    _render_risk_schedule(payload)
-
-    st.markdown("### AI & Machine Learning Summary")
-    _render_ai_summary(payload)
-
-    _core_rows_to_payload(st.session_state.get("core_assumption_rows", []), payload)
-    _commission_rows_to_payload(st.session_state.get("commission_rows", []), payload)
-    _utility_entries_to_payload(st.session_state.get("utility_entries", []), payload)
-    _receivable_rows_to_payload(st.session_state.get("receivable_rows", []), payload)
-    _inventory_rows_to_payload(st.session_state.get("inventory_rows", []), payload)
-    _depreciation_rows_to_payload(st.session_state.get("depreciation_rows", []), payload)
-    _risk_rows_to_payload(st.session_state.get("risk_rows", []), payload)
-    _inflation_rows_to_payload(st.session_state.get("inflation_rows", []), payload)
-    _debt_rows_to_payload(st.session_state.get("senior_debt_rows", []), payload, "senior_debt")
-    _debt_rows_to_payload(st.session_state.get("revolver_rows", []), payload, "revolver")
-    _debt_rows_to_payload(st.session_state.get("overdraft_rows", []), payload, "overdraft")
-    st.session_state["input_payload"] = payload
+    st.markdown("### Utility Schedule")
+    utility_rows = []
+    operating_days = list(inputs.utility_schedule.electricity_days)
+    operating_hours = list(inputs.utility_schedule.steam_hours)
+    for idx, year in enumerate(inputs.years):
+        days = operating_days[idx] if idx < len(operating_days) else (operating_days[-1] if operating_days else 0)
+        hours = operating_hours[idx] if idx < len(operating_hours) else (operating_hours[-1] if operating_hours else 0)
+        utility_rows.append(
+            {
+                "Year": year,
+                "Operating Days": days,
+                "Operating Hours": hours,
+            }
+        )
+    utility_df = pd.DataFrame(utility_rows)
+    st.dataframe(utility_df, use_container_width=True)
 
 
 def _render_dashboard_tab(
@@ -1410,6 +1148,7 @@ def _render_dashboard_tab(
         "IRR",
         "Payback Period",
         "Profitability Index",
+        "Average Labor Cost per Unit",
         "Weighted Average EBITDA Margin",
         "Investor Viability Score",
     ]
@@ -2204,77 +1943,14 @@ def _render_monte_carlo(
     model: FinancialModel, outputs: FinancialOutputs, digest: str
 ) -> None:
     st.subheader("Monte Carlo Simulation")
-    payload = st.session_state.get("input_payload")
-    if payload is None:
-        payload = {}
-        st.session_state["input_payload"] = payload
-    st.markdown("### Monte Carlo Simulation Configuration")
-    _render_monte_carlo_inputs(payload)
-    st.session_state["input_payload"] = payload
-
-    monte_carlo_results = _analysis_cache_value(
-        "monte_carlo_results", digest, outputs.monte_carlo
-    )
-
-    if st.button("Run Monte Carlo Simulation", key="run_monte_carlo"):
-        with st.spinner("Running Monte Carlo simulation..."):
-            monte_carlo_results = model.monte_carlo_simulation()
-        _store_analysis_cache("monte_carlo_results", digest, monte_carlo_results)
-
-    if model.inputs.monte_carlo.iterations <= 0:
-        st.info("Monte Carlo iterations are set to 0. Increase iterations to run.")
-        return
-
-    if not getattr(monte_carlo_results, "index", []):
-        st.info("Run Monte Carlo Simulation to generate results.")
-        return
-
-    monte_carlo_df = _ensure_dataframe(monte_carlo_results)
-    if px is None or pd is None:
-        st.warning("Plotly unavailable. Displaying Monte Carlo results in tabular form.")
-        st.dataframe(monte_carlo_df, use_container_width=True)
-    else:
-        fig = px.histogram(monte_carlo_df, x="NPV", nbins=40, title="NPV Distribution")
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(monte_carlo_df.describe().T, use_container_width=True)
+    fig = px.histogram(outputs.monte_carlo, x="NPV", nbins=40, title="NPV Distribution")
+    st.plotly_chart(fig, use_container_width=True)
+    st.dataframe(outputs.monte_carlo.describe().T, use_container_width=True)
 
 
 def _render_break_even(outputs: FinancialOutputs) -> None:
     st.subheader("Break-even Analysis")
-    payload = st.session_state.get("input_payload")
-    if payload is None:
-        payload = {}
-        st.session_state["input_payload"] = payload
-
-    st.markdown("### Break-even Analysis Inputs")
-    _render_break_even_inputs(payload)
-    st.session_state["input_payload"] = payload
-
-    break_even_df = _ensure_dataframe(outputs.break_even)
-    if pd is not None and isinstance(break_even_df, pd.DataFrame):
-        break_even_frame = break_even_df.reset_index().rename(columns={"index": "Product"})
-    else:
-        break_even_frame = pd.DataFrame(break_even_df)
-    st.dataframe(break_even_frame, use_container_width=True)
-
-    if px is not None and pd is not None and not break_even_frame.empty:
-        y_column = (
-            "Break-even Units"
-            if "Break-even Units" in break_even_frame.columns
-            else break_even_frame.columns[-1]
-        )
-        if y_column in break_even_frame.columns and "Product" in break_even_frame.columns:
-            fig_break_even = px.bar(
-                break_even_frame,
-                x="Product",
-                y=y_column,
-                title="Break-even Units by Product",
-            )
-            st.plotly_chart(
-                fig_break_even,
-                use_container_width=True,
-                key="break_even_units_chart",
-            )
+    st.dataframe(outputs.break_even.reset_index().rename(columns={"index": "Product"}), use_container_width=True)
 
     st.markdown("### Payback Schedule")
     payback_df = _with_year(outputs.payback)
@@ -2323,335 +1999,7 @@ def _render_break_even(outputs: FinancialOutputs) -> None:
             )
 
 
-
-def _render_break_even_inputs(payload: dict) -> None:
-    defaults = _payload_to_break_even_rows(payload)
-    if not defaults:
-        defaults = _default_break_even_rows(payload)
-
-    default_map = {
-        str(row.get("Product", "")): dict(row)
-        for row in defaults
-        if isinstance(row, Mapping) and row.get("Product")
-    }
-
-    overrides = set(st.session_state.get("break_even_overrides", []) or [])
-    rows: list[dict] = list(st.session_state.get("break_even_rows", []) or [])
-
-    if default_map:
-        if not rows:
-            rows = [dict(value) for value in default_map.values()]
-        else:
-            row_map = {
-                str(row.get("Product", "")): dict(row)
-                for row in rows
-                if isinstance(row, Mapping) and row.get("Product")
-            }
-            aligned_rows: list[dict] = []
-            for product, default_row in default_map.items():
-                if product in overrides and product in row_map:
-                    aligned_rows.append(row_map[product])
-                else:
-                    aligned_rows.append(dict(default_row))
-                    if product in overrides and product not in row_map:
-                        overrides.discard(product)
-            for product, row in row_map.items():
-                if product not in default_map:
-                    aligned_rows.append(row)
-                    overrides.add(product)
-            rows = aligned_rows
-
-        st.session_state["break_even_rows"] = rows
-
-    if not rows:
-        st.info("No break-even assumptions configured. Use the form below to add entries.")
-
-    product_catalog = sorted(
-        value
-        for value in {
-            *(payload.get("unit_costs", {}) or {}).keys(),
-            *(row.get("Product", "") or "" for row in rows),
-        }
-        if value
-    )
-
-    cost_source = st.session_state.get("fixed_variable_rows", []) or _payload_to_fixed_variable_rows(
-        payload
-    )
-    cost_lookup: dict[str, dict[str, float]] = {}
-    for entry in cost_source:
-        if not isinstance(entry, Mapping):
-            continue
-        name = str(entry.get("Product", "") or "").strip()
-        if not name:
-            continue
-        cost_lookup[name] = {
-            "fixed": float(entry.get("Fixed Cost", 0.0) or 0.0),
-            "variable": float(entry.get("Variable Cost", 0.0) or 0.0),
-        }
-
-    unit_costs = payload.get("unit_costs", {}) if isinstance(payload, Mapping) else {}
-    price_lookup: dict[str, float] = {}
-    if isinstance(unit_costs, Mapping):
-        for name, values in unit_costs.items():
-            if isinstance(values, Mapping):
-                price_lookup[str(name)] = float(values.get("price", 0.0) or 0.0)
-
-    updated_rows: list[dict] = []
-    overrides_updated = set(overrides)
-    for index, row in enumerate(rows):
-        container = st.container()
-        with container:
-            cols = st.columns([2.0, 1.4, 1.4, 1.4, 1.4, 1.4, 0.8])
-            product_value = _select_or_create_option(
-                cols[0],
-                "Product",
-                product_catalog,
-                f"break_even_product_{index}",
-                current_value=str(row.get("Product", "")),
-            )
-            clean_product = (product_value or "").strip()
-            cost_info = cost_lookup.get(clean_product)
-            fixed_default = (
-                cost_info["fixed"]
-                if cost_info is not None
-                else float(row.get("Fixed Cost", 0.0))
-            )
-            variable_default = (
-                cost_info["variable"]
-                if cost_info is not None
-                else float(row.get("Variable Cost", 0.0))
-            )
-            fixed_key = f"break_even_fixed_{index}"
-            _set_widget_value(fixed_key, float(fixed_default))
-            cols[1].number_input(
-                "Fixed Cost",
-                value=float(fixed_default),
-                key=fixed_key,
-                step=1000.0,
-                format="%.2f",
-                min_value=0.0,
-                disabled=True,
-                help="Managed via the Fixed & Variable Costs table.",
-            )
-            price_default = price_lookup.get(clean_product, float(row.get("Selling Price", 0.0)))
-            price_key = f"break_even_price_{index}"
-            _set_widget_value(price_key, float(price_default))
-            selling_price = cols[2].number_input(
-                "Selling Price",
-                value=float(price_default),
-                key=price_key,
-                step=0.001,
-                format="%.4f",
-                min_value=0.0,
-                disabled=True,
-                help="Managed via the Core Assumptions table.",
-            )
-            variable_key = f"break_even_variable_{index}"
-            _set_widget_value(variable_key, float(variable_default))
-            cols[3].number_input(
-                "Variable Cost",
-                value=float(variable_default),
-                key=variable_key,
-                step=0.001,
-                format="%.4f",
-                min_value=0.0,
-                disabled=True,
-                help="Managed via the Fixed & Variable Costs table.",
-            )
-            target_profit = cols[4].number_input(
-                "Target Profit",
-                value=float(row.get("Target Profit", 0.0)),
-                key=f"break_even_target_{index}",
-                step=1000.0,
-                format="%.2f",
-                min_value=0.0,
-            )
-            expected_volume = cols[5].number_input(
-                "Expected Volume",
-                value=float(row.get("Expected Volume", 0.0)),
-                key=f"break_even_volume_{index}",
-                step=1.0,
-                format="%.4f",
-                min_value=0.0,
-            )
-            remove = cols[6].button("Remove", key=f"break_even_remove_{index}")
-
-            if cost_info is None:
-                cols[1].warning(
-                    "Configure this product in the Fixed & Variable Costs table to set its costs."
-                )
-            if clean_product and clean_product not in price_lookup:
-                cols[2].warning(
-                    "Set this product's selling price in the Core Assumptions table."
-                )
-
-            fixed_cost = fixed_default
-            variable_cost = variable_default
-            metrics = _calculate_break_even_metrics(
-                {
-                    "Fixed Cost": fixed_cost,
-                    "Selling Price": selling_price,
-                    "Variable Cost": variable_cost,
-                    "Target Profit": target_profit,
-                    "Expected Volume": expected_volume,
-                }
-            )
-
-            metric_cols = st.columns([1.6, 1.6, 1.6, 1.6, 1.6])
-
-            metric_cols[0].metric(
-                "Contribution Margin",
-                _format_display(metrics["Contribution Margin"], 4),
-            )
-            metric_cols[1].metric(
-                "Margin Ratio",
-                _format_percentage(metrics["Contribution Margin Ratio"]),
-            )
-            metric_cols[2].metric(
-                "Break-even Units",
-                _format_display(metrics["Break-even Units"], 2),
-            )
-            metric_cols[3].metric(
-                "Break-even Revenue",
-                _format_display(metrics["Break-even Revenue"], 2),
-            )
-            metric_cols[4].metric(
-                "Margin of Safety",
-                _format_display(metrics["Margin of Safety (Units)"], 2),
-            )
-
-            if metrics["Contribution Margin"] <= 0:
-                cols[3].error("Contribution margin non-positive")
-            if (
-                expected_volume > 0
-                and metrics["Break-even Units"] == metrics["Break-even Units"]
-                and metrics["Break-even Units"] > expected_volume
-            ):
-                cols[5].warning("Break-even exceeds expected volume")
-
-            if remove:
-                overrides_updated.discard(clean_product)
-                continue
-
-            current_row = {
-                "Product": clean_product,
-                "Fixed Cost": fixed_cost,
-                "Selling Price": selling_price,
-                "Variable Cost": variable_cost,
-                "Target Profit": target_profit,
-                "Expected Volume": expected_volume,
-            }
-            updated_rows.append(current_row)
-
-            default_row = default_map.get(clean_product)
-            if default_row is None:
-                overrides_updated.add(clean_product)
-            elif _row_matches_default(current_row, default_row):
-                overrides_updated.discard(clean_product)
-            else:
-                overrides_updated.add(clean_product)
-
-    st.session_state["break_even_rows"] = updated_rows
-    st.session_state["break_even_overrides"] = sorted(overrides_updated)
-    _break_even_rows_to_payload(updated_rows, payload)
-
-    totals = _aggregate_break_even_metrics(updated_rows)
-    if totals:
-        summary_cols = st.columns(3)
-        summary_cols[0].metric("Total Fixed Cost", _format_display(totals["total_fixed"], 2))
-        summary_cols[1].metric(
-            "Weighted Margin Ratio",
-            _format_percentage(totals["weighted_margin_ratio"]),
-        )
-        summary_cols[2].metric(
-            "Aggregate Break-even Revenue",
-            _format_display(totals["aggregate_break_even_revenue"], 2),
-        )
-
-    st.markdown("#### Add Break-even Input")
-    with st.form("break_even_add_form", clear_on_submit=True):
-        new_product = _select_or_create_option(
-            st,
-            "Product",
-            product_catalog,
-            "break_even_new_product",
-        )
-        new_price_lookup = price_lookup.get(str(new_product or "").strip(), 0.0)
-        st.number_input(
-            "Selling Price",
-            value=float(new_price_lookup),
-            step=0.001,
-            format="%.4f",
-            key="break_even_new_price",
-            min_value=0.0,
-            disabled=True,
-            help="Managed via the Core Assumptions table.",
-        )
-        new_target = st.number_input(
-            "Target Profit",
-            value=0.0,
-            step=1000.0,
-            format="%.2f",
-            key="break_even_new_target",
-            min_value=0.0,
-        )
-        new_volume = st.number_input(
-            "Expected Volume",
-            value=0.0,
-            step=1.0,
-            format="%.4f",
-            key="break_even_new_volume",
-            min_value=0.0,
-        )
-        submitted = st.form_submit_button("Add")
-
-    if submitted:
-        cleaned_product = (new_product or "").strip()
-        if not cleaned_product:
-            st.warning("Product name is required to add a break-even row.")
-        elif cleaned_product not in cost_lookup:
-            st.warning(
-                "Add fixed and variable cost details for this product in the Fixed & Variable Costs table first."
-            )
-        elif cleaned_product not in price_lookup:
-            st.warning(
-                "Assign a selling price for this product in the Core Assumptions table before adding it."
-            )
-        else:
-            additions = list(st.session_state.get("break_even_rows", []) or [])
-            additions.append(
-                {
-                    "Product": cleaned_product,
-                    "Fixed Cost": float(cost_lookup[cleaned_product]["fixed"]),
-                    "Selling Price": float(price_lookup[cleaned_product]),
-                    "Variable Cost": float(cost_lookup[cleaned_product]["variable"]),
-                    "Target Profit": float(new_target),
-                    "Expected Volume": float(new_volume),
-                }
-            )
-            st.session_state["break_even_rows"] = additions
-            overrides_updated = set(st.session_state.get("break_even_overrides", []) or [])
-            overrides_updated.add(cleaned_product)
-            st.session_state["break_even_overrides"] = sorted(overrides_updated)
-            _break_even_rows_to_payload(additions, payload)
-            for key in (
-                "break_even_new_product",
-                "break_even_new_product_select",
-                "break_even_new_product_custom",
-                "break_even_new_price",
-                "break_even_new_target",
-                "break_even_new_volume",
-            ):
-                st.session_state.pop(key, None)
-            _rerun()
-
-def _dict_to_dataframe(data: Mapping[str, float], index_label: str, value_label: str):
-    if pd is None:
-        return [
-            {index_label: key, value_label: value}
-            for key, value in sorted(data.items(), key=lambda item: item[0])
-        ]
+def _dict_to_dataframe(data: Mapping[str, float], index_label: str, value_label: str) -> pd.DataFrame:
     return (
         pd.DataFrame(list(data.items()), columns=[index_label, value_label])
         .sort_values(index_label)
@@ -2659,81 +2007,11 @@ def _dict_to_dataframe(data: Mapping[str, float], index_label: str, value_label:
     )
 
 
-def _with_year(table) -> "pd.DataFrame | Table | list":
-    frame = _ensure_dataframe(table)
-    if pd is None:
-        return frame
-    result = frame.copy()
-    if "Year" not in result.columns and not isinstance(frame.index, pd.RangeIndex):
-        result.insert(0, "Year", list(frame.index))
-    return result.reset_index(drop=True)
-
-
-def _clean_streamlit_cell(value: object) -> object:
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
-    if isinstance(value, (dict, list, tuple, set)):
-        return json.dumps(value, default=_json_default)
-    return value
-
-
-def _sanitize_dataframe(frame: "pd.DataFrame") -> "pd.DataFrame":
-    cleaned = frame.copy()
-    cleaned.columns = [_clean_streamlit_cell(column) for column in cleaned.columns]
-    cleaned.columns = [str(column) for column in cleaned.columns]
-    if cleaned.index.name is not None:
-        cleaned.index.name = str(_clean_streamlit_cell(cleaned.index.name))
-    if isinstance(cleaned.index, pd.MultiIndex):
-        cleaned.index = pd.MultiIndex.from_tuples(
-            [
-                tuple(_clean_streamlit_cell(level) for level in levels)
-                for levels in cleaned.index.to_list()
-            ]
-        )
-    elif cleaned.index.dtype == "object":
-        cleaned.index = cleaned.index.map(_clean_streamlit_cell)
-    elif pd.api.types.is_string_dtype(cleaned.index):
-        cleaned.index = (
-            cleaned.index.astype("string[python]").astype(object).map(_clean_streamlit_cell)
-        )
-    for column in cleaned.columns:
-        if pd.api.types.is_string_dtype(cleaned[column]):
-            cleaned[column] = (
-                cleaned[column]
-                .astype("string[python]")
-                .astype(object)
-                .map(_clean_streamlit_cell)
-            )
-        elif cleaned[column].dtype == "object":
-            cleaned[column] = cleaned[column].map(_clean_streamlit_cell)
-    return cleaned
-
-
-def _ensure_dataframe(table) -> "pd.DataFrame | list":
-    if isinstance(table, list):
-        if pd is None:
-            return table
-        return _sanitize_dataframe(pd.DataFrame(table))
-    if isinstance(table, Table):
-        if pd is None:
-            rows = []
-            data = table.as_dict()
-            for idx, label in enumerate(table.index):
-                row = {table.index_name: label}
-                for column, values in data.items():
-                    row[column] = values[idx]
-                rows.append(row)
-            return rows
-        return _sanitize_dataframe(table.to_frame())
-    if hasattr(table, "to_frame"):
-        try:
-            frame = table.to_frame()
-            if pd is not None and isinstance(frame, pd.DataFrame):
-                return _sanitize_dataframe(frame)
-            return frame
-        except Exception:
-            pass
-    return table
+def _with_year(df: pd.DataFrame) -> pd.DataFrame:
+    table = df.copy()
+    if "Year" not in table.columns and not isinstance(df.index, pd.RangeIndex):
+        table.insert(0, "Year", list(df.index))
+    return table.reset_index(drop=True)
 
 
 def _build_business_plan_bundle(
