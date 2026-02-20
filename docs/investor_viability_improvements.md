@@ -96,7 +96,71 @@ Top-line growth alone is not investment-grade evidence; investors want margin du
 - Yield/scrap and batch-failure assumptions with sensitivity to GMP disruption.
 - Explicit ramp curves for new SKUs with launch risk factors.
 
-## 7) Financing strategy and covenant engineering
+
+## 7) Labor model redesign (requested implementation focus)
+
+### Why this matters
+Labor is often the largest controllable operating cost in pharma manufacturing. If labor is modeled too smoothly or too aggregated, break-even, stress testing, and covenant analysis become unreliable.
+
+### 1. Split labor into fixed vs variable by role
+- Keep managers/admin mostly fixed.
+- Scale operators/technicians with volume or shifts.
+- This improves break-even and stress behavior.
+
+### 2. Model headcount explicitly (not only cost totals)
+Add per-role fields:
+- headcount,
+- salary,
+- benefits %,
+- overtime %.
+
+This lets the model test hiring plans and productivity scenarios.
+
+### 3. Add shift-based staffing logic
+- Tie direct labor needs to operating hours and utilization.
+- Example: a 1-shift to 2-shift transition triggers discrete cost jumps.
+
+### 4. Include payroll on-costs
+- Add statutory benefits, insurance, pension, bonus, and training.
+- Use loaded cost formula: `base_salary * (1 + burden_rate)`.
+
+### 5. Separate annual escalation drivers
+- Wage inflation for labor should be distinct from general inflation.
+- Apply different escalation rates for direct vs indirect labor.
+
+### 6. Add contractor/temporary labor bucket
+- Use for ramp-up years and maintenance shutdowns.
+- Model at higher unit cost but high flexibility.
+
+### 7. Capacity-linked productivity metric
+- Track labor cost per unit and units per labor-hour.
+- Flag deterioration automatically in the dashboard.
+
+### 8. Hiring lag / step changes
+- Support hiring in quarters or planned milestones.
+- Prevent unrealistically smooth labor curves.
+
+### 9. Scenario hooks
+Add labor-specific sensitivities:
+- wage +/- x%,
+- absenteeism,
+- overtime cap,
+- hiring delay.
+
+These labor shocks often have high NPV impact.
+
+### 10. Governance / auditability
+- Add source and owner metadata per role assumption (HR, payroll, benchmark year).
+- Keep labor assumptions defendable for investment committees.
+
+### Practical v1 implementation recommended
+Implement first:
+- fixed/variable role split,
+- wage escalation (direct vs indirect),
+- loaded-cost burden,
+- labor KPIs in summary/dashboard.
+
+## 8) Financing strategy and covenant engineering
 
 ### Why this matters
 Fundability is often constrained by debt service profile, not project NPV.
@@ -107,7 +171,7 @@ Fundability is often constrained by debt service profile, not project NPV.
 - Interest-rate hedge module (fixed/floating mix) and hedge effectiveness impact.
 - Distribution lock-up logic when covenants are breached.
 
-## 8) Decision-grade output pack for investors
+## 9) Decision-grade output pack for investors
 
 Create a one-click **Investment Committee Pack** export with:
 - KPI summary: NPV, IRR, PI, payback, DSCR min/avg, equity multiple.
@@ -117,7 +181,7 @@ Create a one-click **Investment Committee Pack** export with:
 - Covenant headroom schedule and liquidity runway.
 - Assumption book with provenance and changes since prior version.
 
-## 9) Governance, model risk, and reproducibility
+## 10) Governance, model risk, and reproducibility
 
 ### Improvements
 - Version every scenario set and lock seed/configuration for reproducible Monte Carlo runs.
