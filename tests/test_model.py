@@ -289,6 +289,21 @@ class FinancialModelTest(unittest.TestCase):
             expected_total = cost_of_sales[idx] + general[idx]
             self.assertAlmostEqual(total_expenses[idx], expected_total, places=6)
 
+    def test_cost_structure_includes_per_product_raw_material_columns(self):
+        costs = self.model.cost_structure()
+        aggregate = costs.column("Raw Materials")
+
+        per_product_totals = [0.0 for _ in costs.index]
+        for product in self.inputs.products:
+            column = f"Raw Materials - {product}"
+            self.assertIn(column, costs.data)
+            values = costs.column(column)
+            for idx, value in enumerate(values):
+                per_product_totals[idx] += value
+
+        for idx, value in enumerate(aggregate):
+            self.assertAlmostEqual(value, per_product_totals[idx], places=6)
+
     def test_custom_projection_years(self):
         payload = json.loads(
             Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
@@ -551,6 +566,38 @@ class FinancialModelTest(unittest.TestCase):
         table_a = model.monte_carlo_simulation().as_dict()
         table_b = model.monte_carlo_simulation().as_dict()
         self.assertEqual(table_a, table_b)
+
+    def test_inventory_schedule_includes_per_product_material_and_inventory(self):
+        schedule = self.model.inventory_schedule()
+        aggregate_purchased = schedule.column("Raw Materials") if "Raw Materials" in schedule.data else None
+        if aggregate_purchased is None:
+            aggregate_purchased = self.model.cost_structure().column("Raw Materials")
+
+        purchased_sum = [0.0 for _ in schedule.index]
+        inventory_sum = [0.0 for _ in schedule.index]
+        for product in self.inputs.products:
+            purchased_col = f"Material Purchased - {product}"
+            inventory_col = f"Inventory - {product}"
+            self.assertIn(purchased_col, schedule.data)
+            self.assertIn(inventory_col, schedule.data)
+            for idx, value in enumerate(schedule.column(purchased_col)):
+                purchased_sum[idx] += value
+            for idx, value in enumerate(schedule.column(inventory_col)):
+                inventory_sum[idx] += value
+
+        for idx, value in enumerate(aggregate_purchased):
+            self.assertAlmostEqual(value, purchased_sum[idx], places=6)
+
+        inventory_days = schedule.column("Inventory Days")
+        days_in_year = schedule.column("Days in Year")
+        for idx, value in enumerate(inventory_sum):
+            day_length = days_in_year[idx] if days_in_year[idx] else 0.0
+            expected_material_inventory = (
+                aggregate_purchased[idx] / day_length * inventory_days[idx]
+                if day_length
+                else 0.0
+            )
+            self.assertAlmostEqual(value, expected_material_inventory, places=6)
 
     def test_inventory_schedule_reconciles_to_balance_sheet(self):
         schedule = self.model.inventory_schedule()

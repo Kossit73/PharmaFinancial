@@ -5,8 +5,11 @@ from pharma_financial.report import (
     ReportGenerationError,
     ReportSection,
     ReportTable,
+    collect_report_sections,
     generate_report,
 )
+from pharma_financial.inputs import load_inputs
+from pharma_financial.model import FinancialModel
 from pharma_financial.table import build_table
 
 
@@ -58,6 +61,21 @@ class ReportGenerationTest(unittest.TestCase):
     def test_empty_sections_raise(self):
         with self.assertRaises(ReportGenerationError):
             generate_report([], "JSON")
+
+    def test_collect_report_sections_includes_explicit_chart_pack(self):
+        model = FinancialModel(load_inputs())
+        outputs = model.run()
+
+        sections = collect_report_sections(model, outputs)
+        chart_pack = next((section for section in sections if section.title == "Chart Pack"), None)
+
+        self.assertIsNotNone(chart_pack)
+        table_titles = {table.title for table in chart_pack.tables}
+        self.assertIn("Revenue & EBITDA Trend", table_titles)
+        self.assertIn("Cost Split Trend", table_titles)
+        self.assertIn("Cash Flow Trend", table_titles)
+        self.assertIn("Break-even Overview", table_titles)
+        self.assertIn("Monte Carlo Simulation Trend", table_titles)
 
 
 if __name__ == "__main__":  # pragma: no cover

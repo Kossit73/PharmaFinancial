@@ -586,8 +586,13 @@ def main() -> None:
         st.session_state["last_run_digest"] = digest
         _clear_analysis_cache()
     elif last_digest != digest:
-        model = None
-        outputs = None
+        # Auto-refresh model outputs when assumptions change so actions on
+        # downstream tabs (e.g. RAG bundle generation) are immediately usable
+        # without requiring a manual return to the Input Landing Page.
+        model, outputs = _cached_model_run(inputs, digest)
+        st.session_state["last_model"] = model
+        st.session_state["last_outputs"] = outputs
+        st.session_state["last_run_digest"] = digest
         _clear_analysis_cache()
 
     tabs = st.tabs(
@@ -823,13 +828,16 @@ def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:
         overdraft_rows = synced_overdraft
     _debt_rows_to_payload(overdraft_rows, payload, "overdraft")
 
-    tax_rows = st.session_state.setdefault(
-        "tax_entries", _payload_to_tax_entries(payload)
-    )
+    tax_rows = st.session_state.get("tax_rows")
+    if not isinstance(tax_rows, list) or not tax_rows:
+        tax_rows = st.session_state.setdefault(
+            "tax_entries", _payload_to_tax_entries(payload)
+        )
     synced_tax = _sync_tax_entries_from_widgets(tax_rows)
-    if synced_tax != tax_rows:
+    existing_entries = st.session_state.get("tax_entries")
+    if synced_tax != existing_entries:
         st.session_state["tax_entries"] = synced_tax
-        tax_rows = synced_tax
+    tax_rows = synced_tax
     tax_payload = payload.setdefault("tax", {})
     if isinstance(tax_payload, dict):
         tax_payload["rate"] = float(
@@ -1142,10 +1150,9 @@ def _render_inputs_tab(
                 if row_product in total_unit_defaults:
                     default_units = float(total_unit_defaults[row_product])
                 elif isinstance(production_estimate, Mapping) and row_product in production_estimate:
-                    default_units = sum(
-                        float(value)
-                        for value in production_estimate.get(row_product, [])
-                    )
+                    existing_series = production_estimate.get(row_product, [])
+                    if isinstance(existing_series, Sequence) and existing_series:
+                        default_units = float(existing_series[0])
             default_capacity = float(row.get("Max Capacity", 0.0))
             if default_capacity == 0.0 and row_product in capacity_defaults:
                 default_capacity = float(capacity_defaults[row_product])
@@ -3424,6 +3431,16 @@ def _labor_model_settings_rows_to_payload(rows: Sequence[Mapping], payload: dict
             settings[payload_key] = [float(row.get(column, 0.0) or 0.0) for row in rows]
 
 
+def _coerce_editor_rows(value: object) -> list[dict]:
+    """Normalise Streamlit data editor output to list-of-dict rows."""
+
+    if isinstance(value, list):
+        return [dict(item) for item in value if isinstance(item, Mapping)]
+    if pd is not None and isinstance(value, pd.DataFrame):
+        return [dict(item) for item in value.to_dict("records")]
+    return []
+
+
 def _render_labor_mode_section(payload: dict) -> None:
     labor_mode = st.radio(
         "Labor Modeling Mode",
@@ -3448,30 +3465,149 @@ def _render_labor_mode_section(payload: dict) -> None:
 
     st.caption("Advanced mode writes `labor.model_v1.roles` and `labor.model_v1.settings` for the labor v1 engine.")
     role_rows = st.session_state.setdefault("labor_model_rows", _payload_to_labor_model_rows(payload))
+    settings_rows = st.session_state.setdefault(
+        "labor_model_settings_rows", _payload_to_labor_model_settings_rows(payload)
+    )
+
+    st.session_state.setdefault("labor_advanced_draft_roles", copy.deepcopy(role_rows))
+    st.session_state.setdefault("labor_advanced_draft_settings", copy.deepcopy(settings_rows))
+
+    st.info(
+        "Advanced mode is editable here. Add new roles directly in the Roles table (for example CEO or Deputy CEO), then click Save Advanced Labour Changes."
+    )
+    st.markdown("#### Roles (add or edit here)")
+    if not role_rows:
+        role_rows = [{
+            "Name": "",
+            "Labor Type": "direct",
+            "Behavior": "fixed",
+            "Headcount": 0.0,
+            "Salary": 0.0,
+            "Planned Headcount": "",
+            "Benefits Rate": "",
+            "Overtime Rate": "",
+            "Burden Rate": "",
+            "Productivity Target": "",
+            "Source": "",
+            "Owner": "",
+            "Benchmark Year": "",
+        }]
+        st.session_state["labor_model_rows"] = role_rows
+
     edited_roles = st.data_editor(
         role_rows,
         num_rows="dynamic",
         use_container_width=True,
         key="labor_model_roles_editor",
     )
-    if isinstance(edited_roles, list):
-        st.session_state["labor_model_rows"] = edited_roles
-        role_rows = edited_roles
-    _labor_model_rows_to_payload(role_rows, payload)
+    normalised_roles = _coerce_editor_rows(edited_roles)
+    if normalised_roles:
+        st.session_state["labor_model_rows"] = normalised_roles
+        role_rows = normalised_roles
 
-    settings_rows = st.session_state.setdefault(
-        "labor_model_settings_rows", _payload_to_labor_model_settings_rows(payload)
+    st.markdown("#### Yearly Increment Tool")
+    yearly_increment = st.number_input(
+        "Yearly Increment %",
+        value=float(st.session_state.get("labor_yearly_increment_pct", 0.0) or 0.0),
+        step=0.1,
+        key="labor_yearly_increment_pct",
+        help="Apply this percentage increment from the first year to all subsequent years.",
     )
+    increment_columns = [
+        "All",
+        "Shifts",
+        "Utilization",
+        "Operating Hours / Shift",
+        "Absenteeism",
+        "Overtime Cap",
+        "Contractor Hours",
+        "Contractor Rate",
+        "Transition Training Cost",
+        "Supervision Increment",
+        "Shift Allowance",
+        "Wage Escalation Direct",
+        "Wage Escalation Indirect",
+    ]
+    target_column = st.selectbox(
+        "Apply increment to",
+        increment_columns,
+        key="labor_yearly_increment_target",
+    )
+    increment_cols = st.columns(3)
+    preview_increment = increment_cols[0].button("Preview Yearly Increment", key="labor_yearly_increment_preview")
+    save_increment = increment_cols[1].button("Save Yearly Increment", key="labor_yearly_increment_save")
+    cancel_increment = increment_cols[2].button("Cancel Yearly Increment", key="labor_yearly_increment_cancel")
+
+    if preview_increment and settings_rows:
+        preview_rows = copy.deepcopy(settings_rows)
+        selected_columns = increment_columns[1:] if target_column == "All" else [target_column]
+        running_values: dict[str, float] = {}
+        for column_name in selected_columns:
+            try:
+                running_values[column_name] = float(preview_rows[0].get(column_name, 0.0) or 0.0)
+            except (TypeError, ValueError):
+                running_values[column_name] = 0.0
+
+        for idx in range(1, len(preview_rows)):
+            for column_name in selected_columns:
+                running_values[column_name] = running_values[column_name] * (1 + float(yearly_increment) / 100.0)
+                preview_rows[idx][column_name] = running_values[column_name]
+        st.session_state["labor_yearly_increment_preview_rows"] = preview_rows
+
+    preview_rows = st.session_state.get("labor_yearly_increment_preview_rows")
+    active_settings_rows = preview_rows if isinstance(preview_rows, list) else settings_rows
+
+    if cancel_increment:
+        st.session_state.pop("labor_yearly_increment_preview_rows", None)
+        _rerun()
+
+    if save_increment and isinstance(preview_rows, list):
+        st.session_state["labor_model_settings_rows"] = preview_rows
+        settings_rows = preview_rows
+        st.session_state.pop("labor_yearly_increment_preview_rows", None)
+        _rerun()
+
+    st.markdown("#### Labor Settings by Year")
+    if not settings_rows:
+        st.warning("No yearly settings rows available. Add projection years in assumptions to edit year-by-year labour settings.")
+
     edited_settings = st.data_editor(
-        settings_rows,
+        active_settings_rows,
         num_rows="fixed",
         use_container_width=True,
         key="labor_model_settings_editor",
     )
-    if isinstance(edited_settings, list):
-        st.session_state["labor_model_settings_rows"] = edited_settings
-        settings_rows = edited_settings
-    _labor_model_settings_rows_to_payload(settings_rows, payload)
+    normalised_settings = _coerce_editor_rows(edited_settings)
+    if normalised_settings:
+        st.session_state["labor_model_settings_rows"] = normalised_settings
+        settings_rows = normalised_settings
+        st.session_state.pop("labor_yearly_increment_preview_rows", None)
+
+    action_cols = st.columns(2)
+    save_changes = action_cols[0].button("Save Advanced Labour Changes", key="labor_advanced_edit_save")
+    cancel_changes = action_cols[1].button("Cancel", key="labor_advanced_edit_cancel")
+
+    if cancel_changes:
+        draft_roles = st.session_state.get("labor_advanced_draft_roles")
+        draft_settings = st.session_state.get("labor_advanced_draft_settings")
+        if isinstance(draft_roles, list):
+            st.session_state["labor_model_rows"] = draft_roles
+            role_rows = draft_roles
+        if isinstance(draft_settings, list):
+            st.session_state["labor_model_settings_rows"] = draft_settings
+            settings_rows = draft_settings
+        st.session_state["labor_advanced_draft_roles"] = copy.deepcopy(role_rows)
+        st.session_state["labor_advanced_draft_settings"] = copy.deepcopy(settings_rows)
+        st.session_state.pop("labor_yearly_increment_preview_rows", None)
+        _rerun()
+
+    if save_changes:
+        _labor_model_rows_to_payload(role_rows, payload)
+        _labor_model_settings_rows_to_payload(settings_rows, payload)
+        st.session_state["labor_advanced_draft_roles"] = copy.deepcopy(role_rows)
+        st.session_state["labor_advanced_draft_settings"] = copy.deepcopy(settings_rows)
+        st.session_state.pop("labor_yearly_increment_preview_rows", None)
+        _rerun()
 
 
 def _render_fixed_variable_costs(payload: dict) -> None:
@@ -3610,747 +3746,340 @@ def _render_fixed_variable_costs(payload: dict) -> None:
 def _render_utility_schedule(payload: dict) -> None:
     st.markdown("### Utility Schedule")
     st.caption(
-        "Adjust electricity, water, and steam usage assumptions for each projection "
-        "year. Use the plus/minus controls to tweak values or add a new year below."
+        "Set a base year for utility assumptions, then use Yearly Increment Tool to populate subsequent years. "
+        "You can still fine-tune every year in the table below."
     )
 
     rows: list[dict] = st.session_state.get("utility_entries") or []
     if not rows:
         rows = _payload_to_utility_entries(payload)
-        st.session_state["utility_entries"] = rows
 
-    if not rows:
-        rows = [_default_utility_entry(0)]
-        st.session_state["utility_entries"] = rows
+    payload_years = list(payload.get("years", [])) if isinstance(payload.get("years"), Sequence) else []
+    labels = [str(year) for year in payload_years if year is not None]
+    target_length = max(len(labels), len(rows), 1)
+    if not labels:
+        labels = [f"Year {idx + 1}" for idx in range(target_length)]
 
-    updated_rows: list[dict] = []
-    payload_years: Sequence | None = payload.get("years")
+    rows = _resize_utility_entries(rows, target_length, labels)
+    st.session_state["utility_entries"] = rows
 
-    year_catalog = [str(year) for year in payload_years if year is not None]
-    existing_labels = [
-        str(row.get("label"))
-        for row in rows
-        if isinstance(row, Mapping) and row.get("label")
-    ]
-    for label in existing_labels:
-        if label not in year_catalog:
-            year_catalog.append(label)
-    if not year_catalog:
-        year_catalog = [f"Year {idx + 1}" for idx in range(len(rows) or 1)]
+    row_labels = [str(row.get("label", f"Year {idx + 1}")) for idx, row in enumerate(rows)]
+    base_label = st.selectbox("Utility assumption start year", options=row_labels, key="utility_base_year_selector")
+    base_index = row_labels.index(base_label) if base_label in row_labels else 0
 
-    st.markdown("#### Focused utility editor")
-    selected_label = st.selectbox(
-        "Utility year",
-        options=year_catalog,
-        index=0,
-        key="utility_row_selector",
+    base_entry = _normalise_utility_entry(rows[base_index], base_index)
+    st.markdown("#### Base Year Utility Assumptions")
+    cols = st.columns(5)
+    base_entry["electricity_per_day"] = cols[0].number_input(
+        "Electricity / day", value=float(base_entry.get("electricity_per_day", 0.0)), min_value=0.0, step=0.1,
+        format="%.4f", key="utility_base_electricity_per_day"
     )
-    st.caption("Editing a single utility year entry. Change the selector to view another year.")
+    base_entry["electricity_rate"] = cols[1].number_input(
+        "Price / kWh", value=float(base_entry.get("electricity_rate", 0.0)), min_value=0.0, step=0.01,
+        format="%.4f", key="utility_base_electricity_rate"
+    )
+    base_entry["water_per_day"] = cols[2].number_input(
+        "Water / day", value=float(base_entry.get("water_per_day", 0.0)), min_value=0.0, step=0.1,
+        format="%.4f", key="utility_base_water_per_day"
+    )
+    base_entry["water_rate"] = cols[3].number_input(
+        "Price / cubic meter", value=float(base_entry.get("water_rate", 0.0)), min_value=0.0, step=0.01,
+        format="%.4f", key="utility_base_water_rate"
+    )
+    base_entry["steam_per_hour"] = cols[4].number_input(
+        "Steam / hour", value=float(base_entry.get("steam_per_hour", 0.0)), min_value=0.0, step=0.1,
+        format="%.4f", key="utility_base_steam_per_hour"
+    )
 
-    filtered_rows: list[tuple[int, dict]] = []
-    for idx, row in enumerate(rows):
-        label = str(row.get("label") or row.get("Year") or row.get("year") or "")
-        if label == selected_label:
-            filtered_rows.append((idx, row))
+    cols_two = st.columns(5)
+    base_entry["steam_rate"] = cols_two[0].number_input(
+        "Price / steam hour", value=float(base_entry.get("steam_rate", 0.0)), min_value=0.0, step=0.01,
+        format="%.4f", key="utility_base_steam_rate"
+    )
+    base_entry["electricity_days"] = int(cols_two[1].number_input(
+        "Electricity days", value=int(base_entry.get("electricity_days", 0)), min_value=0, step=1,
+        key="utility_base_electricity_days"
+    ))
+    base_entry["water_days"] = int(cols_two[2].number_input(
+        "Water days", value=int(base_entry.get("water_days", 0)), min_value=0, step=1,
+        key="utility_base_water_days"
+    ))
+    base_entry["steam_days"] = int(cols_two[3].number_input(
+        "Steam days", value=int(base_entry.get("steam_days", 0)), min_value=0, step=1,
+        key="utility_base_steam_days"
+    ))
+    base_entry["steam_hours"] = int(cols_two[4].number_input(
+        "Steam hours", value=int(base_entry.get("steam_hours", 0)), min_value=0, step=1,
+        key="utility_base_steam_hours"
+    ))
 
-    if not filtered_rows:
-        st.caption(
-            "No matching utility entry found for the selected year. "
-            "Use the form below to add a new entry."
-        )
+    rows[base_index] = _normalise_utility_entry(base_entry, base_index)
 
-    for slot in range(min(len(filtered_rows), 1)):
-        row_index, row = filtered_rows[slot]
-        entry = _normalise_utility_entry(row, row_index)
-        container = st.container()
-        with container:
-            cols = st.columns([2.0, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 0.8])
+    st.markdown("#### Yearly Increment Tool")
+    utility_increment = st.number_input(
+        "Yearly Increment %",
+        value=float(st.session_state.get("utility_yearly_increment_pct", 0.0) or 0.0),
+        step=0.1,
+        key="utility_yearly_increment_pct",
+    )
+    increment_columns = [
+        "All",
+        "Electricity per day",
+        "Price per kWh",
+        "Electricity operating days",
+        "Water per day",
+        "Price per cubic meter",
+        "Water operating days",
+        "Steam per hour",
+        "Price per steam hour",
+        "Steam operating days",
+        "Steam operating hours",
+    ]
+    target_column = st.selectbox("Apply increment to", increment_columns, key="utility_yearly_increment_target")
+    col_a, col_b, col_c = st.columns(3)
+    preview_increment = col_a.button("Preview Yearly Increment", key="utility_yearly_increment_preview")
+    save_increment = col_b.button("Save Yearly Increment", key="utility_yearly_increment_save")
+    cancel_increment = col_c.button("Cancel Yearly Increment", key="utility_yearly_increment_cancel")
 
-            default_label = str(entry.get("label") or selected_label or f"Year {row_index + 1}")
-            label_value = _select_or_create_option(
-                cols[0],
-                "Year",
-                year_catalog,
-                f"utility_label_{row_index}",
-                current_value=default_label,
-            )
-            if label_value and label_value not in year_catalog:
-                year_catalog.append(label_value)
-            if not label_value:
-                label_value = default_label
+    if preview_increment:
+        preview_rows = copy.deepcopy(rows)
+        selected_columns = increment_columns[1:] if target_column == "All" else [target_column]
+        running_values: dict[str, float] = {}
+        for column_name in selected_columns:
+            field_name = next((field for field, label, _ in UTILITY_EDITOR_COLUMNS if label == column_name), None)
+            if field_name is None:
+                continue
+            running_values[field_name] = float(preview_rows[base_index].get(field_name, 0.0) or 0.0)
 
-            parsed_year = _parse_year_value(
-                label_value,
-                entry.get("year")
-                if isinstance(entry.get("year"), int)
-                else row_index + 1,
-            )
+        for idx in range(base_index + 1, len(preview_rows)):
+            for field_name, current in list(running_values.items()):
+                updated = current * (1 + float(utility_increment) / 100.0)
+                if field_name in {"electricity_days", "water_days", "steam_days", "steam_hours"}:
+                    preview_rows[idx][field_name] = int(max(round(updated), 0))
+                else:
+                    preview_rows[idx][field_name] = max(updated, 0.0)
+                running_values[field_name] = updated
 
-            electricity_per_day = cols[1].number_input(
-                "Electricity per day",
-                value=float(entry.get("electricity_per_day", 0.0)),
-                key=f"utility_elec_per_day_{row_index}",
-                min_value=0.0,
-                step=0.1,
-                format="%.4f",
-            )
-            electricity_rate = cols[2].number_input(
-                "Price per kWh",
-                value=float(entry.get("electricity_rate", 0.0)),
-                key=f"utility_elec_rate_{row_index}",
-                min_value=0.0,
-                step=0.01,
-                format="%.4f",
-            )
-            electricity_days = cols[3].number_input(
-                "Electricity operating days",
-                value=int(entry.get("electricity_days", 0)),
-                key=f"utility_elec_days_{row_index}",
-                min_value=0,
-                step=1,
-            )
+        st.session_state["utility_yearly_increment_preview_rows"] = preview_rows
 
-            water_per_day = cols[4].number_input(
-                "Water per day",
-                value=float(entry.get("water_per_day", 0.0)),
-                key=f"utility_water_per_day_{row_index}",
-                min_value=0.0,
-                step=0.1,
-                format="%.4f",
-            )
-            water_rate = cols[5].number_input(
-                "Price per cubic meter",
-                value=float(entry.get("water_rate", 0.0)),
-                key=f"utility_water_rate_{row_index}",
-                min_value=0.0,
-                step=0.01,
-                format="%.4f",
-            )
-            water_days = cols[6].number_input(
-                "Water operating days",
-                value=int(entry.get("water_days", 0)),
-                key=f"utility_water_days_{row_index}",
-                min_value=0,
-                step=1,
-            )
+    preview_rows = st.session_state.get("utility_yearly_increment_preview_rows")
+    active_rows = preview_rows if isinstance(preview_rows, list) else rows
 
-            steam_per_hour = cols[7].number_input(
-                "Steam per hour",
-                value=float(entry.get("steam_per_hour", 0.0)),
-                key=f"utility_steam_per_hour_{row_index}",
-                min_value=0.0,
-                step=0.1,
-                format="%.4f",
-            )
-            steam_rate = cols[8].number_input(
-                "Price per steam hour",
-                value=float(entry.get("steam_rate", 0.0)),
-                key=f"utility_steam_rate_{row_index}",
-                min_value=0.0,
-                step=0.01,
-                format="%.4f",
-            )
-            steam_days = cols[9].number_input(
-                "Steam operating days",
-                value=int(entry.get("steam_days", 0)),
-                key=f"utility_steam_days_{row_index}",
-                min_value=0,
-                step=1,
-            )
+    if cancel_increment:
+        st.session_state.pop("utility_yearly_increment_preview_rows", None)
+        _rerun()
 
-            remove_clicked = cols[10].button(
-                "Remove", key=f"utility_remove_{row_index}", help="Delete this utility row"
-            )
+    if save_increment and isinstance(preview_rows, list):
+        st.session_state["utility_entries"] = preview_rows
+        rows = preview_rows
+        st.session_state.pop("utility_yearly_increment_preview_rows", None)
+        _rerun()
 
-            steam_hours = st.number_input(
-                "Steam operating hours",
-                value=int(entry.get("steam_hours", 0)),
-                key=f"utility_steam_hours_{row_index}",
-                min_value=0,
-                step=1,
-            )
-
-        if remove_clicked and len(rows) > 1:
-            del rows[row_index]
-            st.session_state["utility_entries"] = rows
-            _utility_entries_to_payload(rows, payload)
-            _rerun()
-
-        updated_rows.append(
-            (
-                row_index,
-                _normalise_utility_entry(
-                    {
-                        "label": label_value,
-                        "year": parsed_year,
-                        "electricity_per_day": electricity_per_day,
-                        "electricity_rate": electricity_rate,
-                        "electricity_days": electricity_days,
-                        "water_per_day": water_per_day,
-                        "water_rate": water_rate,
-                        "water_days": water_days,
-                        "steam_per_hour": steam_per_hour,
-                        "steam_rate": steam_rate,
-                        "steam_days": steam_days,
-                        "steam_hours": steam_hours,
-                    },
-                    row_index,
-                ),
-            )
-        )
-
-    updated_map = {idx: data for idx, data in updated_rows}
-    merged_rows: list[dict] = []
-    for idx, row in enumerate(rows):
-        merged_rows.append(updated_map.get(idx, dict(row)))
-
-    if merged_rows != rows:
-        st.session_state["utility_entries"] = merged_rows
-        rows = merged_rows
+    st.markdown("#### Utility Settings by Year")
+    editor_rows = _utility_entries_to_editor(active_rows)
+    updated_editor = st.data_editor(
+        editor_rows,
+        use_container_width=True,
+        hide_index=True,
+        key="utility_schedule_editor",
+        column_config=_utility_column_config(),
+        num_rows="fixed",
+    )
+    normalised_editor = _coerce_editor_rows(updated_editor)
+    if normalised_editor:
+        rows = _editor_rows_to_utility_entries(normalised_editor)
+        st.session_state["utility_entries"] = rows
+        st.session_state.pop("utility_yearly_increment_preview_rows", None)
 
     _utility_entries_to_payload(rows, payload)
 
-    st.markdown("#### Add utility assumption")
-    default_entry = _next_utility_entry(rows, payload_years)
-    default_label = str(default_entry.get("label", f"Year {len(rows) + 1}"))
-    if default_label and default_label not in year_catalog:
-        year_catalog.append(default_label)
-    with st.form("utility_add_row"):
-        new_label = _select_or_create_option(
-            st,
-            "Year",
-            year_catalog,
-            "utility_new_label",
-            current_value=default_label,
-        )
-        if new_label and new_label not in year_catalog:
-            year_catalog.append(new_label)
-        new_electricity_per_day = st.number_input(
-            "Electricity per day",
-            value=float(default_entry.get("electricity_per_day", 0.0)),
-            key="utility_new_elec_per_day",
-            min_value=0.0,
-            step=0.1,
-            format="%.4f",
-        )
-        new_electricity_rate = st.number_input(
-            "Price per kWh",
-            value=float(default_entry.get("electricity_rate", 0.0)),
-            key="utility_new_elec_rate",
-            min_value=0.0,
-            step=0.01,
-            format="%.4f",
-        )
-        new_electricity_days = st.number_input(
-            "Electricity operating days",
-            value=int(default_entry.get("electricity_days", 0)),
-            key="utility_new_elec_days",
-            min_value=0,
-            step=1,
-        )
-        new_water_per_day = st.number_input(
-            "Water per day",
-            value=float(default_entry.get("water_per_day", 0.0)),
-            key="utility_new_water_per_day",
-            min_value=0.0,
-            step=0.1,
-            format="%.4f",
-        )
-        new_water_rate = st.number_input(
-            "Price per cubic meter",
-            value=float(default_entry.get("water_rate", 0.0)),
-            key="utility_new_water_rate",
-            min_value=0.0,
-            step=0.01,
-            format="%.4f",
-        )
-        new_water_days = st.number_input(
-            "Water operating days",
-            value=int(default_entry.get("water_days", 0)),
-            key="utility_new_water_days",
-            min_value=0,
-            step=1,
-        )
-        new_steam_per_hour = st.number_input(
-            "Steam per hour",
-            value=float(default_entry.get("steam_per_hour", 0.0)),
-            key="utility_new_steam_per_hour",
-            min_value=0.0,
-            step=0.1,
-            format="%.4f",
-        )
-        new_steam_rate = st.number_input(
-            "Price per steam hour",
-            value=float(default_entry.get("steam_rate", 0.0)),
-            key="utility_new_steam_rate",
-            min_value=0.0,
-            step=0.01,
-            format="%.4f",
-        )
-        new_steam_days = st.number_input(
-            "Steam operating days",
-            value=int(default_entry.get("steam_days", 0)),
-            key="utility_new_steam_days",
-            min_value=0,
-            step=1,
-        )
-        new_steam_hours = st.number_input(
-            "Steam operating hours",
-            value=int(default_entry.get("steam_hours", 0)),
-            key="utility_new_steam_hours",
-            min_value=0,
-            step=1,
-        )
-
-        submitted = st.form_submit_button("Add utility year")
-
-    if submitted:
-        new_entry = _normalise_utility_entry(
-            {
-                "label": new_label or f"Year {len(rows) + 1}",
-                "year": _parse_year_value(new_label, len(rows) + 1),
-                "electricity_per_day": new_electricity_per_day,
-                "electricity_rate": new_electricity_rate,
-                "electricity_days": new_electricity_days,
-                "water_per_day": new_water_per_day,
-                "water_rate": new_water_rate,
-                "water_days": new_water_days,
-                "steam_per_hour": new_steam_per_hour,
-                "steam_rate": new_steam_rate,
-                "steam_days": new_steam_days,
-                "steam_hours": new_steam_hours,
-            },
-            len(rows),
-        )
-        updated = rows + [new_entry]
-        st.session_state["utility_entries"] = updated
-        _utility_entries_to_payload(updated, payload)
-        for key in (
-            "utility_new_label",
-            "utility_new_elec_per_day",
-            "utility_new_elec_rate",
-            "utility_new_elec_days",
-            "utility_new_water_per_day",
-            "utility_new_water_rate",
-            "utility_new_water_days",
-            "utility_new_steam_per_hour",
-            "utility_new_steam_rate",
-            "utility_new_steam_days",
-            "utility_new_steam_hours",
-        ):
-            st.session_state.pop(key, None)
-        _rerun()
-
 
 def _render_receivable_inputs(payload: dict) -> None:
-    rows: list[dict] = st.session_state.get("receivable_rows", [])
-    payload_years = payload.get("years", [])
+    rows: list[dict] = st.session_state.get("receivable_rows", []) or _payload_to_receivable_rows(payload)
+    years = [str(year) for year in payload.get("years", []) if year is not None] if isinstance(payload.get("years"), Sequence) else []
+    target_length = max(len(rows), len(years), 1)
 
     if not rows:
-        st.info(
-            "No accounts receivable assumptions configured. Use the form below to add entries."
-        )
+        rows = _payload_to_receivable_rows(payload)
+    if not rows:
+        rows = [{"label": "Year 1", "year": 1, "days_in_year": 365, "accounts_receivable_days": 0, "prepaid_expense_days": 0, "other_asset_days": 0}]
 
-    updated_rows: list[dict] = list(rows)
+    while len(rows) < target_length:
+        idx = len(rows)
+        base = copy.deepcopy(rows[-1]) if rows else {"days_in_year": 365, "accounts_receivable_days": 0, "prepaid_expense_days": 0, "other_asset_days": 0}
+        label = years[idx] if idx < len(years) else f"Year {idx + 1}"
+        base["label"] = label
+        base["year"] = _parse_year_value(label, idx + 1)
+        rows.append(base)
 
-    def _build_year_catalog() -> list[str]:
-        base_year_labels = [str(year) for year in payload_years if year is not None]
-        existing_labels = [
-            str(row.get("label", "")) for row in updated_rows if row.get("label")
-        ]
-        catalog = list(dict.fromkeys([*base_year_labels, *existing_labels]))
-        if not catalog:
-            max_length = max(len(updated_rows), len(payload_years), 1)
-            catalog = [f"Year {index + 1}" for index in range(max_length)]
-        return catalog
+    st.session_state["receivable_rows"] = rows
+    labels = [str(row.get("label") or f"Year {idx + 1}") for idx, row in enumerate(rows)]
 
-    visible_count = min(len(updated_rows), MAX_VISIBLE_RECEIVABLE_ROWS)
+    st.markdown("#### Base Year Assumption")
+    base_label = st.selectbox("Accounts receivable start year", labels, key="receivable_base_year")
+    base_index = labels.index(base_label) if base_label in labels else 0
+    base_row = dict(rows[base_index])
 
-    if visible_count and len(updated_rows) > MAX_VISIBLE_RECEIVABLE_ROWS:
-        st.caption(
-            "Select which receivable year to edit using the dropdowns below. Additional "
-            "years remain available in the model and can be chosen from the selectors."
-        )
+    cols = st.columns(4)
+    base_row["days_in_year"] = int(cols[0].number_input("Days in Year", value=int(base_row.get("days_in_year", 365)), min_value=0, step=1, key="receivable_base_days_in_year"))
+    base_row["accounts_receivable_days"] = int(cols[1].number_input("Accounts Receivable Days", value=int(base_row.get("accounts_receivable_days", 0)), min_value=0, step=1, key="receivable_base_ar_days"))
+    base_row["prepaid_expense_days"] = int(cols[2].number_input("Prepaid Expense Days", value=int(base_row.get("prepaid_expense_days", 0)), min_value=0, step=1, key="receivable_base_prepaid_days"))
+    base_row["other_asset_days"] = int(cols[3].number_input("Other Asset Days", value=int(base_row.get("other_asset_days", 0)), min_value=0, step=1, key="receivable_base_other_days"))
+    rows[base_index] = base_row
 
-    for slot in range(visible_count):
-        year_catalog = _build_year_catalog()
-        option_indices = list(range(len(updated_rows)))
-        if not option_indices:
-            break
+    st.markdown("#### Yearly Increment Tool")
+    increment_pct = st.number_input("Yearly Increment %", value=float(st.session_state.get("receivable_increment_pct", 0.0) or 0.0), step=0.1, key="receivable_increment_pct")
+    increment_target = st.selectbox("Apply increment to", ["All", "Accounts Receivable Days", "Prepaid Expense Days", "Other Asset Days"], key="receivable_increment_target")
+    c1,c2,c3 = st.columns(3)
+    preview = c1.button("Preview Yearly Increment", key="receivable_increment_preview")
+    save = c2.button("Save Yearly Increment", key="receivable_increment_save")
+    cancel = c3.button("Cancel Yearly Increment", key="receivable_increment_cancel")
 
-        default_index = option_indices[min(slot, len(option_indices) - 1)]
-        container = st.container()
-        with container:
-            selected_index = container.selectbox(
-                "Receivable year",
-                option_indices,
-                index=option_indices.index(default_index),
-                format_func=lambda idx: str(
-                    updated_rows[idx].get("label")
-                    or updated_rows[idx].get("Year")
-                    or f"Year {idx + 1}"
-                ),
-                key=f"receivable_row_selector_{slot}",
-            )
+    field_map = {"Accounts Receivable Days": "accounts_receivable_days", "Prepaid Expense Days": "prepaid_expense_days", "Other Asset Days": "other_asset_days"}
+    if preview:
+        preview_rows = copy.deepcopy(rows)
+        selected = list(field_map.values()) if increment_target == "All" else [field_map[increment_target]]
+        running = {field: float(preview_rows[base_index].get(field, 0) or 0) for field in selected}
+        for idx in range(base_index + 1, len(preview_rows)):
+            for field, current in list(running.items()):
+                updated = max(current * (1 + float(increment_pct) / 100.0), 0.0)
+                preview_rows[idx][field] = int(round(updated))
+                running[field] = updated
+        st.session_state["receivable_increment_preview_rows"] = preview_rows
 
-            row = updated_rows[selected_index]
+    preview_rows = st.session_state.get("receivable_increment_preview_rows")
+    active_rows = preview_rows if isinstance(preview_rows, list) else rows
+    if cancel:
+        st.session_state.pop("receivable_increment_preview_rows", None)
+        _rerun()
+    if save and isinstance(preview_rows, list):
+        st.session_state["receivable_rows"] = preview_rows
+        rows = preview_rows
+        st.session_state.pop("receivable_increment_preview_rows", None)
+        _rerun()
 
-            cols = st.columns([2.0, 1.2, 1.2, 1.2, 1.2, 0.7])
-
-            current_label = str(
-                row.get(
-                    "label",
-                    year_catalog[selected_index]
-                    if selected_index < len(year_catalog)
-                    else f"Year {selected_index + 1}",
-                )
-            )
-            selected_label = _select_or_create_option(
-                cols[0],
-                "Year",
-                year_catalog,
-                f"receivable_label_{slot}_{selected_index}",
-                current_value=current_label,
-            )
-            if selected_label and selected_label not in year_catalog:
-                year_catalog.append(selected_label)
-            label = selected_label or f"Year {selected_index + 1}"
-
-            fallback_year = row.get("year")
-            if not isinstance(fallback_year, (int, float)):
-                if selected_index < len(payload_years):
-                    fallback_year = payload_years[selected_index]
-                else:
-                    fallback_year = selected_index + 1
-            parsed_year = _parse_year_value(
-                label, int(fallback_year) if fallback_year else selected_index + 1
-            )
-
-            days_in_year = cols[1].number_input(
-                "Days in Year",
-                value=int(row.get("days_in_year", 365)),
-                key=f"receivable_days_in_year_{slot}_{selected_index}",
-                min_value=0,
-                step=1,
-            )
-
-            receivable_days = cols[2].number_input(
-                "Accounts Receivable Days",
-                value=int(row.get("accounts_receivable_days", 0)),
-                key=f"receivable_accounts_receivable_days_{slot}_{selected_index}",
-                min_value=0,
-                step=1,
-            )
-
-            prepaid_days = cols[3].number_input(
-                "Prepaid Expense Days",
-                value=int(row.get("prepaid_expense_days", 0)),
-                key=f"receivable_prepaid_days_{slot}_{selected_index}",
-                min_value=0,
-                step=1,
-            )
-
-            other_asset_days = cols[4].number_input(
-                "Other Asset Days",
-                value=int(row.get("other_asset_days", 0)),
-                key=f"receivable_other_asset_days_{slot}_{selected_index}",
-                min_value=0,
-                step=1,
-            )
-
-            if cols[5].button("Remove", key=f"receivable_remove_{slot}_{selected_index}"):
-                del updated_rows[selected_index]
-                st.session_state["receivable_rows"] = updated_rows
-                _rerun()
-
-            updated_rows[selected_index] = {
+    st.markdown("#### Accounts Receivable Settings by Year")
+    editor_seed = [
+        {
+            "Year": str(row.get("label", f"Year {i + 1}")),
+            "Days in Year": int(row.get("days_in_year", 365) or 365),
+            "Accounts Receivable Days": int(row.get("accounts_receivable_days", 0) or 0),
+            "Prepaid Expense Days": int(row.get("prepaid_expense_days", 0) or 0),
+            "Other Asset Days": int(row.get("other_asset_days", 0) or 0),
+        }
+        for i, row in enumerate(active_rows)
+    ]
+    edited = st.data_editor(editor_seed, use_container_width=True, hide_index=True, key="receivable_schedule_editor", num_rows="fixed")
+    normalised = _coerce_editor_rows(edited)
+    if normalised:
+        rebuilt: list[dict] = []
+        for idx, row in enumerate(normalised):
+            label = str(row.get("Year", "") or "").strip() or f"Year {idx + 1}"
+            rebuilt.append({
                 "label": label,
-                "year": parsed_year,
-                "days_in_year": int(days_in_year),
-                "accounts_receivable_days": int(receivable_days),
-                "prepaid_expense_days": int(prepaid_days),
-                "other_asset_days": int(other_asset_days),
-            }
+                "year": _parse_year_value(label, idx + 1),
+                "days_in_year": int(float(row.get("Days in Year", 365) or 365)),
+                "accounts_receivable_days": int(float(row.get("Accounts Receivable Days", 0) or 0)),
+                "prepaid_expense_days": int(float(row.get("Prepaid Expense Days", 0) or 0)),
+                "other_asset_days": int(float(row.get("Other Asset Days", 0) or 0)),
+            })
+        rows = rebuilt
+        st.session_state["receivable_rows"] = rows
+        st.session_state.pop("receivable_increment_preview_rows", None)
 
-    if updated_rows != rows:
-        st.session_state["receivable_rows"] = updated_rows
-        rows = updated_rows
+    _receivable_rows_to_payload(rows, payload)
 
-    year_catalog = _build_year_catalog()
-
-    reference = rows[-1] if rows else {"label": year_catalog[0] if year_catalog else "Year 1"}
-
-    st.markdown("#### Add accounts receivable assumption")
-    with st.form("receivable_add_row"):
-        default_label = str(
-            reference.get(
-                "label",
-                year_catalog[len(rows)] if len(rows) < len(year_catalog) else f"Year {len(rows) + 1}",
-            )
-        )
-        new_label = _select_or_create_option(
-            st,
-            "Year",
-            year_catalog,
-            "receivable_new_label",
-            current_value=default_label,
-        )
-        if new_label and new_label not in year_catalog:
-            year_catalog.append(new_label)
-
-        new_days = st.number_input(
-            "Days in Year (new)",
-            value=int(reference.get("days_in_year", 365)),
-            key="receivable_new_days",
-            min_value=0,
-            step=1,
-        )
-        new_receivable_days = st.number_input(
-            "Accounts Receivable Days (new)",
-            value=int(reference.get("accounts_receivable_days", 0)),
-            key="receivable_new_receivable",
-            min_value=0,
-            step=1,
-        )
-        new_prepaid_days = st.number_input(
-            "Prepaid Expense Days (new)",
-            value=int(reference.get("prepaid_expense_days", 0)),
-            key="receivable_new_prepaid",
-            min_value=0,
-            step=1,
-        )
-        new_other_asset_days = st.number_input(
-            "Other Asset Days (new)",
-            value=int(reference.get("other_asset_days", 0)),
-            key="receivable_new_other",
-            min_value=0,
-            step=1,
-        )
-        submitted = st.form_submit_button("Add Year")
-
-    if submitted:
-        cleaned_label = (new_label or "").strip()
-        if not cleaned_label:
-            st.warning("Year label is required to add an accounts receivable assumption.")
-        else:
-            parsed_year = _parse_year_value(cleaned_label, len(rows) + 1)
-            rows.append(
-                {
-                    "label": cleaned_label,
-                    "year": parsed_year,
-                    "days_in_year": int(new_days),
-                    "accounts_receivable_days": int(new_receivable_days),
-                    "prepaid_expense_days": int(new_prepaid_days),
-                    "other_asset_days": int(new_other_asset_days),
-                }
-            )
-            st.session_state["receivable_rows"] = rows
-            for key in (
-                "receivable_new_label",
-                "receivable_new_label_select",
-                "receivable_new_label_custom",
-                "receivable_new_days",
-                "receivable_new_receivable",
-                "receivable_new_prepaid",
-                "receivable_new_other",
-            ):
-                st.session_state.pop(key, None)
-            _rerun()
 def _render_inventory_inputs(payload: dict) -> None:
-    rows: list[dict] = st.session_state.get("inventory_rows", [])
-    payload_years = payload.get("years", [])
-
-    updated_rows: list[dict] = list(rows)
+    rows: list[dict] = st.session_state.get("inventory_rows", []) or _payload_to_inventory_rows(payload)
+    years = [str(year) for year in payload.get("years", []) if year is not None] if isinstance(payload.get("years"), Sequence) else []
+    target_length = max(len(rows), len(years), 1)
 
     if not rows:
-        st.info("No inventory assumptions configured. Use the form below to add entries.")
+        rows = _payload_to_inventory_rows(payload)
+    if not rows:
+        rows = [{"label": "Year 1", "year": 1, "days_in_year": 365, "inventory_days": 0, "accounts_payable_days": 0}]
 
-    def _build_year_catalog() -> list[str]:
-        base_year_labels = [str(year) for year in payload_years if year is not None]
-        existing_labels = [
-            str(row.get("label", "")) for row in updated_rows if row.get("label")
-        ]
-        catalog = list(dict.fromkeys([*base_year_labels, *existing_labels]))
-        if not catalog:
-            max_length = max(len(updated_rows), len(payload_years), 1)
-            catalog = [f"Year {index + 1}" for index in range(max_length)]
-        return catalog
+    while len(rows) < target_length:
+        idx = len(rows)
+        base = copy.deepcopy(rows[-1]) if rows else {"days_in_year": 365, "inventory_days": 0, "accounts_payable_days": 0}
+        label = years[idx] if idx < len(years) else f"Year {idx + 1}"
+        base["label"] = label
+        base["year"] = _parse_year_value(label, idx + 1)
+        rows.append(base)
 
-    visible_count = min(len(updated_rows), MAX_VISIBLE_INVENTORY_ROWS)
+    st.session_state["inventory_rows"] = rows
+    labels = [str(row.get("label") or f"Year {idx + 1}") for idx, row in enumerate(rows)]
 
-    if visible_count and len(updated_rows) > MAX_VISIBLE_INVENTORY_ROWS:
-        st.caption(
-            "Select which inventory year to edit using the dropdowns below. Additional "
-            "years remain available in the model and can be chosen from the selectors."
-        )
+    st.markdown("#### Base Year Assumption")
+    base_label = st.selectbox("Inventory/AP start year", labels, key="inventory_base_year")
+    base_index = labels.index(base_label) if base_label in labels else 0
+    base_row = dict(rows[base_index])
 
-    for slot in range(visible_count):
-        year_catalog = _build_year_catalog()
-        option_indices = list(range(len(updated_rows)))
-        if not option_indices:
-            break
+    cols = st.columns(3)
+    base_row["days_in_year"] = int(cols[0].number_input("Days in Year", value=int(base_row.get("days_in_year", 365)), min_value=0, step=1, key="inventory_base_days_in_year"))
+    base_row["inventory_days"] = int(cols[1].number_input("Inventory Days", value=int(base_row.get("inventory_days", 0)), min_value=0, step=1, key="inventory_base_inventory_days"))
+    base_row["accounts_payable_days"] = int(cols[2].number_input("Accounts Payable Days", value=int(base_row.get("accounts_payable_days", 0)), min_value=0, step=1, key="inventory_base_payable_days"))
+    rows[base_index] = base_row
 
-        default_index = option_indices[min(slot, len(option_indices) - 1)]
-        container = st.container()
-        with container:
-            selected_index = container.selectbox(
-                "Inventory year",
-                option_indices,
-                index=option_indices.index(default_index),
-                format_func=lambda idx: str(
-                    updated_rows[idx].get("label")
-                    or updated_rows[idx].get("Year")
-                    or f"Year {idx + 1}"
-                ),
-                key=f"inventory_row_selector_{slot}",
-            )
+    st.markdown("#### Yearly Increment Tool")
+    increment_pct = st.number_input("Yearly Increment %", value=float(st.session_state.get("inventory_increment_pct", 0.0) or 0.0), step=0.1, key="inventory_increment_pct")
+    increment_target = st.selectbox("Apply increment to", ["All", "Inventory Days", "Accounts Payable Days"], key="inventory_increment_target")
+    c1,c2,c3 = st.columns(3)
+    preview = c1.button("Preview Yearly Increment", key="inventory_increment_preview")
+    save = c2.button("Save Yearly Increment", key="inventory_increment_save")
+    cancel = c3.button("Cancel Yearly Increment", key="inventory_increment_cancel")
 
-            row = updated_rows[selected_index]
+    field_map = {"Inventory Days": "inventory_days", "Accounts Payable Days": "accounts_payable_days"}
+    if preview:
+        preview_rows = copy.deepcopy(rows)
+        selected = list(field_map.values()) if increment_target == "All" else [field_map[increment_target]]
+        running = {field: float(preview_rows[base_index].get(field, 0) or 0) for field in selected}
+        for idx in range(base_index + 1, len(preview_rows)):
+            for field, current in list(running.items()):
+                updated = max(current * (1 + float(increment_pct) / 100.0), 0.0)
+                preview_rows[idx][field] = int(round(updated))
+                running[field] = updated
+        st.session_state["inventory_increment_preview_rows"] = preview_rows
 
-            cols = st.columns([2.0, 1.2, 1.2, 1.2, 0.7])
+    preview_rows = st.session_state.get("inventory_increment_preview_rows")
+    active_rows = preview_rows if isinstance(preview_rows, list) else rows
+    if cancel:
+        st.session_state.pop("inventory_increment_preview_rows", None)
+        _rerun()
+    if save and isinstance(preview_rows, list):
+        st.session_state["inventory_rows"] = preview_rows
+        rows = preview_rows
+        st.session_state.pop("inventory_increment_preview_rows", None)
+        _rerun()
 
-            current_label = str(
-                row.get(
-                    "label",
-                    year_catalog[selected_index]
-                    if selected_index < len(year_catalog)
-                    else f"Year {selected_index + 1}",
-                )
-            )
-            selected_label = _select_or_create_option(
-                cols[0],
-                "Year",
-                year_catalog,
-                f"inventory_label_{slot}_{selected_index}",
-                current_value=current_label,
-            )
-            if selected_label and selected_label not in year_catalog:
-                year_catalog.append(selected_label)
-            label = selected_label or f"Year {selected_index + 1}"
-
-            fallback_year = row.get("year")
-            if not isinstance(fallback_year, (int, float)):
-                if selected_index < len(payload_years):
-                    fallback_year = payload_years[selected_index]
-                else:
-                    fallback_year = selected_index + 1
-            parsed_year = _parse_year_value(
-                label, int(fallback_year) if fallback_year else selected_index + 1
-            )
-
-            days_in_year = cols[1].number_input(
-                "Days in Year",
-                value=int(row.get("days_in_year", 365)),
-                key=f"inventory_days_in_year_{slot}_{selected_index}",
-                min_value=0,
-                step=1,
-            )
-
-            inventory_days = cols[2].number_input(
-                "Inventory Days",
-                value=int(row.get("inventory_days", 0)),
-                key=f"inventory_inventory_days_{slot}_{selected_index}",
-                min_value=0,
-                step=1,
-            )
-
-            payable_days = cols[3].number_input(
-                "Accounts Payable Days",
-                value=int(row.get("accounts_payable_days", 0)),
-                key=f"inventory_accounts_payable_days_{slot}_{selected_index}",
-                min_value=0,
-                step=1,
-            )
-
-            if cols[4].button("Remove", key=f"inventory_remove_{slot}_{selected_index}"):
-                del updated_rows[selected_index]
-                st.session_state["inventory_rows"] = updated_rows
-                _rerun()
-
-            updated_rows[selected_index] = {
+    st.markdown("#### Inventory & Accounts Payable Settings by Year")
+    editor_seed = [
+        {
+            "Year": str(row.get("label", f"Year {i + 1}")),
+            "Days in Year": int(row.get("days_in_year", 365) or 365),
+            "Inventory Days": int(row.get("inventory_days", 0) or 0),
+            "Accounts Payable Days": int(row.get("accounts_payable_days", 0) or 0),
+        }
+        for i, row in enumerate(active_rows)
+    ]
+    edited = st.data_editor(editor_seed, use_container_width=True, hide_index=True, key="inventory_schedule_editor", num_rows="fixed")
+    normalised = _coerce_editor_rows(edited)
+    if normalised:
+        rebuilt: list[dict] = []
+        for idx, row in enumerate(normalised):
+            label = str(row.get("Year", "") or "").strip() or f"Year {idx + 1}"
+            rebuilt.append({
                 "label": label,
-                "year": parsed_year,
-                "days_in_year": int(days_in_year),
-                "inventory_days": int(inventory_days),
-                "accounts_payable_days": int(payable_days),
-            }
+                "year": _parse_year_value(label, idx + 1),
+                "days_in_year": int(float(row.get("Days in Year", 365) or 365)),
+                "inventory_days": int(float(row.get("Inventory Days", 0) or 0)),
+                "accounts_payable_days": int(float(row.get("Accounts Payable Days", 0) or 0)),
+            })
+        rows = rebuilt
+        st.session_state["inventory_rows"] = rows
+        st.session_state.pop("inventory_increment_preview_rows", None)
 
-    if updated_rows != rows:
-        st.session_state["inventory_rows"] = updated_rows
-        rows = updated_rows
-
-    year_catalog = _build_year_catalog()
-
-    reference = rows[-1] if rows else {"label": year_catalog[0] if year_catalog else "Year 1"}
-
-    st.markdown("#### Add inventory assumption")
-    with st.form("inventory_add_row"):
-        default_label = str(
-            reference.get(
-                "label",
-                year_catalog[len(rows)] if len(rows) < len(year_catalog) else f"Year {len(rows) + 1}",
-            )
-        )
-        new_label = _select_or_create_option(
-            st,
-            "Year",
-            year_catalog,
-            "inventory_new_label",
-            current_value=default_label,
-        )
-        if new_label and new_label not in year_catalog:
-            year_catalog.append(new_label)
-
-        new_days = st.number_input(
-            "Days in Year (new)",
-            value=int(reference.get("days_in_year", 365)),
-            key="inventory_new_days",
-            min_value=0,
-            step=1,
-        )
-        new_inventory_days = st.number_input(
-            "Inventory Days (new)",
-            value=int(reference.get("inventory_days", 0)),
-            key="inventory_new_inventory",
-            min_value=0,
-            step=1,
-        )
-        new_payable_days = st.number_input(
-            "Accounts Payable Days (new)",
-            value=int(reference.get("accounts_payable_days", 0)),
-            key="inventory_new_payable",
-            min_value=0,
-            step=1,
-        )
-        submitted = st.form_submit_button("Add Year")
-
-    if submitted:
-        cleaned_label = (new_label or "").strip()
-        if not cleaned_label:
-            st.warning("Year label is required to add an inventory assumption.")
-        else:
-            parsed_year = _parse_year_value(cleaned_label, len(rows) + 1)
-            rows.append(
-                {
-                    "label": cleaned_label,
-                    "year": parsed_year,
-                    "days_in_year": int(new_days),
-                    "inventory_days": int(new_inventory_days),
-                    "accounts_payable_days": int(new_payable_days),
-                }
-            )
-            st.session_state["inventory_rows"] = rows
-            for key in (
-                "inventory_new_label",
-                "inventory_new_label_select",
-                "inventory_new_label_custom",
-                "inventory_new_days",
-                "inventory_new_inventory",
-                "inventory_new_payable",
-            ):
-                st.session_state.pop(key, None)
-            _rerun()
-
+    _inventory_rows_to_payload(rows, payload)
 
 def _commission_revenue_estimate(payload: Mapping, year_value: int, product: str) -> float:
     years = [int(year) for year in payload.get("years", [])] if isinstance(payload, Mapping) else []
@@ -5140,6 +4869,40 @@ def _render_cost_and_financing(payload: dict) -> None:
         format="%.4f",
         key="raw_material_per_unit",
     )
+    unit_costs = payload.get("unit_costs", {}) if isinstance(payload, Mapping) else {}
+    products = sorted(str(name) for name in unit_costs.keys()) if isinstance(unit_costs, Mapping) else []
+    if products:
+        st.markdown("#### Raw material factor by product")
+        factors_mapping = raw.get("material_factors", {}) if isinstance(raw.get("material_factors"), Mapping) else {}
+        factor_rows = []
+        for product in products:
+            factor = float(factors_mapping.get(product, 1.0) or 1.0)
+            factor_rows.append(
+                {
+                    "Product": product,
+                    "Material Factor": factor,
+                    "Effective Variable Cost / Unit": float(raw.get("per_unit", 0.0) or 0.0) * factor,
+                }
+            )
+        edited_factors = st.data_editor(
+            factor_rows,
+            use_container_width=True,
+            hide_index=True,
+            key="raw_material_factor_table",
+            column_config={
+                "Product": st.column_config.TextColumn(disabled=True),
+                "Material Factor": st.column_config.NumberColumn(min_value=0.0, step=0.01, format="%.4f"),
+                "Effective Variable Cost / Unit": st.column_config.NumberColumn(disabled=True, format="%.4f"),
+            },
+            num_rows="fixed",
+        )
+        normalised_factor_rows = _coerce_editor_rows(edited_factors)
+        if normalised_factor_rows:
+            raw["material_factors"] = {
+                str(row.get("Product", "")).strip(): max(float(row.get("Material Factor", 1.0) or 1.0), 0.0)
+                for row in normalised_factor_rows
+                if str(row.get("Product", "")).strip()
+            }
     years = payload.get("years", [])
     annual_values = raw.get("annual", [])
     if not isinstance(annual_values, Sequence):
@@ -5530,28 +5293,27 @@ def _render_tax_schedule(payload: dict) -> None:
 
     if not years:
         st.info(
-            "No projection years available. Configure projection years to edit tax "
-            "assumptions."
+            "No projection years available. Configure projection years to edit tax assumptions."
         )
         return
 
-    base_rate = float(tax.get("rate", 0.0))
-    timing_adjustment = float(tax.get("timing_adjustment", 0.0))
+    base_rate = float(tax.get("rate", 0.0) or 0.0)
+    timing_adjustment = float(tax.get("timing_adjustment", 0.0) or 0.0)
 
     col_base, col_timing = st.columns(2)
     with col_base:
-        base_rate = col_base.number_input(
+        base_rate = st.number_input(
             "Base tax rate",
             value=base_rate,
-            step=0.01,
+            step=0.001,
             format="%.4f",
             key="tax_base_rate",
         )
     with col_timing:
-        timing_adjustment = col_timing.number_input(
+        timing_adjustment = st.number_input(
             "Timing adjustment",
             value=timing_adjustment,
-            step=0.01,
+            step=0.001,
             format="%.4f",
             key="tax_timing",
         )
@@ -5559,379 +5321,261 @@ def _render_tax_schedule(payload: dict) -> None:
     tax["rate"] = float(base_rate)
     tax["timing_adjustment"] = float(timing_adjustment)
 
-    schedule = _ensure_schedule_length(tax.get("schedule", []), len(years), fill=base_rate)
-    tax["schedule"] = schedule
-
-    with st.expander("Advanced: year-by-year tax schedule"):
-        session_key = "tax_entries"
-        default_entries = [
-            _normalise_tax_entry(
-                {
-                    "label": str(year) if year is not None else f"Year {index + 1}",
-                    "rate": float(schedule[index]),
-                },
-                index,
-                base_rate,
-            )
-            for index, year in enumerate(years)
+    payload_years = [str(year) for year in years if year is not None]
+    stored_rows = st.session_state.get("tax_rows")
+    if isinstance(stored_rows, list) and stored_rows:
+        rows = copy.deepcopy(stored_rows)
+    else:
+        entries = _payload_to_tax_entries(payload)
+        rows = [
+            {
+                "Year": str(entry.get("label", f"Year {idx + 1}")),
+                "Rate": float(entry.get("rate", base_rate) or base_rate),
+            }
+            for idx, entry in enumerate(entries)
         ]
-        if not default_entries:
-            default_entries = [_normalise_tax_entry({}, 0, base_rate)]
 
-        if session_key not in st.session_state or not st.session_state.get(session_key):
-            st.session_state[session_key] = default_entries
+    target_length = max(len(rows), len(payload_years), 1)
+    while len(rows) < target_length:
+        idx = len(rows)
+        label = payload_years[idx] if idx < len(payload_years) else f"Year {idx + 1}"
+        previous = float(rows[-1].get("Rate", base_rate) if rows else base_rate)
+        rows.append({"Year": label, "Rate": previous})
 
-        rows: list[dict] = list(st.session_state.get(session_key, default_entries))
-        updated_rows: list[dict] = []
+    st.session_state["tax_rows"] = rows
 
-        for index, row in enumerate(rows):
-            entry = _normalise_tax_entry(row, index, base_rate)
-            container = st.container()
-            with container:
-                cols = st.columns([2.0, 1.2, 0.8])
-                label_value = cols[0].text_input(
-                    "Year",
-                    value=entry["label"],
-                    key=f"tax_year_label_{index}",
-                ).strip()
-                if not label_value:
-                    label_value = f"Year {index + 1}"
+    labels = [str(row.get("Year", f"Year {idx + 1}")) for idx, row in enumerate(rows)]
+    st.markdown("#### Base Year Assumption")
+    base_label = st.selectbox("Tax schedule start year", labels, key="tax_base_year")
+    base_index = labels.index(base_label) if base_label in labels else 0
+    rows[base_index]["Rate"] = float(
+        st.number_input(
+            "Tax rate (base year)",
+            value=float(rows[base_index].get("Rate", base_rate) or base_rate),
+            min_value=0.0,
+            step=0.001,
+            format="%.4f",
+            key="tax_base_year_rate",
+        )
+    )
 
-                rate_value = cols[1].number_input(
-                    "Tax rate",
-                    value=float(entry["rate"]),
-                    min_value=0.0,
-                    step=0.01,
-                    format="%.4f",
-                    key=f"tax_rate_value_{index}",
-                )
+    st.markdown("#### Yearly Increment Tool")
+    increment_pct = st.number_input(
+        "Yearly Increment %",
+        value=float(st.session_state.get("tax_increment_pct", 0.0) or 0.0),
+        step=0.1,
+        key="tax_increment_pct",
+    )
+    c1, c2, c3 = st.columns(3)
+    preview = c1.button("Preview Yearly Increment", key="tax_increment_preview")
+    save = c2.button("Save Yearly Increment", key="tax_increment_save")
+    cancel = c3.button("Cancel Yearly Increment", key="tax_increment_cancel")
 
-                remove_clicked = cols[2].button("Remove", key=f"tax_remove_{index}")
+    if preview:
+        preview_rows = copy.deepcopy(rows)
+        running = float(preview_rows[base_index].get("Rate", 0.0) or 0.0)
+        for idx in range(base_index + 1, len(preview_rows)):
+            running = max(running * (1 + float(increment_pct) / 100.0), 0.0)
+            preview_rows[idx]["Rate"] = running
+        st.session_state["tax_increment_preview_rows"] = preview_rows
 
-            if remove_clicked and len(rows) > 1:
-                rows.pop(index)
-                st.session_state[session_key] = rows
-                _tax_entries_to_payload(rows, tax, years, base_rate)
-                _rerun()
-            else:
-                updated_rows.append({"label": label_value, "rate": float(rate_value)})
+    preview_rows = st.session_state.get("tax_increment_preview_rows")
+    active_rows = preview_rows if isinstance(preview_rows, list) else rows
+    if cancel:
+        st.session_state.pop("tax_increment_preview_rows", None)
+        _rerun()
+    if save and isinstance(preview_rows, list):
+        rows = preview_rows
+        st.session_state["tax_rows"] = rows
+        st.session_state.pop("tax_increment_preview_rows", None)
+        _rerun()
 
-        if updated_rows != rows and updated_rows:
-            rows = updated_rows
-            st.session_state[session_key] = rows
+    st.markdown("#### Tax Settings by Year")
+    edited = st.data_editor(
+        active_rows,
+        use_container_width=True,
+        hide_index=True,
+        key="tax_schedule_editor",
+        num_rows="fixed",
+    )
+    normalised = _coerce_editor_rows(edited)
+    if normalised:
+        rebuilt = []
+        for idx, row in enumerate(normalised):
+            label = str(row.get("Year", "") or "").strip() or f"Year {idx + 1}"
+            try:
+                rate = float(row.get("Rate", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                rate = 0.0
+            rebuilt.append({"Year": label, "Rate": max(rate, 0.0)})
+        rows = rebuilt
+        st.session_state["tax_rows"] = rows
+        st.session_state.pop("tax_increment_preview_rows", None)
 
-        _tax_entries_to_payload(rows, tax, years, base_rate)
-
-        st.markdown("#### Add tax assumption")
-        default_entry = _next_tax_entry(rows, years, base_rate)
-        with st.form("tax_add_form", clear_on_submit=True):
-            new_label = st.text_input(
-                "Year",
-                value=default_entry.get("label", f"Year {len(rows) + 1}"),
-                key="tax_new_label",
-            ).strip()
-            new_rate = st.number_input(
-                "Tax rate",
-                value=float(default_entry.get("rate", base_rate)),
-                min_value=0.0,
-                step=0.01,
-                format="%.4f",
-                key="tax_new_rate",
-            )
-            submitted = st.form_submit_button("Add tax year")
-
-        if submitted:
-            label = new_label or default_entry.get("label", f"Year {len(rows) + 1}")
-            new_entry = _normalise_tax_entry({"label": label, "rate": new_rate}, len(rows), base_rate)
-            updated = rows + [new_entry]
-            st.session_state[session_key] = updated
-            _tax_entries_to_payload(updated, tax, years, base_rate)
-            for key in ("tax_new_label", "tax_new_rate"):
-                st.session_state.pop(key, None)
-            _rerun()
+    tax_entries = [
+        {"label": str(row.get("Year", f"Year {idx + 1}")), "rate": float(row.get("Rate", base_rate) or base_rate)}
+        for idx, row in enumerate(rows)
+    ]
+    st.session_state["tax_entries"] = tax_entries
+    _tax_entries_to_payload(tax_entries, tax, years, base_rate)
 
 
 def _render_inflation_schedule(payload: dict) -> None:
-    rows: list[dict] = st.session_state.get("inflation_rows", [])
-    payload_years = payload.get("years", [])
+    rows: list[dict] = st.session_state.get("inflation_rows", []) or _payload_to_inflation_rows(payload)
+    payload_years = [str(year) for year in payload.get("years", []) if year is not None]
 
-    base_rate = float(payload.get("inflation_rate", 0.0))
     base_rate = st.number_input(
         "Base inflation rate",
-        value=base_rate,
+        value=float(payload.get("inflation_rate", 0.0)),
         step=0.001,
         format="%.4f",
         key="inflation_base_rate",
     )
     payload["inflation_rate"] = float(base_rate)
 
+    target_length = max(len(rows), len(payload_years), 1)
     if not rows:
-        payload["inflation_series"] = [base_rate for _ in payload_years]
-        st.session_state["inflation_rows"] = _payload_to_inflation_rows(payload)
-        rows = st.session_state.get("inflation_rows", [])
+        rows = _payload_to_inflation_rows(payload)
+    while len(rows) < target_length:
+        idx = len(rows)
+        label = payload_years[idx] if idx < len(payload_years) else f"Year {idx + 1}"
+        rows.append({"Year": label, "Rate": float(rows[-1].get("Rate", base_rate) if rows else base_rate)})
 
-    with st.expander("Advanced: year-by-year inflation schedule"):
-        if not rows:
-            st.info("No inflation assumptions configured. Use the form below to add entries.")
+    st.session_state["inflation_rows"] = rows
+    labels = [str(row.get("Year", f"Year {idx + 1}")) for idx, row in enumerate(rows)]
 
-        def _build_year_catalog(current_rows: Sequence[Mapping]) -> list[str]:
-            base_years = [str(year) for year in payload_years if year is not None]
-            existing = [
-                str(row.get("Year", "")).strip() for row in current_rows if row.get("Year")
-            ]
-            catalog = list(dict.fromkeys([*base_years, *existing]))
-            if not catalog:
-                max_length = max(len(current_rows), len(payload_years), 1)
-                catalog = [f"Year {index + 1}" for index in range(max_length)]
-            return catalog
+    st.markdown("#### Base Year Assumption")
+    base_label = st.selectbox("Inflation start year", labels, key="inflation_base_year")
+    base_index = labels.index(base_label) if base_label in labels else 0
+    rows[base_index]["Rate"] = float(st.number_input("Inflation rate (base year)", value=float(rows[base_index].get("Rate", base_rate)), min_value=0.0, step=0.001, format="%.4f", key="inflation_base_year_rate"))
 
-        updated_rows: list[dict] = []
-        removal_index: int | None = None
-        year_catalog = _build_year_catalog(rows)
+    st.markdown("#### Yearly Increment Tool")
+    increment_pct = st.number_input("Yearly Increment %", value=float(st.session_state.get("inflation_increment_pct", 0.0) or 0.0), step=0.1, key="inflation_increment_pct")
+    c1,c2,c3 = st.columns(3)
+    preview = c1.button("Preview Yearly Increment", key="inflation_increment_preview")
+    save = c2.button("Save Yearly Increment", key="inflation_increment_save")
+    cancel = c3.button("Cancel Yearly Increment", key="inflation_increment_cancel")
 
-        for index, row in enumerate(rows):
-            cols = st.columns([2.0, 1.2, 0.7])
-            current_label = str(
-                row.get("Year")
-                or (year_catalog[index] if index < len(year_catalog) else f"Year {index + 1}")
-            )
-            selected_label = _select_or_create_option(
-                cols[0],
-                "Year",
-                year_catalog,
-                f"inflation_label_{index}",
-                current_value=current_label,
-            )
-            if selected_label and selected_label not in year_catalog:
-                year_catalog.append(selected_label)
+    if preview:
+        preview_rows = copy.deepcopy(rows)
+        running = float(preview_rows[base_index].get("Rate", 0.0) or 0.0)
+        for idx in range(base_index + 1, len(preview_rows)):
+            running = max(running * (1 + float(increment_pct) / 100.0), 0.0)
+            preview_rows[idx]["Rate"] = running
+        st.session_state["inflation_increment_preview_rows"] = preview_rows
 
-            label = (selected_label or current_label).strip() or f"Year {index + 1}"
-            rate_value = cols[1].number_input(
-                "Rate",
-                value=float(row.get("Rate", base_rate)),
-                min_value=0.0,
-                step=0.001,
-                format="%.4f",
-                key=f"inflation_rate_{index}",
-            )
+    preview_rows = st.session_state.get("inflation_increment_preview_rows")
+    active_rows = preview_rows if isinstance(preview_rows, list) else rows
+    if cancel:
+        st.session_state.pop("inflation_increment_preview_rows", None)
+        _rerun()
+    if save and isinstance(preview_rows, list):
+        rows = preview_rows
+        st.session_state["inflation_rows"] = rows
+        st.session_state.pop("inflation_increment_preview_rows", None)
+        _rerun()
 
-            remove_clicked = cols[2].button(
-                "Remove", key=f"inflation_remove_{index}", help="Delete this inflation row"
-            )
+    st.markdown("#### Inflation Settings by Year")
+    edited = st.data_editor(active_rows, use_container_width=True, hide_index=True, key="inflation_schedule_editor", num_rows="fixed")
+    normalised = _coerce_editor_rows(edited)
+    if normalised:
+        rebuilt = []
+        for idx, row in enumerate(normalised):
+            label = str(row.get("Year", "") or "").strip() or f"Year {idx + 1}"
+            try:
+                rate = float(row.get("Rate", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                rate = 0.0
+            rebuilt.append({"Year": label, "Rate": max(rate, 0.0)})
+        rows = rebuilt
+        st.session_state["inflation_rows"] = rows
+        st.session_state.pop("inflation_increment_preview_rows", None)
 
-            if remove_clicked and len(rows) > 0:
-                removal_index = index
-                continue
-
-            updated_rows.append({"Year": label, "Rate": float(rate_value)})
-
-        if removal_index is not None:
-            del rows[removal_index]
-            st.session_state["inflation_rows"] = rows
-            _rerun()
-            return
-
-        if updated_rows != rows:
-            st.session_state["inflation_rows"] = updated_rows
-            rows = updated_rows
-
-        year_catalog = _build_year_catalog(rows)
-        reference = rows[-1] if rows else {"Year": year_catalog[0] if year_catalog else "Year 1"}
-
-        st.markdown("#### Add inflation entry")
-        with st.form("add_inflation_row"):
-            if len(year_catalog) > len(rows):
-                fallback_label = year_catalog[len(rows)]
-            elif year_catalog:
-                fallback_label = year_catalog[-1]
-            else:
-                fallback_label = f"Year {len(rows) + 1}"
-
-            new_label = _select_or_create_option(
-                st,
-                "Year",
-                year_catalog,
-                "inflation_new_label",
-                current_value=str(reference.get("Year", fallback_label)),
-            )
-            if new_label and new_label not in year_catalog:
-                year_catalog.append(new_label)
-
-            new_rate = st.number_input(
-                "Rate",
-                value=float(reference.get("Rate", base_rate)),
-                min_value=0.0,
-                step=0.001,
-                format="%.4f",
-                key="inflation_new_rate",
-            )
-            submitted = st.form_submit_button("Add")
-
-        if submitted:
-            clean_label = (new_label or "").strip() or f"Year {len(rows) + 1}"
-            updated_rows = list(rows)
-            updated_rows.append({"Year": clean_label, "Rate": float(new_rate)})
-            st.session_state["inflation_rows"] = updated_rows
-            for key in (
-                "inflation_new_label",
-                "inflation_new_label_select",
-                "inflation_new_label_custom",
-                "inflation_new_rate",
-            ):
-                st.session_state.pop(key, None)
-            _rerun()
-
+    _inflation_rows_to_payload(rows, payload)
 
 def _render_risk_schedule(payload: dict) -> None:
-    rows: list[dict] = st.session_state.get("risk_rows", [])
+    rows: list[dict] = st.session_state.get("risk_rows", []) or _payload_to_risk_rows(payload)
     categories = _risk_categories(payload, rows)
+    payload_years = [str(year) for year in payload.get("years", []) if year is not None]
 
-    if categories:
-        risk_defaults = payload.get("risk", {}) if isinstance(payload, Mapping) else {}
-        base_cols = st.columns(len(categories))
-        base_values: dict[str, float] = {}
-        for col, category in zip(base_cols, categories):
-            series = risk_defaults.get(category, []) if isinstance(risk_defaults, Mapping) else []
-            default_value = float(series[0]) if series else 0.0
-            base_values[category] = col.number_input(
-                f"{category.title()} base risk",
-                value=default_value,
-                min_value=0.0,
-                max_value=1.0,
-                step=0.01,
-                format="%.4f",
-                key=f"risk_base_{category}",
-            )
-        if not rows:
-            years = payload.get("years", []) if isinstance(payload, Mapping) else []
-            payload["risk"] = {
-                category: [float(value) for _ in years]
-                for category, value in base_values.items()
-            }
-            st.session_state["risk_rows"] = _payload_to_risk_rows(payload)
-            rows = st.session_state.get("risk_rows", [])
+    target_length = max(len(rows), len(payload_years), 1)
+    if not rows:
+        rows = _payload_to_risk_rows(payload)
+    while len(rows) < target_length:
+        idx = len(rows)
+        label = payload_years[idx] if idx < len(payload_years) else f"Year {idx + 1}"
+        source_row = rows[-1] if rows else {cat: 0.0 for cat in categories}
+        rows.append({"Year": label, **{cat: float(source_row.get(cat, 0.0)) for cat in categories}})
 
-    with st.expander("Advanced: year-by-year risk schedule"):
-        if not rows:
-            st.info("No risk assumptions configured. Use the form below to add entries.")
+    st.session_state["risk_rows"] = rows
+    labels = [str(row.get("Year", f"Year {idx + 1}")) for idx, row in enumerate(rows)]
 
-        def _build_year_catalog(current_rows: Sequence[Mapping]) -> list[str]:
-            payload_years = payload.get("years") or []
-            base_years = [str(year) for year in payload_years if year is not None]
-            existing = [
-                str(row.get("Year", "")).strip() for row in current_rows if row.get("Year")
-            ]
-            catalog = list(dict.fromkeys([*base_years, *existing]))
-            if not catalog:
-                max_length = max(len(current_rows), len(payload_years), 1)
-                catalog = [f"Year {index + 1}" for index in range(max_length)]
-            return catalog
+    st.markdown("#### Base Year Assumption")
+    base_label = st.selectbox("Risk start year", labels, key="risk_base_year")
+    base_index = labels.index(base_label) if base_label in labels else 0
+    base_cols = st.columns(len(categories))
+    for col, category in zip(base_cols, categories):
+        rows[base_index][category] = float(col.number_input(
+            f"{category.title()} base risk",
+            value=float(rows[base_index].get(category, 0.0)),
+            min_value=0.0,
+            max_value=1.0,
+            step=0.01,
+            format="%.4f",
+            key=f"risk_base_value_{category}",
+        ))
 
-        updated_rows: list[dict] = []
-        removal_index: int | None = None
-        year_catalog = _build_year_catalog(rows)
+    st.markdown("#### Yearly Increment Tool")
+    increment_pct = st.number_input("Yearly Increment %", value=float(st.session_state.get("risk_increment_pct", 0.0) or 0.0), step=0.1, key="risk_increment_pct")
+    target_options = ["All", *categories]
+    target = st.selectbox("Apply increment to", target_options, key="risk_increment_target")
+    c1,c2,c3 = st.columns(3)
+    preview = c1.button("Preview Yearly Increment", key="risk_increment_preview")
+    save = c2.button("Save Yearly Increment", key="risk_increment_save")
+    cancel = c3.button("Cancel Yearly Increment", key="risk_increment_cancel")
 
-        for index, row in enumerate(rows):
-            column_widths = [2.0] + [1.0 for _ in categories] + [0.7]
-            cols = st.columns(column_widths)
+    if preview:
+        preview_rows = copy.deepcopy(rows)
+        selected = categories if target == "All" else [target]
+        running = {cat: float(preview_rows[base_index].get(cat, 0.0) or 0.0) for cat in selected}
+        for idx in range(base_index + 1, len(preview_rows)):
+            for cat, current in list(running.items()):
+                updated = min(max(current * (1 + float(increment_pct) / 100.0), 0.0), 1.0)
+                preview_rows[idx][cat] = updated
+                running[cat] = updated
+        st.session_state["risk_increment_preview_rows"] = preview_rows
 
-            current_label = str(
-                row.get("Year")
-                or (year_catalog[index] if index < len(year_catalog) else f"Year {index + 1}")
-            )
-            selected_label = _select_or_create_option(
-                cols[0],
-                "Year",
-                year_catalog,
-                f"risk_label_{index}",
-                current_value=current_label,
-            )
-            if selected_label and selected_label not in year_catalog:
-                year_catalog.append(selected_label)
+    preview_rows = st.session_state.get("risk_increment_preview_rows")
+    active_rows = preview_rows if isinstance(preview_rows, list) else rows
+    if cancel:
+        st.session_state.pop("risk_increment_preview_rows", None)
+        _rerun()
+    if save and isinstance(preview_rows, list):
+        rows = preview_rows
+        st.session_state["risk_rows"] = rows
+        st.session_state.pop("risk_increment_preview_rows", None)
+        _rerun()
 
-            label = (selected_label or current_label).strip() or f"Year {index + 1}"
-            cleaned_row = {"Year": label}
-            for position, category in enumerate(categories, start=1):
-                cleaned_row[category] = cols[position].number_input(
-                    f"{category.title()} Risk",
-                    value=float(row.get(category, 0.0)),
-                    min_value=0.0,
-                    max_value=1.0,
-                    step=0.01,
-                    format="%.4f",
-                    key=f"risk_{category}_{index}",
-                )
-
-            remove_clicked = cols[-1].button(
-                "Remove", key=f"risk_remove_{index}", help="Delete this risk row"
-            )
-
-            if remove_clicked and len(rows) > 0:
-                removal_index = index
-                continue
-
-            updated_rows.append(cleaned_row)
-
-        if removal_index is not None:
-            del rows[removal_index]
-            st.session_state["risk_rows"] = rows
-            _rerun()
-            return
-
-        if updated_rows != rows:
-            st.session_state["risk_rows"] = updated_rows
-            rows = updated_rows
-
-        year_catalog = _build_year_catalog(rows)
-        reference = rows[-1] if rows else {"Year": year_catalog[0] if year_catalog else "Year 1"}
-
-        with st.form("add_risk_row"):
-            st.markdown("#### Add risk entry")
-            if len(year_catalog) > len(rows):
-                fallback_label = year_catalog[len(rows)]
-            elif year_catalog:
-                fallback_label = year_catalog[-1]
-            else:
-                fallback_label = f"Year {len(rows) + 1}"
-
-            new_label = _select_or_create_option(
-                st,
-                "Year",
-                year_catalog,
-                "risk_new_label",
-                current_value=str(reference.get("Year", fallback_label)),
-            )
-            if new_label and new_label not in year_catalog:
-                year_catalog.append(new_label)
-
-            new_values: dict[str, float] = {}
+    st.markdown("#### Risk Settings by Year")
+    edited = st.data_editor(active_rows, use_container_width=True, hide_index=True, key="risk_schedule_editor", num_rows="fixed")
+    normalised = _coerce_editor_rows(edited)
+    if normalised:
+        rebuilt = []
+        for idx, row in enumerate(normalised):
+            label = str(row.get("Year", "") or "").strip() or f"Year {idx + 1}"
+            item = {"Year": label}
             for category in categories:
-                new_values[category] = st.number_input(
-                    f"{category.title()} Risk",
-                    value=float(reference.get(category, 0.0)),
-                    min_value=0.0,
-                    max_value=1.0,
-                    step=0.01,
-                    format="%.4f",
-                    key=f"risk_new_{category}",
-                )
-            submitted = st.form_submit_button("Add")
+                try:
+                    value = float(row.get(category, 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    value = 0.0
+                item[category] = min(max(value, 0.0), 1.0)
+            rebuilt.append(item)
+        rows = rebuilt
+        st.session_state["risk_rows"] = rows
+        st.session_state.pop("risk_increment_preview_rows", None)
 
-        if submitted:
-            clean_label = (new_label or "").strip() or f"Year {len(rows) + 1}"
-            updated_rows = list(rows)
-            updated_rows.append({"Year": clean_label, **new_values})
-            st.session_state["risk_rows"] = updated_rows
-            for key in (
-                "risk_new_label",
-                "risk_new_label_select",
-                "risk_new_label_custom",
-            ):
-                st.session_state.pop(key, None)
-            for category in categories:
-                st.session_state.pop(f"risk_new_{category}", None)
-            _rerun()
-
+    _risk_rows_to_payload(rows, payload)
 
 def _render_goal_seek(payload: dict) -> None:
     goal = payload.get("goal_seek", {}) if isinstance(payload, Mapping) else {}
@@ -6955,7 +6599,8 @@ def _payload_to_core_rows(payload: Mapping) -> list[dict]:
         total_units = float(totals.get(name, 0.0))
         if total_units == 0.0 and isinstance(estimates, Mapping):
             estimate = estimates.get(name, [])
-            total_units = sum(float(v) for v in estimate)
+            if isinstance(estimate, Sequence) and estimate:
+                total_units = float(estimate[0])
         max_capacity = float(capacities.get(name, 0.0))
         if max_capacity > 0.0 and total_units > max_capacity:
             total_units = max_capacity
@@ -8152,11 +7797,20 @@ def _payload_to_tax_entries(payload: Mapping) -> list[dict]:
 def _sync_tax_entries_from_widgets(rows: Sequence[Mapping]) -> list[dict]:
     updated: list[dict] = []
     for index, row in enumerate(rows):
-        label = str(_get_widget_value(f"tax_year_label_{index}", row.get("label", ""))).strip()
-        if not label:
-            label = f"Year {index + 1}"
-        rate = float(_get_widget_number(f"tax_rate_value_{index}", row.get("rate", 0.0), float))
-        updated.append({"label": label, "rate": rate})
+        is_new_shape = isinstance(row, Mapping) and ("Year" in row or "Rate" in row)
+        default_label = row.get("Year", row.get("label", "")) if isinstance(row, Mapping) else ""
+        default_rate = row.get("Rate", row.get("rate", 0.0)) if isinstance(row, Mapping) else 0.0
+
+        if is_new_shape:
+            label = str(default_label or "").strip() or f"Year {index + 1}"
+            rate = float(default_rate or 0.0)
+        else:
+            label = str(_get_widget_value(f"tax_year_label_{index}", default_label)).strip()
+            if not label:
+                label = f"Year {index + 1}"
+            rate = float(_get_widget_number(f"tax_rate_value_{index}", default_rate, float))
+
+        updated.append({"label": label, "rate": max(rate, 0.0)})
     return updated
 
 
@@ -8564,31 +8218,14 @@ def _scaled_production_series(
     years: Sequence[Any],
     existing_estimate: Mapping[str, Sequence[Any]] | Sequence[Any] | None,
 ) -> list[float]:
-    if isinstance(existing_estimate, Mapping) and product in existing_estimate:
-        series = [float(value) for value in existing_estimate.get(product, [])]
-    elif isinstance(existing_estimate, Sequence) and not isinstance(
-        existing_estimate, (str, bytes)
-    ):
-        # Legacy payloads may store a simple list when only one product exists.
-        series = [float(value) for value in existing_estimate]
-    else:
-        series = []
-
     target_length = len(years)
     if target_length == 0:
         return []
 
-    if len(series) < target_length:
-        series = series + [0.0] * (target_length - len(series))
-    elif len(series) > target_length:
-        series = series[:target_length]
-
-    current_total = sum(series)
-    if current_total > 0:
-        factor = total_units / current_total if current_total else 0.0
-        return [value * factor for value in series]
-
-    per_year = total_units / target_length if target_length else 0.0
+    # Core assumption semantics: "Total Production Units" is annual capacity.
+    # Each year should therefore carry the same units rather than redistributing
+    # a horizon-level total into a profile based on legacy production estimates.
+    per_year = float(total_units)
     return [per_year for _ in range(target_length)]
 
 

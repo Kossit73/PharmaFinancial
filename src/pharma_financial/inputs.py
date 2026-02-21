@@ -249,6 +249,7 @@ class ModelInputs:
     variable_cost_overrides: Mapping[str, float]
     inflation_series: List[float]
     raw_material_cost_per_unit: float
+    raw_material_factors: Mapping[str, float]
     utility_schedule: UtilitySchedule
     direct_labor_costs: Mapping[str, float]
     indirect_labor_costs: Mapping[str, float]
@@ -1061,8 +1062,30 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
     fixed_overrides, variable_overrides = _parse_fixed_variable_costs(
         raw.get("fixed_variable_costs")
     )
+
+    raw_material_mapping = raw.get("raw_material_cost", {})
+    raw_material_base = 0.0
+    if isinstance(raw_material_mapping, Mapping):
+        raw_material_base = float(raw_material_mapping.get("per_unit", 0.0) or 0.0)
+    material_factor_mapping = (
+        raw_material_mapping.get("material_factors", {})
+        if isinstance(raw_material_mapping, Mapping)
+        else {}
+    )
+    raw_material_factors: Dict[str, float] = {}
     for product in raw["production_estimate"].keys():
-        variable_overrides.setdefault(product, 0.0)
+        factor_value = (
+            material_factor_mapping.get(product, 1.0)
+            if isinstance(material_factor_mapping, Mapping)
+            else 1.0
+        )
+        try:
+            factor = float(factor_value)
+        except (TypeError, ValueError):
+            factor = 1.0
+        raw_material_factors[product] = max(factor, 0.0)
+        if product not in variable_overrides and raw_material_base > 0:
+            variable_overrides[product] = raw_material_base * raw_material_factors[product]
 
     break_even_rows = _parse_break_even_rows(
         raw.get("break_even"),
@@ -1160,6 +1183,7 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         variable_cost_overrides=variable_overrides,
         inflation_series=inflation_series,
         raw_material_cost_per_unit=float(raw["raw_material_cost"]["per_unit"]),
+        raw_material_factors=raw_material_factors,
         utility_schedule=utility,
         direct_labor_costs=labor_mapping.get("direct", {}),
         indirect_labor_costs=labor_mapping.get("indirect", {}),
