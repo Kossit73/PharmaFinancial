@@ -5286,28 +5286,27 @@ def _render_tax_schedule(payload: dict) -> None:
 
     if not years:
         st.info(
-            "No projection years available. Configure projection years to edit tax "
-            "assumptions."
+            "No projection years available. Configure projection years to edit tax assumptions."
         )
         return
 
-    base_rate = float(tax.get("rate", 0.0))
-    timing_adjustment = float(tax.get("timing_adjustment", 0.0))
+    base_rate = float(tax.get("rate", 0.0) or 0.0)
+    timing_adjustment = float(tax.get("timing_adjustment", 0.0) or 0.0)
 
     col_base, col_timing = st.columns(2)
     with col_base:
-        base_rate = col_base.number_input(
+        base_rate = st.number_input(
             "Base tax rate",
             value=base_rate,
-            step=0.01,
+            step=0.001,
             format="%.4f",
             key="tax_base_rate",
         )
     with col_timing:
-        timing_adjustment = col_timing.number_input(
+        timing_adjustment = st.number_input(
             "Timing adjustment",
             value=timing_adjustment,
-            step=0.01,
+            step=0.001,
             format="%.4f",
             key="tax_timing",
         )
@@ -5315,96 +5314,103 @@ def _render_tax_schedule(payload: dict) -> None:
     tax["rate"] = float(base_rate)
     tax["timing_adjustment"] = float(timing_adjustment)
 
-    schedule = _ensure_schedule_length(tax.get("schedule", []), len(years), fill=base_rate)
-    tax["schedule"] = schedule
-
-    with st.expander("Advanced: year-by-year tax schedule"):
-        session_key = "tax_entries"
-        default_entries = [
-            _normalise_tax_entry(
-                {
-                    "label": str(year) if year is not None else f"Year {index + 1}",
-                    "rate": float(schedule[index]),
-                },
-                index,
-                base_rate,
-            )
-            for index, year in enumerate(years)
+    payload_years = [str(year) for year in years if year is not None]
+    stored_rows = st.session_state.get("tax_rows")
+    if isinstance(stored_rows, list) and stored_rows:
+        rows = copy.deepcopy(stored_rows)
+    else:
+        entries = _payload_to_tax_entries(payload)
+        rows = [
+            {
+                "Year": str(entry.get("label", f"Year {idx + 1}")),
+                "Rate": float(entry.get("rate", base_rate) or base_rate),
+            }
+            for idx, entry in enumerate(entries)
         ]
-        if not default_entries:
-            default_entries = [_normalise_tax_entry({}, 0, base_rate)]
 
-        if session_key not in st.session_state or not st.session_state.get(session_key):
-            st.session_state[session_key] = default_entries
+    target_length = max(len(rows), len(payload_years), 1)
+    while len(rows) < target_length:
+        idx = len(rows)
+        label = payload_years[idx] if idx < len(payload_years) else f"Year {idx + 1}"
+        previous = float(rows[-1].get("Rate", base_rate) if rows else base_rate)
+        rows.append({"Year": label, "Rate": previous})
 
-        rows: list[dict] = list(st.session_state.get(session_key, default_entries))
-        updated_rows: list[dict] = []
+    st.session_state["tax_rows"] = rows
 
-        for index, row in enumerate(rows):
-            entry = _normalise_tax_entry(row, index, base_rate)
-            container = st.container()
-            with container:
-                cols = st.columns([2.0, 1.2, 0.8])
-                label_value = cols[0].text_input(
-                    "Year",
-                    value=entry["label"],
-                    key=f"tax_year_label_{index}",
-                ).strip()
-                if not label_value:
-                    label_value = f"Year {index + 1}"
+    labels = [str(row.get("Year", f"Year {idx + 1}")) for idx, row in enumerate(rows)]
+    st.markdown("#### Base Year Assumption")
+    base_label = st.selectbox("Tax schedule start year", labels, key="tax_base_year")
+    base_index = labels.index(base_label) if base_label in labels else 0
+    rows[base_index]["Rate"] = float(
+        st.number_input(
+            "Tax rate (base year)",
+            value=float(rows[base_index].get("Rate", base_rate) or base_rate),
+            min_value=0.0,
+            step=0.001,
+            format="%.4f",
+            key="tax_base_year_rate",
+        )
+    )
 
-                rate_value = cols[1].number_input(
-                    "Tax rate",
-                    value=float(entry["rate"]),
-                    min_value=0.0,
-                    step=0.01,
-                    format="%.4f",
-                    key=f"tax_rate_value_{index}",
-                )
+    st.markdown("#### Yearly Increment Tool")
+    increment_pct = st.number_input(
+        "Yearly Increment %",
+        value=float(st.session_state.get("tax_increment_pct", 0.0) or 0.0),
+        step=0.1,
+        key="tax_increment_pct",
+    )
+    c1, c2, c3 = st.columns(3)
+    preview = c1.button("Preview Yearly Increment", key="tax_increment_preview")
+    save = c2.button("Save Yearly Increment", key="tax_increment_save")
+    cancel = c3.button("Cancel Yearly Increment", key="tax_increment_cancel")
 
-                remove_clicked = cols[2].button("Remove", key=f"tax_remove_{index}")
+    if preview:
+        preview_rows = copy.deepcopy(rows)
+        running = float(preview_rows[base_index].get("Rate", 0.0) or 0.0)
+        for idx in range(base_index + 1, len(preview_rows)):
+            running = max(running * (1 + float(increment_pct) / 100.0), 0.0)
+            preview_rows[idx]["Rate"] = running
+        st.session_state["tax_increment_preview_rows"] = preview_rows
 
-            if remove_clicked and len(rows) > 1:
-                rows.pop(index)
-                st.session_state[session_key] = rows
-                _tax_entries_to_payload(rows, tax, years, base_rate)
-                _rerun()
-            else:
-                updated_rows.append({"label": label_value, "rate": float(rate_value)})
+    preview_rows = st.session_state.get("tax_increment_preview_rows")
+    active_rows = preview_rows if isinstance(preview_rows, list) else rows
+    if cancel:
+        st.session_state.pop("tax_increment_preview_rows", None)
+        _rerun()
+    if save and isinstance(preview_rows, list):
+        rows = preview_rows
+        st.session_state["tax_rows"] = rows
+        st.session_state.pop("tax_increment_preview_rows", None)
+        _rerun()
 
-        if updated_rows != rows and updated_rows:
-            rows = updated_rows
-            st.session_state[session_key] = rows
+    st.markdown("#### Tax Settings by Year")
+    edited = st.data_editor(
+        active_rows,
+        use_container_width=True,
+        hide_index=True,
+        key="tax_schedule_editor",
+        num_rows="fixed",
+    )
+    normalised = _coerce_editor_rows(edited)
+    if normalised:
+        rebuilt = []
+        for idx, row in enumerate(normalised):
+            label = str(row.get("Year", "") or "").strip() or f"Year {idx + 1}"
+            try:
+                rate = float(row.get("Rate", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                rate = 0.0
+            rebuilt.append({"Year": label, "Rate": max(rate, 0.0)})
+        rows = rebuilt
+        st.session_state["tax_rows"] = rows
+        st.session_state.pop("tax_increment_preview_rows", None)
 
-        _tax_entries_to_payload(rows, tax, years, base_rate)
-
-        st.markdown("#### Add tax assumption")
-        default_entry = _next_tax_entry(rows, years, base_rate)
-        with st.form("tax_add_form", clear_on_submit=True):
-            new_label = st.text_input(
-                "Year",
-                value=default_entry.get("label", f"Year {len(rows) + 1}"),
-                key="tax_new_label",
-            ).strip()
-            new_rate = st.number_input(
-                "Tax rate",
-                value=float(default_entry.get("rate", base_rate)),
-                min_value=0.0,
-                step=0.01,
-                format="%.4f",
-                key="tax_new_rate",
-            )
-            submitted = st.form_submit_button("Add tax year")
-
-        if submitted:
-            label = new_label or default_entry.get("label", f"Year {len(rows) + 1}")
-            new_entry = _normalise_tax_entry({"label": label, "rate": new_rate}, len(rows), base_rate)
-            updated = rows + [new_entry]
-            st.session_state[session_key] = updated
-            _tax_entries_to_payload(updated, tax, years, base_rate)
-            for key in ("tax_new_label", "tax_new_rate"):
-                st.session_state.pop(key, None)
-            _rerun()
+    tax_entries = [
+        {"label": str(row.get("Year", f"Year {idx + 1}")), "rate": float(row.get("Rate", base_rate) or base_rate)}
+        for idx, row in enumerate(rows)
+    ]
+    st.session_state["tax_entries"] = tax_entries
+    _tax_entries_to_payload(tax_entries, tax, years, base_rate)
 
 
 def _render_inflation_schedule(payload: dict) -> None:
