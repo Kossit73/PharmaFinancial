@@ -3487,6 +3487,7 @@ def _render_labor_mode_section(payload: dict) -> None:
         help="Apply this percentage increment from the first year to all subsequent years.",
     )
     increment_columns = [
+        "All",
         "Shifts",
         "Utilization",
         "Operating Hours / Shift",
@@ -3512,13 +3513,18 @@ def _render_labor_mode_section(payload: dict) -> None:
 
     if preview_increment and settings_rows:
         preview_rows = copy.deepcopy(settings_rows)
-        try:
-            base_value = float(preview_rows[0].get(target_column, 0.0) or 0.0)
-        except (TypeError, ValueError):
-            base_value = 0.0
+        selected_columns = increment_columns[1:] if target_column == "All" else [target_column]
+        running_values: dict[str, float] = {}
+        for column_name in selected_columns:
+            try:
+                running_values[column_name] = float(preview_rows[0].get(column_name, 0.0) or 0.0)
+            except (TypeError, ValueError):
+                running_values[column_name] = 0.0
+
         for idx in range(1, len(preview_rows)):
-            base_value = base_value * (1 + float(yearly_increment) / 100.0)
-            preview_rows[idx][target_column] = base_value
+            for column_name in selected_columns:
+                running_values[column_name] = running_values[column_name] * (1 + float(yearly_increment) / 100.0)
+                preview_rows[idx][column_name] = running_values[column_name]
         st.session_state["labor_yearly_increment_preview_rows"] = preview_rows
 
     preview_rows = st.session_state.get("labor_yearly_increment_preview_rows")
