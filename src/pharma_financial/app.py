@@ -3424,6 +3424,16 @@ def _labor_model_settings_rows_to_payload(rows: Sequence[Mapping], payload: dict
             settings[payload_key] = [float(row.get(column, 0.0) or 0.0) for row in rows]
 
 
+def _coerce_editor_rows(value: object) -> list[dict]:
+    """Normalise Streamlit data editor output to list-of-dict rows."""
+
+    if isinstance(value, list):
+        return [dict(item) for item in value if isinstance(item, Mapping)]
+    if pd is not None and isinstance(value, pd.DataFrame):
+        return [dict(item) for item in value.to_dict("records")]
+    return []
+
+
 def _render_labor_mode_section(payload: dict) -> None:
     labor_mode = st.radio(
         "Labor Modeling Mode",
@@ -3458,15 +3468,35 @@ def _render_labor_mode_section(payload: dict) -> None:
     st.info(
         "Advanced mode is editable here. Add new roles directly in the Roles table (for example CEO or Deputy CEO), then click Save Advanced Labour Changes."
     )
+    st.markdown("#### Roles (add or edit here)")
+    if not role_rows:
+        role_rows = [{
+            "Name": "",
+            "Labor Type": "direct",
+            "Behavior": "fixed",
+            "Headcount": 0.0,
+            "Salary": 0.0,
+            "Planned Headcount": "",
+            "Benefits Rate": "",
+            "Overtime Rate": "",
+            "Burden Rate": "",
+            "Productivity Target": "",
+            "Source": "",
+            "Owner": "",
+            "Benchmark Year": "",
+        }]
+        st.session_state["labor_model_rows"] = role_rows
+
     edited_roles = st.data_editor(
         role_rows,
         num_rows="dynamic",
         use_container_width=True,
         key="labor_model_roles_editor",
     )
-    if isinstance(edited_roles, list):
-        st.session_state["labor_model_rows"] = edited_roles
-        role_rows = edited_roles
+    normalised_roles = _coerce_editor_rows(edited_roles)
+    if normalised_roles:
+        st.session_state["labor_model_rows"] = normalised_roles
+        role_rows = normalised_roles
 
     st.markdown("#### Yearly Increment Tool")
     yearly_increment = st.number_input(
@@ -3530,15 +3560,20 @@ def _render_labor_mode_section(payload: dict) -> None:
         st.session_state.pop("labor_yearly_increment_preview_rows", None)
         _rerun()
 
+    st.markdown("#### Labor Settings by Year")
+    if not settings_rows:
+        st.warning("No yearly settings rows available. Add projection years in assumptions to edit year-by-year labour settings.")
+
     edited_settings = st.data_editor(
         active_settings_rows,
         num_rows="fixed",
         use_container_width=True,
         key="labor_model_settings_editor",
     )
-    if isinstance(edited_settings, list):
-        st.session_state["labor_model_settings_rows"] = edited_settings
-        settings_rows = edited_settings
+    normalised_settings = _coerce_editor_rows(edited_settings)
+    if normalised_settings:
+        st.session_state["labor_model_settings_rows"] = normalised_settings
+        settings_rows = normalised_settings
         st.session_state.pop("labor_yearly_increment_preview_rows", None)
 
     action_cols = st.columns(2)
