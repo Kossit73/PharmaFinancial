@@ -823,13 +823,16 @@ def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:
         overdraft_rows = synced_overdraft
     _debt_rows_to_payload(overdraft_rows, payload, "overdraft")
 
-    tax_rows = st.session_state.setdefault(
-        "tax_entries", _payload_to_tax_entries(payload)
-    )
+    tax_rows = st.session_state.get("tax_rows")
+    if not isinstance(tax_rows, list) or not tax_rows:
+        tax_rows = st.session_state.setdefault(
+            "tax_entries", _payload_to_tax_entries(payload)
+        )
     synced_tax = _sync_tax_entries_from_widgets(tax_rows)
-    if synced_tax != tax_rows:
+    existing_entries = st.session_state.get("tax_entries")
+    if synced_tax != existing_entries:
         st.session_state["tax_entries"] = synced_tax
-        tax_rows = synced_tax
+    tax_rows = synced_tax
     tax_payload = payload.setdefault("tax", {})
     if isinstance(tax_payload, dict):
         tax_payload["rate"] = float(
@@ -7789,11 +7792,20 @@ def _payload_to_tax_entries(payload: Mapping) -> list[dict]:
 def _sync_tax_entries_from_widgets(rows: Sequence[Mapping]) -> list[dict]:
     updated: list[dict] = []
     for index, row in enumerate(rows):
-        label = str(_get_widget_value(f"tax_year_label_{index}", row.get("label", ""))).strip()
-        if not label:
-            label = f"Year {index + 1}"
-        rate = float(_get_widget_number(f"tax_rate_value_{index}", row.get("rate", 0.0), float))
-        updated.append({"label": label, "rate": rate})
+        is_new_shape = isinstance(row, Mapping) and ("Year" in row or "Rate" in row)
+        default_label = row.get("Year", row.get("label", "")) if isinstance(row, Mapping) else ""
+        default_rate = row.get("Rate", row.get("rate", 0.0)) if isinstance(row, Mapping) else 0.0
+
+        if is_new_shape:
+            label = str(default_label or "").strip() or f"Year {index + 1}"
+            rate = float(default_rate or 0.0)
+        else:
+            label = str(_get_widget_value(f"tax_year_label_{index}", default_label)).strip()
+            if not label:
+                label = f"Year {index + 1}"
+            rate = float(_get_widget_number(f"tax_rate_value_{index}", default_rate, float))
+
+        updated.append({"label": label, "rate": max(rate, 0.0)})
     return updated
 
 

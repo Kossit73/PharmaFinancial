@@ -201,6 +201,29 @@ class RerunHelperTest(unittest.TestCase):
         total_units = sum(parsed.production_estimate[product_name])
         self.assertAlmostEqual(total_units, float(synced[0]["Total Production Units"]), places=6)
 
+    def test_sync_tax_entries_supports_tax_settings_rows_shape(self):
+        rows = [
+            {"Year": "2026", "Rate": 0.2},
+            {"Year": "2027", "Rate": 0.22},
+        ]
+
+        synced = self.app._sync_tax_entries_from_widgets(rows)
+
+        self.assertEqual(
+            synced,
+            [
+                {"label": "2026", "rate": 0.2},
+                {"label": "2027", "rate": 0.22},
+            ],
+        )
+
+    def test_sync_tax_entries_clamps_negative_rates(self):
+        rows = [{"Year": "2026", "Rate": -0.1}]
+
+        synced = self.app._sync_tax_entries_from_widgets(rows)
+
+        self.assertEqual(synced, [{"label": "2026", "rate": 0.0}])
+
     def test_commission_rows_roundtrip(self):
         payload = json.loads(
             Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
