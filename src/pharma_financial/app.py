@@ -3447,30 +3447,42 @@ def _render_labor_mode_section(payload: dict) -> None:
         return
 
     st.caption("Advanced mode writes `labor.model_v1.roles` and `labor.model_v1.settings` for the labor v1 engine.")
+    edit_mode = st.session_state.setdefault("labor_advanced_edit_mode", False)
+    toggle_label = "Done editing" if edit_mode else "Edit Advanced Labour Structure"
+    if st.button(toggle_label, key="labor_advanced_edit_toggle"):
+        st.session_state["labor_advanced_edit_mode"] = not edit_mode
+        _rerun()
+
     role_rows = st.session_state.setdefault("labor_model_rows", _payload_to_labor_model_rows(payload))
-    edited_roles = st.data_editor(
-        role_rows,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="labor_model_roles_editor",
-    )
-    if isinstance(edited_roles, list):
-        st.session_state["labor_model_rows"] = edited_roles
-        role_rows = edited_roles
+    if st.session_state.get("labor_advanced_edit_mode", False):
+        edited_roles = st.data_editor(
+            role_rows,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="labor_model_roles_editor",
+        )
+        if isinstance(edited_roles, list):
+            st.session_state["labor_model_rows"] = edited_roles
+            role_rows = edited_roles
+    else:
+        st.dataframe(role_rows, use_container_width=True)
     _labor_model_rows_to_payload(role_rows, payload)
 
     settings_rows = st.session_state.setdefault(
         "labor_model_settings_rows", _payload_to_labor_model_settings_rows(payload)
     )
-    edited_settings = st.data_editor(
-        settings_rows,
-        num_rows="fixed",
-        use_container_width=True,
-        key="labor_model_settings_editor",
-    )
-    if isinstance(edited_settings, list):
-        st.session_state["labor_model_settings_rows"] = edited_settings
-        settings_rows = edited_settings
+    if st.session_state.get("labor_advanced_edit_mode", False):
+        edited_settings = st.data_editor(
+            settings_rows,
+            num_rows="fixed",
+            use_container_width=True,
+            key="labor_model_settings_editor",
+        )
+        if isinstance(edited_settings, list):
+            st.session_state["labor_model_settings_rows"] = edited_settings
+            settings_rows = edited_settings
+    else:
+        st.dataframe(settings_rows, use_container_width=True)
     _labor_model_settings_rows_to_payload(settings_rows, payload)
 
 
