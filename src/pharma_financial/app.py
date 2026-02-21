@@ -4862,6 +4862,40 @@ def _render_cost_and_financing(payload: dict) -> None:
         format="%.4f",
         key="raw_material_per_unit",
     )
+    unit_costs = payload.get("unit_costs", {}) if isinstance(payload, Mapping) else {}
+    products = sorted(str(name) for name in unit_costs.keys()) if isinstance(unit_costs, Mapping) else []
+    if products:
+        st.markdown("#### Raw material factor by product")
+        factors_mapping = raw.get("material_factors", {}) if isinstance(raw.get("material_factors"), Mapping) else {}
+        factor_rows = []
+        for product in products:
+            factor = float(factors_mapping.get(product, 1.0) or 1.0)
+            factor_rows.append(
+                {
+                    "Product": product,
+                    "Material Factor": factor,
+                    "Effective Variable Cost / Unit": float(raw.get("per_unit", 0.0) or 0.0) * factor,
+                }
+            )
+        edited_factors = st.data_editor(
+            factor_rows,
+            use_container_width=True,
+            hide_index=True,
+            key="raw_material_factor_table",
+            column_config={
+                "Product": st.column_config.TextColumn(disabled=True),
+                "Material Factor": st.column_config.NumberColumn(min_value=0.0, step=0.01, format="%.4f"),
+                "Effective Variable Cost / Unit": st.column_config.NumberColumn(disabled=True, format="%.4f"),
+            },
+            num_rows="fixed",
+        )
+        normalised_factor_rows = _coerce_editor_rows(edited_factors)
+        if normalised_factor_rows:
+            raw["material_factors"] = {
+                str(row.get("Product", "")).strip(): max(float(row.get("Material Factor", 1.0) or 1.0), 0.0)
+                for row in normalised_factor_rows
+                if str(row.get("Product", "")).strip()
+            }
     years = payload.get("years", [])
     annual_values = raw.get("annual", [])
     if not isinstance(annual_values, Sequence):

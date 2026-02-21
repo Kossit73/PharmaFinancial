@@ -394,9 +394,27 @@ class FinancialModel:
         if self._variable_costs_cache is not None:
             return self._variable_costs_cache
         overrides = getattr(self.inputs, "variable_cost_overrides", {})
-        self._variable_costs_cache = {
-            product: float(overrides.get(product, 0.0)) for product in self.products
-        }
+        raw_per_unit = max(float(getattr(self.inputs, "raw_material_cost_per_unit", 0.0) or 0.0), 0.0)
+        factors = getattr(self.inputs, "raw_material_factors", {}) or {}
+
+        resolved: Dict[str, float] = {}
+        for product in self.products:
+            override_value = overrides.get(product) if isinstance(overrides, Mapping) else None
+            if override_value is not None:
+                try:
+                    resolved[product] = max(float(override_value), 0.0)
+                    continue
+                except (TypeError, ValueError):
+                    pass
+            factor = 1.0
+            if isinstance(factors, Mapping):
+                try:
+                    factor = max(float(factors.get(product, 1.0) or 1.0), 0.0)
+                except (TypeError, ValueError):
+                    factor = 1.0
+            resolved[product] = raw_per_unit * factor
+
+        self._variable_costs_cache = resolved
         return self._variable_costs_cache
 
     def _total_units(self) -> Dict[str, float]:
