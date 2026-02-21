@@ -3739,336 +3739,152 @@ def _render_fixed_variable_costs(payload: dict) -> None:
 def _render_utility_schedule(payload: dict) -> None:
     st.markdown("### Utility Schedule")
     st.caption(
-        "Adjust electricity, water, and steam usage assumptions for each projection "
-        "year. Use the plus/minus controls to tweak values or add a new year below."
+        "Set a base year for utility assumptions, then use Yearly Increment Tool to populate subsequent years. "
+        "You can still fine-tune every year in the table below."
     )
 
     rows: list[dict] = st.session_state.get("utility_entries") or []
     if not rows:
         rows = _payload_to_utility_entries(payload)
-        st.session_state["utility_entries"] = rows
 
-    if not rows:
-        rows = [_default_utility_entry(0)]
-        st.session_state["utility_entries"] = rows
+    payload_years = list(payload.get("years", [])) if isinstance(payload.get("years"), Sequence) else []
+    labels = [str(year) for year in payload_years if year is not None]
+    target_length = max(len(labels), len(rows), 1)
+    if not labels:
+        labels = [f"Year {idx + 1}" for idx in range(target_length)]
 
-    updated_rows: list[dict] = []
-    payload_years: Sequence | None = payload.get("years")
+    rows = _resize_utility_entries(rows, target_length, labels)
+    st.session_state["utility_entries"] = rows
 
-    year_catalog = [str(year) for year in payload_years if year is not None]
-    existing_labels = [
-        str(row.get("label"))
-        for row in rows
-        if isinstance(row, Mapping) and row.get("label")
-    ]
-    for label in existing_labels:
-        if label not in year_catalog:
-            year_catalog.append(label)
-    if not year_catalog:
-        year_catalog = [f"Year {idx + 1}" for idx in range(len(rows) or 1)]
+    row_labels = [str(row.get("label", f"Year {idx + 1}")) for idx, row in enumerate(rows)]
+    base_label = st.selectbox("Utility assumption start year", options=row_labels, key="utility_base_year_selector")
+    base_index = row_labels.index(base_label) if base_label in row_labels else 0
 
-    st.markdown("#### Focused utility editor")
-    selected_label = st.selectbox(
-        "Utility year",
-        options=year_catalog,
-        index=0,
-        key="utility_row_selector",
+    base_entry = _normalise_utility_entry(rows[base_index], base_index)
+    st.markdown("#### Base Year Utility Assumptions")
+    cols = st.columns(5)
+    base_entry["electricity_per_day"] = cols[0].number_input(
+        "Electricity / day", value=float(base_entry.get("electricity_per_day", 0.0)), min_value=0.0, step=0.1,
+        format="%.4f", key="utility_base_electricity_per_day"
     )
-    st.caption("Editing a single utility year entry. Change the selector to view another year.")
+    base_entry["electricity_rate"] = cols[1].number_input(
+        "Price / kWh", value=float(base_entry.get("electricity_rate", 0.0)), min_value=0.0, step=0.01,
+        format="%.4f", key="utility_base_electricity_rate"
+    )
+    base_entry["water_per_day"] = cols[2].number_input(
+        "Water / day", value=float(base_entry.get("water_per_day", 0.0)), min_value=0.0, step=0.1,
+        format="%.4f", key="utility_base_water_per_day"
+    )
+    base_entry["water_rate"] = cols[3].number_input(
+        "Price / cubic meter", value=float(base_entry.get("water_rate", 0.0)), min_value=0.0, step=0.01,
+        format="%.4f", key="utility_base_water_rate"
+    )
+    base_entry["steam_per_hour"] = cols[4].number_input(
+        "Steam / hour", value=float(base_entry.get("steam_per_hour", 0.0)), min_value=0.0, step=0.1,
+        format="%.4f", key="utility_base_steam_per_hour"
+    )
 
-    filtered_rows: list[tuple[int, dict]] = []
-    for idx, row in enumerate(rows):
-        label = str(row.get("label") or row.get("Year") or row.get("year") or "")
-        if label == selected_label:
-            filtered_rows.append((idx, row))
+    cols_two = st.columns(5)
+    base_entry["steam_rate"] = cols_two[0].number_input(
+        "Price / steam hour", value=float(base_entry.get("steam_rate", 0.0)), min_value=0.0, step=0.01,
+        format="%.4f", key="utility_base_steam_rate"
+    )
+    base_entry["electricity_days"] = int(cols_two[1].number_input(
+        "Electricity days", value=int(base_entry.get("electricity_days", 0)), min_value=0, step=1,
+        key="utility_base_electricity_days"
+    ))
+    base_entry["water_days"] = int(cols_two[2].number_input(
+        "Water days", value=int(base_entry.get("water_days", 0)), min_value=0, step=1,
+        key="utility_base_water_days"
+    ))
+    base_entry["steam_days"] = int(cols_two[3].number_input(
+        "Steam days", value=int(base_entry.get("steam_days", 0)), min_value=0, step=1,
+        key="utility_base_steam_days"
+    ))
+    base_entry["steam_hours"] = int(cols_two[4].number_input(
+        "Steam hours", value=int(base_entry.get("steam_hours", 0)), min_value=0, step=1,
+        key="utility_base_steam_hours"
+    ))
 
-    if not filtered_rows:
-        st.caption(
-            "No matching utility entry found for the selected year. "
-            "Use the form below to add a new entry."
-        )
+    rows[base_index] = _normalise_utility_entry(base_entry, base_index)
 
-    for slot in range(min(len(filtered_rows), 1)):
-        row_index, row = filtered_rows[slot]
-        entry = _normalise_utility_entry(row, row_index)
-        container = st.container()
-        with container:
-            cols = st.columns([2.0, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 1.5, 0.8])
+    st.markdown("#### Yearly Increment Tool")
+    utility_increment = st.number_input(
+        "Yearly Increment %",
+        value=float(st.session_state.get("utility_yearly_increment_pct", 0.0) or 0.0),
+        step=0.1,
+        key="utility_yearly_increment_pct",
+    )
+    increment_columns = [
+        "All",
+        "Electricity per day",
+        "Price per kWh",
+        "Electricity operating days",
+        "Water per day",
+        "Price per cubic meter",
+        "Water operating days",
+        "Steam per hour",
+        "Price per steam hour",
+        "Steam operating days",
+        "Steam operating hours",
+    ]
+    target_column = st.selectbox("Apply increment to", increment_columns, key="utility_yearly_increment_target")
+    col_a, col_b, col_c = st.columns(3)
+    preview_increment = col_a.button("Preview Yearly Increment", key="utility_yearly_increment_preview")
+    save_increment = col_b.button("Save Yearly Increment", key="utility_yearly_increment_save")
+    cancel_increment = col_c.button("Cancel Yearly Increment", key="utility_yearly_increment_cancel")
 
-            default_label = str(entry.get("label") or selected_label or f"Year {row_index + 1}")
-            label_value = _select_or_create_option(
-                cols[0],
-                "Year",
-                year_catalog,
-                f"utility_label_{row_index}",
-                current_value=default_label,
-            )
-            if label_value and label_value not in year_catalog:
-                year_catalog.append(label_value)
-            if not label_value:
-                label_value = default_label
+    if preview_increment:
+        preview_rows = copy.deepcopy(rows)
+        selected_columns = increment_columns[1:] if target_column == "All" else [target_column]
+        running_values: dict[str, float] = {}
+        for column_name in selected_columns:
+            field_name = next((field for field, label, _ in UTILITY_EDITOR_COLUMNS if label == column_name), None)
+            if field_name is None:
+                continue
+            running_values[field_name] = float(preview_rows[base_index].get(field_name, 0.0) or 0.0)
 
-            parsed_year = _parse_year_value(
-                label_value,
-                entry.get("year")
-                if isinstance(entry.get("year"), int)
-                else row_index + 1,
-            )
+        for idx in range(base_index + 1, len(preview_rows)):
+            for field_name, current in list(running_values.items()):
+                updated = current * (1 + float(utility_increment) / 100.0)
+                if field_name in {"electricity_days", "water_days", "steam_days", "steam_hours"}:
+                    preview_rows[idx][field_name] = int(max(round(updated), 0))
+                else:
+                    preview_rows[idx][field_name] = max(updated, 0.0)
+                running_values[field_name] = updated
 
-            electricity_per_day = cols[1].number_input(
-                "Electricity per day",
-                value=float(entry.get("electricity_per_day", 0.0)),
-                key=f"utility_elec_per_day_{row_index}",
-                min_value=0.0,
-                step=0.1,
-                format="%.4f",
-            )
-            electricity_rate = cols[2].number_input(
-                "Price per kWh",
-                value=float(entry.get("electricity_rate", 0.0)),
-                key=f"utility_elec_rate_{row_index}",
-                min_value=0.0,
-                step=0.01,
-                format="%.4f",
-            )
-            electricity_days = cols[3].number_input(
-                "Electricity operating days",
-                value=int(entry.get("electricity_days", 0)),
-                key=f"utility_elec_days_{row_index}",
-                min_value=0,
-                step=1,
-            )
+        st.session_state["utility_yearly_increment_preview_rows"] = preview_rows
 
-            water_per_day = cols[4].number_input(
-                "Water per day",
-                value=float(entry.get("water_per_day", 0.0)),
-                key=f"utility_water_per_day_{row_index}",
-                min_value=0.0,
-                step=0.1,
-                format="%.4f",
-            )
-            water_rate = cols[5].number_input(
-                "Price per cubic meter",
-                value=float(entry.get("water_rate", 0.0)),
-                key=f"utility_water_rate_{row_index}",
-                min_value=0.0,
-                step=0.01,
-                format="%.4f",
-            )
-            water_days = cols[6].number_input(
-                "Water operating days",
-                value=int(entry.get("water_days", 0)),
-                key=f"utility_water_days_{row_index}",
-                min_value=0,
-                step=1,
-            )
+    preview_rows = st.session_state.get("utility_yearly_increment_preview_rows")
+    active_rows = preview_rows if isinstance(preview_rows, list) else rows
 
-            steam_per_hour = cols[7].number_input(
-                "Steam per hour",
-                value=float(entry.get("steam_per_hour", 0.0)),
-                key=f"utility_steam_per_hour_{row_index}",
-                min_value=0.0,
-                step=0.1,
-                format="%.4f",
-            )
-            steam_rate = cols[8].number_input(
-                "Price per steam hour",
-                value=float(entry.get("steam_rate", 0.0)),
-                key=f"utility_steam_rate_{row_index}",
-                min_value=0.0,
-                step=0.01,
-                format="%.4f",
-            )
-            steam_days = cols[9].number_input(
-                "Steam operating days",
-                value=int(entry.get("steam_days", 0)),
-                key=f"utility_steam_days_{row_index}",
-                min_value=0,
-                step=1,
-            )
+    if cancel_increment:
+        st.session_state.pop("utility_yearly_increment_preview_rows", None)
+        _rerun()
 
-            remove_clicked = cols[10].button(
-                "Remove", key=f"utility_remove_{row_index}", help="Delete this utility row"
-            )
+    if save_increment and isinstance(preview_rows, list):
+        st.session_state["utility_entries"] = preview_rows
+        rows = preview_rows
+        st.session_state.pop("utility_yearly_increment_preview_rows", None)
+        _rerun()
 
-            steam_hours = st.number_input(
-                "Steam operating hours",
-                value=int(entry.get("steam_hours", 0)),
-                key=f"utility_steam_hours_{row_index}",
-                min_value=0,
-                step=1,
-            )
-
-        if remove_clicked and len(rows) > 1:
-            del rows[row_index]
-            st.session_state["utility_entries"] = rows
-            _utility_entries_to_payload(rows, payload)
-            _rerun()
-
-        updated_rows.append(
-            (
-                row_index,
-                _normalise_utility_entry(
-                    {
-                        "label": label_value,
-                        "year": parsed_year,
-                        "electricity_per_day": electricity_per_day,
-                        "electricity_rate": electricity_rate,
-                        "electricity_days": electricity_days,
-                        "water_per_day": water_per_day,
-                        "water_rate": water_rate,
-                        "water_days": water_days,
-                        "steam_per_hour": steam_per_hour,
-                        "steam_rate": steam_rate,
-                        "steam_days": steam_days,
-                        "steam_hours": steam_hours,
-                    },
-                    row_index,
-                ),
-            )
-        )
-
-    updated_map = {idx: data for idx, data in updated_rows}
-    merged_rows: list[dict] = []
-    for idx, row in enumerate(rows):
-        merged_rows.append(updated_map.get(idx, dict(row)))
-
-    if merged_rows != rows:
-        st.session_state["utility_entries"] = merged_rows
-        rows = merged_rows
+    st.markdown("#### Utility Settings by Year")
+    editor_rows = _utility_entries_to_editor(active_rows)
+    updated_editor = st.data_editor(
+        editor_rows,
+        use_container_width=True,
+        hide_index=True,
+        key="utility_schedule_editor",
+        column_config=_utility_column_config(),
+        num_rows="fixed",
+    )
+    normalised_editor = _coerce_editor_rows(updated_editor)
+    if normalised_editor:
+        rows = _editor_rows_to_utility_entries(normalised_editor)
+        st.session_state["utility_entries"] = rows
+        st.session_state.pop("utility_yearly_increment_preview_rows", None)
 
     _utility_entries_to_payload(rows, payload)
-
-    st.markdown("#### Add utility assumption")
-    default_entry = _next_utility_entry(rows, payload_years)
-    default_label = str(default_entry.get("label", f"Year {len(rows) + 1}"))
-    if default_label and default_label not in year_catalog:
-        year_catalog.append(default_label)
-    with st.form("utility_add_row"):
-        new_label = _select_or_create_option(
-            st,
-            "Year",
-            year_catalog,
-            "utility_new_label",
-            current_value=default_label,
-        )
-        if new_label and new_label not in year_catalog:
-            year_catalog.append(new_label)
-        new_electricity_per_day = st.number_input(
-            "Electricity per day",
-            value=float(default_entry.get("electricity_per_day", 0.0)),
-            key="utility_new_elec_per_day",
-            min_value=0.0,
-            step=0.1,
-            format="%.4f",
-        )
-        new_electricity_rate = st.number_input(
-            "Price per kWh",
-            value=float(default_entry.get("electricity_rate", 0.0)),
-            key="utility_new_elec_rate",
-            min_value=0.0,
-            step=0.01,
-            format="%.4f",
-        )
-        new_electricity_days = st.number_input(
-            "Electricity operating days",
-            value=int(default_entry.get("electricity_days", 0)),
-            key="utility_new_elec_days",
-            min_value=0,
-            step=1,
-        )
-        new_water_per_day = st.number_input(
-            "Water per day",
-            value=float(default_entry.get("water_per_day", 0.0)),
-            key="utility_new_water_per_day",
-            min_value=0.0,
-            step=0.1,
-            format="%.4f",
-        )
-        new_water_rate = st.number_input(
-            "Price per cubic meter",
-            value=float(default_entry.get("water_rate", 0.0)),
-            key="utility_new_water_rate",
-            min_value=0.0,
-            step=0.01,
-            format="%.4f",
-        )
-        new_water_days = st.number_input(
-            "Water operating days",
-            value=int(default_entry.get("water_days", 0)),
-            key="utility_new_water_days",
-            min_value=0,
-            step=1,
-        )
-        new_steam_per_hour = st.number_input(
-            "Steam per hour",
-            value=float(default_entry.get("steam_per_hour", 0.0)),
-            key="utility_new_steam_per_hour",
-            min_value=0.0,
-            step=0.1,
-            format="%.4f",
-        )
-        new_steam_rate = st.number_input(
-            "Price per steam hour",
-            value=float(default_entry.get("steam_rate", 0.0)),
-            key="utility_new_steam_rate",
-            min_value=0.0,
-            step=0.01,
-            format="%.4f",
-        )
-        new_steam_days = st.number_input(
-            "Steam operating days",
-            value=int(default_entry.get("steam_days", 0)),
-            key="utility_new_steam_days",
-            min_value=0,
-            step=1,
-        )
-        new_steam_hours = st.number_input(
-            "Steam operating hours",
-            value=int(default_entry.get("steam_hours", 0)),
-            key="utility_new_steam_hours",
-            min_value=0,
-            step=1,
-        )
-
-        submitted = st.form_submit_button("Add utility year")
-
-    if submitted:
-        new_entry = _normalise_utility_entry(
-            {
-                "label": new_label or f"Year {len(rows) + 1}",
-                "year": _parse_year_value(new_label, len(rows) + 1),
-                "electricity_per_day": new_electricity_per_day,
-                "electricity_rate": new_electricity_rate,
-                "electricity_days": new_electricity_days,
-                "water_per_day": new_water_per_day,
-                "water_rate": new_water_rate,
-                "water_days": new_water_days,
-                "steam_per_hour": new_steam_per_hour,
-                "steam_rate": new_steam_rate,
-                "steam_days": new_steam_days,
-                "steam_hours": new_steam_hours,
-            },
-            len(rows),
-        )
-        updated = rows + [new_entry]
-        st.session_state["utility_entries"] = updated
-        _utility_entries_to_payload(updated, payload)
-        for key in (
-            "utility_new_label",
-            "utility_new_elec_per_day",
-            "utility_new_elec_rate",
-            "utility_new_elec_days",
-            "utility_new_water_per_day",
-            "utility_new_water_rate",
-            "utility_new_water_days",
-            "utility_new_steam_per_hour",
-            "utility_new_steam_rate",
-            "utility_new_steam_days",
-            "utility_new_steam_hours",
-        ):
-            st.session_state.pop(key, None)
-        _rerun()
 
 
 def _render_receivable_inputs(payload: dict) -> None:
