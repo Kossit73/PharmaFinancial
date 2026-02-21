@@ -3447,43 +3447,72 @@ def _render_labor_mode_section(payload: dict) -> None:
         return
 
     st.caption("Advanced mode writes `labor.model_v1.roles` and `labor.model_v1.settings` for the labor v1 engine.")
-    edit_mode = st.session_state.setdefault("labor_advanced_edit_mode", False)
-    toggle_label = "Done editing" if edit_mode else "Edit Advanced Labour Structure"
-    if st.button(toggle_label, key="labor_advanced_edit_toggle"):
-        st.session_state["labor_advanced_edit_mode"] = not edit_mode
-        _rerun()
-
     role_rows = st.session_state.setdefault("labor_model_rows", _payload_to_labor_model_rows(payload))
-    if st.session_state.get("labor_advanced_edit_mode", False):
-        edited_roles = st.data_editor(
-            role_rows,
-            num_rows="dynamic",
-            use_container_width=True,
-            key="labor_model_roles_editor",
-        )
-        if isinstance(edited_roles, list):
-            st.session_state["labor_model_rows"] = edited_roles
-            role_rows = edited_roles
-    else:
-        st.dataframe(role_rows, use_container_width=True)
-    _labor_model_rows_to_payload(role_rows, payload)
-
     settings_rows = st.session_state.setdefault(
         "labor_model_settings_rows", _payload_to_labor_model_settings_rows(payload)
     )
-    if st.session_state.get("labor_advanced_edit_mode", False):
-        edited_settings = st.data_editor(
-            settings_rows,
-            num_rows="fixed",
-            use_container_width=True,
-            key="labor_model_settings_editor",
-        )
-        if isinstance(edited_settings, list):
-            st.session_state["labor_model_settings_rows"] = edited_settings
-            settings_rows = edited_settings
-    else:
+
+    edit_mode = st.session_state.setdefault("labor_advanced_edit_mode", False)
+
+    if not edit_mode:
+        if st.button("Edit Advanced Labour Structure", key="labor_advanced_edit_start"):
+            st.session_state["labor_advanced_draft_roles"] = copy.deepcopy(role_rows)
+            st.session_state["labor_advanced_draft_settings"] = copy.deepcopy(settings_rows)
+            st.session_state["labor_advanced_edit_mode"] = True
+            _rerun()
+
+        st.dataframe(role_rows, use_container_width=True)
         st.dataframe(settings_rows, use_container_width=True)
-    _labor_model_settings_rows_to_payload(settings_rows, payload)
+        _labor_model_rows_to_payload(role_rows, payload)
+        _labor_model_settings_rows_to_payload(settings_rows, payload)
+        return
+
+    st.info("Editing is enabled. Save to apply changes or Cancel to discard them.")
+    edited_roles = st.data_editor(
+        role_rows,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="labor_model_roles_editor",
+    )
+    if isinstance(edited_roles, list):
+        st.session_state["labor_model_rows"] = edited_roles
+        role_rows = edited_roles
+
+    edited_settings = st.data_editor(
+        settings_rows,
+        num_rows="fixed",
+        use_container_width=True,
+        key="labor_model_settings_editor",
+    )
+    if isinstance(edited_settings, list):
+        st.session_state["labor_model_settings_rows"] = edited_settings
+        settings_rows = edited_settings
+
+    action_cols = st.columns(2)
+    save_changes = action_cols[0].button("Save Advanced Labour Changes", key="labor_advanced_edit_save")
+    cancel_changes = action_cols[1].button("Cancel", key="labor_advanced_edit_cancel")
+
+    if cancel_changes:
+        draft_roles = st.session_state.get("labor_advanced_draft_roles")
+        draft_settings = st.session_state.get("labor_advanced_draft_settings")
+        if isinstance(draft_roles, list):
+            st.session_state["labor_model_rows"] = draft_roles
+            role_rows = draft_roles
+        if isinstance(draft_settings, list):
+            st.session_state["labor_model_settings_rows"] = draft_settings
+            settings_rows = draft_settings
+        st.session_state["labor_advanced_edit_mode"] = False
+        st.session_state.pop("labor_advanced_draft_roles", None)
+        st.session_state.pop("labor_advanced_draft_settings", None)
+        _rerun()
+
+    if save_changes:
+        _labor_model_rows_to_payload(role_rows, payload)
+        _labor_model_settings_rows_to_payload(settings_rows, payload)
+        st.session_state["labor_advanced_edit_mode"] = False
+        st.session_state.pop("labor_advanced_draft_roles", None)
+        st.session_state.pop("labor_advanced_draft_settings", None)
+        _rerun()
 
 
 def _render_fixed_variable_costs(payload: dict) -> None:
