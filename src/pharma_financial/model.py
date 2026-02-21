@@ -430,6 +430,23 @@ class FinancialModel:
             series[product] = units * variable_cost * inflation * risk
         return series
 
+    def _sum_series_map(self, series_by_key: Mapping[str, np.ndarray]) -> np.ndarray:
+        total = np.zeros(len(self.years), dtype=float)
+        for series in series_by_key.values():
+            total += np.array(series, dtype=float)
+        return total
+
+    def _scale_series_map(
+        self,
+        series_by_key: Mapping[str, np.ndarray],
+        scale: float,
+        risk_series: np.ndarray,
+    ) -> Dict[str, np.ndarray]:
+        return {
+            key: np.array(series, dtype=float) * float(scale) * risk_series
+            for key, series in series_by_key.items()
+        }
+
     def _total_units(self) -> Dict[str, float]:
         return {name: float(value) for name, value in self.inputs.total_production_units.items()}
 
@@ -611,9 +628,7 @@ class FinancialModel:
         inflation_array = self._inflation_array()
 
         per_product_raw_materials = self._per_product_raw_material_series()
-        raw_material_cost_array = np.zeros(year_count, dtype=float)
-        for series in per_product_raw_materials.values():
-            raw_material_cost_array += series
+        raw_material_cost_array = self._sum_series_map(per_product_raw_materials)
         raw_material_cost = raw_material_cost_array.tolist()
 
         electricity, water, steam = self._utility_arrays()
@@ -2219,13 +2234,12 @@ class FinancialModel:
             simulated_revenue = base_revenue * (1.0 + growth_rates) * risk_series
 
             if per_product_raw_materials:
-                per_product_raw_series = {
-                    product: series * raw_factor * risk_series
-                    for product, series in per_product_raw_materials.items()
-                }
-                raw_series = np.zeros(len(self.years), dtype=float)
-                for series in per_product_raw_series.values():
-                    raw_series += series
+                per_product_raw_series = self._scale_series_map(
+                    per_product_raw_materials,
+                    raw_factor,
+                    risk_series,
+                )
+                raw_series = self._sum_series_map(per_product_raw_series)
             else:
                 raw_series = raw_materials * raw_factor * risk_series
             utility_series = np.maximum(0.0, utilities * utility_factor)
