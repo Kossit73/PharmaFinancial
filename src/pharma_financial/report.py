@@ -313,6 +313,81 @@ def collect_report_sections(model: FinancialModel, outputs: FinancialOutputs) ->
 
     sections.append(ReportSection("Monte Carlo Simulation", [ReportTable("Monte Carlo Simulation", outputs.monte_carlo)]))
 
+    chart_pack_tables: List[ReportTable] = []
+
+    income_columns = ["Gross Revenue", "Net Revenue", "EBITDA"]
+    available_income_columns = [
+        column for column in income_columns if column in outputs.income_statement.data
+    ]
+    if available_income_columns:
+        chart_pack_tables.append(
+            ReportTable(
+                "Revenue & EBITDA Trend",
+                outputs.income_statement.select(available_income_columns),
+            )
+        )
+
+    try:
+        cost_structure = model.cost_structure()
+        cost_columns = [
+            "Raw Materials",
+            "Direct Labor",
+            "Utilities",
+            "General & Admin",
+            "Cost of Sales",
+        ]
+        available_cost_columns = [column for column in cost_columns if column in cost_structure.data]
+        if available_cost_columns:
+            chart_pack_tables.append(
+                ReportTable("Cost Split Trend", cost_structure.select(available_cost_columns))
+            )
+    except Exception as exc:  # pragma: no cover - defensive guard
+        chart_pack_tables.append(ReportTable("Cost Split Trend", [], note=f"Unavailable: {exc}"))
+
+    cash_columns = [
+        "Net Cash Generated from Operating Activities",
+        "Net Cash Used in Investing Activities",
+        "Net Cash Used in Financing Activities",
+        "Net Cash Flow",
+    ]
+    available_cash_columns = [column for column in cash_columns if column in outputs.cash_flow.data]
+    if available_cash_columns:
+        chart_pack_tables.append(
+            ReportTable("Cash Flow Trend", outputs.cash_flow.select(available_cash_columns))
+        )
+
+    break_even_columns = [
+        "Break-even Revenue",
+        "Break-even Units",
+        "Expected Volume",
+        "Margin of Safety (%)",
+    ]
+    available_break_even_columns = [column for column in break_even_columns if column in outputs.break_even.data]
+    if available_break_even_columns:
+        chart_pack_tables.append(
+            ReportTable(
+                "Break-even Overview",
+                outputs.break_even.select(available_break_even_columns),
+            )
+        )
+
+    if outputs.sensitivity_results:
+        first_label, first_table = next(iter(outputs.sensitivity_results.items()))
+        chart_pack_tables.append(
+            ReportTable(
+                f"Sensitivity Trend ({first_label.replace('_', ' ').title()})",
+                first_table,
+            )
+        )
+    else:
+        chart_pack_tables.append(
+            ReportTable("Sensitivity Trend", [], note="No sensitivity configurations provided.")
+        )
+
+    chart_pack_tables.append(ReportTable("Monte Carlo Simulation Trend", outputs.monte_carlo))
+
+    sections.append(ReportSection("Chart Pack", chart_pack_tables))
+
     return sections
 
 
