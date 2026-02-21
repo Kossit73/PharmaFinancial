@@ -1145,10 +1145,9 @@ def _render_inputs_tab(
                 if row_product in total_unit_defaults:
                     default_units = float(total_unit_defaults[row_product])
                 elif isinstance(production_estimate, Mapping) and row_product in production_estimate:
-                    default_units = sum(
-                        float(value)
-                        for value in production_estimate.get(row_product, [])
-                    )
+                    existing_series = production_estimate.get(row_product, [])
+                    if isinstance(existing_series, Sequence) and existing_series:
+                        default_units = float(existing_series[0])
             default_capacity = float(row.get("Max Capacity", 0.0))
             if default_capacity == 0.0 and row_product in capacity_defaults:
                 default_capacity = float(capacity_defaults[row_product])
@@ -6595,7 +6594,8 @@ def _payload_to_core_rows(payload: Mapping) -> list[dict]:
         total_units = float(totals.get(name, 0.0))
         if total_units == 0.0 and isinstance(estimates, Mapping):
             estimate = estimates.get(name, [])
-            total_units = sum(float(v) for v in estimate)
+            if isinstance(estimate, Sequence) and estimate:
+                total_units = float(estimate[0])
         max_capacity = float(capacities.get(name, 0.0))
         if max_capacity > 0.0 and total_units > max_capacity:
             total_units = max_capacity
@@ -8213,31 +8213,14 @@ def _scaled_production_series(
     years: Sequence[Any],
     existing_estimate: Mapping[str, Sequence[Any]] | Sequence[Any] | None,
 ) -> list[float]:
-    if isinstance(existing_estimate, Mapping) and product in existing_estimate:
-        series = [float(value) for value in existing_estimate.get(product, [])]
-    elif isinstance(existing_estimate, Sequence) and not isinstance(
-        existing_estimate, (str, bytes)
-    ):
-        # Legacy payloads may store a simple list when only one product exists.
-        series = [float(value) for value in existing_estimate]
-    else:
-        series = []
-
     target_length = len(years)
     if target_length == 0:
         return []
 
-    if len(series) < target_length:
-        series = series + [0.0] * (target_length - len(series))
-    elif len(series) > target_length:
-        series = series[:target_length]
-
-    current_total = sum(series)
-    if current_total > 0:
-        factor = total_units / current_total if current_total else 0.0
-        return [value * factor for value in series]
-
-    per_year = total_units / target_length if target_length else 0.0
+    # Core assumption semantics: "Total Production Units" is annual capacity.
+    # Each year should therefore carry the same units rather than redistributing
+    # a horizon-level total into a profile based on legacy production estimates.
+    per_year = float(total_units)
     return [per_year for _ in range(target_length)]
 
 

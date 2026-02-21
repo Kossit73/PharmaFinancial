@@ -199,7 +199,22 @@ class RerunHelperTest(unittest.TestCase):
         )
 
         total_units = sum(parsed.production_estimate[product_name])
-        self.assertAlmostEqual(total_units, float(synced[0]["Total Production Units"]), places=6)
+        expected_total = float(synced[0]["Total Production Units"]) * len(parsed.years)
+        self.assertAlmostEqual(total_units, expected_total, places=6)
+
+    def test_scaled_production_series_treats_total_units_as_annual_capacity(self):
+        yearly_units = 123.0
+        years = [2024, 2025, 2026]
+        prior_profile = {"Tablets": [10.0, 20.0, 30.0]}
+
+        scaled = self.app._scaled_production_series(
+            "Tablets",
+            yearly_units,
+            years,
+            prior_profile,
+        )
+
+        self.assertEqual(scaled, [yearly_units, yearly_units, yearly_units])
 
     def test_sync_tax_entries_supports_tax_settings_rows_shape(self):
         rows = [
