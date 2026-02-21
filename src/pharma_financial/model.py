@@ -417,6 +417,19 @@ class FinancialModel:
         self._variable_costs_cache = resolved
         return self._variable_costs_cache
 
+    def _per_product_raw_material_series(self) -> Dict[str, np.ndarray]:
+        production = self._production()
+        variable_lookup = self._variable_costs()
+        inflation = self._inflation_array()
+        risk = self._risk_cost_array()
+
+        series: Dict[str, np.ndarray] = {}
+        for product in self.products:
+            units = np.array(production.get(product, [0.0 for _ in self.years]), dtype=float)
+            variable_cost = variable_lookup.get(product, 0.0)
+            series[product] = units * variable_cost * inflation * risk
+        return series
+
     def _total_units(self) -> Dict[str, float]:
         return {name: float(value) for name, value in self.inputs.total_production_units.items()}
 
@@ -594,17 +607,13 @@ class FinancialModel:
         year_count = len(self.years)
         total_units = self._total_units_by_year()
 
-        variable_lookup = self._variable_costs()
-
         risk_array = self._risk_cost_array()
         inflation_array = self._inflation_array()
 
+        per_product_raw_materials = self._per_product_raw_material_series()
         raw_material_cost_array = np.zeros(year_count, dtype=float)
-        for product in self.products:
-            product_units = np.array(production[product], dtype=float)
-            variable_cost = variable_lookup.get(product, 0.0)
-            raw_material_cost_array += product_units * variable_cost
-        raw_material_cost_array = raw_material_cost_array * inflation_array * risk_array
+        for series in per_product_raw_materials.values():
+            raw_material_cost_array += series
         raw_material_cost = raw_material_cost_array.tolist()
 
         electricity, water, steam = self._utility_arrays()
@@ -644,17 +653,21 @@ class FinancialModel:
         ]
         total_expenses = [cos + ga for cos, ga in zip(cost_of_sales, general_admin)]
 
-        table = build_table(
-            self.years,
-            {
-                "Raw Materials": raw_material_cost,
-                "Utilities": utilities,
-                "Direct Labor": direct_labor,
-                "Cost of Sales": cost_of_sales,
-                "General & Admin": general_admin,
-                "Total Expenses": total_expenses,
-            },
-        )
+        columns: Dict[str, List[float]] = {
+            "Raw Materials": raw_material_cost,
+            "Utilities": utilities,
+            "Direct Labor": direct_labor,
+            "Cost of Sales": cost_of_sales,
+            "General & Admin": general_admin,
+            "Total Expenses": total_expenses,
+        }
+        for product in self.products:
+            columns[f"Raw Materials - {product}"] = per_product_raw_materials.get(
+                product,
+                np.zeros(year_count, dtype=float),
+            ).tolist()
+
+        table = build_table(self.years, columns)
         self._cost_structure_cache = table
         return table
 
@@ -1440,6 +1453,9 @@ class FinancialModel:
         inventory_days_source = list(self.inputs.working_capital_days.inventory)
         days_in_year = self._calendar_days()
 
+        per_product_purchased = self._per_product_raw_material_series()
+        per_product_inventory: Dict[str, List[float]] = {product: [] for product in self.products}
+
         inventory_days: List[float] = []
         calculated_inventory: List[float] = []
         variance: List[float] = []
@@ -1460,6 +1476,12 @@ class FinancialModel:
             calculated = cost / day_length * inventory_day_value if day_length else 0.0
             calculated_inventory.append(calculated)
 
+            for product in self.products:
+                purchased = per_product_purchased.get(product, np.zeros(len(self.years), dtype=float))
+                per_product_cost = float(purchased[idx]) if idx < len(purchased) else 0.0
+                per_product_value = per_product_cost / day_length * inventory_day_value if day_length else 0.0
+                per_product_inventory[product].append(per_product_value)
+
             actual_inventory = balance_inventory[idx] if idx < len(balance_inventory) else calculated
             difference = calculated - actual_inventory
             if abs(difference) < 1e-6:
@@ -1471,18 +1493,23 @@ class FinancialModel:
             else:
                 turnover.append(float("nan"))
 
-        return build_table(
-            self.years,
-            {
-                "Cost of Sales": cost_of_sales,
-                "Days in Year": days_in_year,
-                "Inventory Days": inventory_days,
-                "Calculated Inventory": calculated_inventory,
-                "Balance Sheet Inventory": balance_inventory,
-                "Variance": variance,
-                "Inventory Turnover": turnover,
-            },
-        )
+        columns: Dict[str, List[float]] = {
+            "Cost of Sales": cost_of_sales,
+            "Days in Year": days_in_year,
+            "Inventory Days": inventory_days,
+            "Calculated Inventory": calculated_inventory,
+            "Balance Sheet Inventory": balance_inventory,
+            "Variance": variance,
+            "Inventory Turnover": turnover,
+        }
+        for product in self.products:
+            columns[f"Material Purchased - {product}"] = per_product_purchased.get(
+                product,
+                np.zeros(len(self.years), dtype=float),
+            ).tolist()
+            columns[f"Inventory - {product}"] = per_product_inventory.get(product, [0.0 for _ in self.years])
+
+        return build_table(self.years, columns)
 
     def _net_ppe_schedule(self) -> List[float]:
         if self.inputs.depreciation_schedule:
@@ -1840,6 +1867,11 @@ class FinancialModel:
                         for product, value in scenario_inputs.variable_cost_overrides.items()
                     }
                     scenario_inputs.variable_cost_overrides = scaled
+                    scenario_inputs.raw_material_cost_per_unit *= multiplier
+                    scenario_inputs.raw_material_factors = {
+                        product: float(value)
+                        for product, value in scenario_inputs.raw_material_factors.items()
+                    }
                 elif variable == "discount_rate":
                     scenario_inputs.financing.discount_rate = multiplier
                 elif variable in {
@@ -1893,6 +1925,11 @@ class FinancialModel:
             base_revenue = np.array(revenue_table.column("Net Revenue"), dtype=float)
             costs = model.cost_structure()
             raw_materials = np.array(costs.column("Raw Materials"), dtype=float)
+            per_product_raw_materials = {
+                product: np.array(costs.column(f"Raw Materials - {product}"), dtype=float)
+                for product in model.products
+                if f"Raw Materials - {product}" in costs.data
+            }
             utilities = np.array(costs.column("Utilities"), dtype=float)
             direct_labor = np.array(costs.column("Direct Labor"), dtype=float)
             indirect_labor = np.array(costs.column("General & Admin"), dtype=float)
@@ -1912,6 +1949,7 @@ class FinancialModel:
             return {
                 "base_revenue": base_revenue,
                 "raw_materials": raw_materials,
+                "per_product_raw_materials": per_product_raw_materials,
                 "utilities": utilities,
                 "direct_labor": direct_labor,
                 "indirect_labor": indirect_labor,
@@ -2107,6 +2145,7 @@ class FinancialModel:
             baseline = baselines.get(scenario_name, base_baseline)
             base_revenue = baseline["base_revenue"]
             raw_materials = baseline["raw_materials"]
+            per_product_raw_materials = baseline.get("per_product_raw_materials", {})
             utilities = baseline["utilities"]
             direct_labor = baseline["direct_labor"]
             indirect_labor = baseline["indirect_labor"]
@@ -2179,7 +2218,16 @@ class FinancialModel:
 
             simulated_revenue = base_revenue * (1.0 + growth_rates) * risk_series
 
-            raw_series = raw_materials * raw_factor * risk_series
+            if per_product_raw_materials:
+                per_product_raw_series = {
+                    product: series * raw_factor * risk_series
+                    for product, series in per_product_raw_materials.items()
+                }
+                raw_series = np.zeros(len(self.years), dtype=float)
+                for series in per_product_raw_series.values():
+                    raw_series += series
+            else:
+                raw_series = raw_materials * raw_factor * risk_series
             utility_series = np.maximum(0.0, utilities * utility_factor)
             direct_series = direct_labor * labor_factor * risk_series
             indirect_series = indirect_labor * labor_factor * risk_series
