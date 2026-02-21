@@ -3478,8 +3478,64 @@ def _render_labor_mode_section(payload: dict) -> None:
         st.session_state["labor_model_rows"] = edited_roles
         role_rows = edited_roles
 
+    st.markdown("#### Yearly Increment Tool")
+    yearly_increment = st.number_input(
+        "Yearly Increment %",
+        value=float(st.session_state.get("labor_yearly_increment_pct", 0.0) or 0.0),
+        step=0.1,
+        key="labor_yearly_increment_pct",
+        help="Apply this percentage increment from the first year to all subsequent years.",
+    )
+    increment_columns = [
+        "Shifts",
+        "Utilization",
+        "Operating Hours / Shift",
+        "Absenteeism",
+        "Overtime Cap",
+        "Contractor Hours",
+        "Contractor Rate",
+        "Transition Training Cost",
+        "Supervision Increment",
+        "Shift Allowance",
+        "Wage Escalation Direct",
+        "Wage Escalation Indirect",
+    ]
+    target_column = st.selectbox(
+        "Apply increment to",
+        increment_columns,
+        key="labor_yearly_increment_target",
+    )
+    increment_cols = st.columns(3)
+    preview_increment = increment_cols[0].button("Preview Yearly Increment", key="labor_yearly_increment_preview")
+    save_increment = increment_cols[1].button("Save Yearly Increment", key="labor_yearly_increment_save")
+    cancel_increment = increment_cols[2].button("Cancel Yearly Increment", key="labor_yearly_increment_cancel")
+
+    if preview_increment and settings_rows:
+        preview_rows = copy.deepcopy(settings_rows)
+        try:
+            base_value = float(preview_rows[0].get(target_column, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            base_value = 0.0
+        for idx in range(1, len(preview_rows)):
+            base_value = base_value * (1 + float(yearly_increment) / 100.0)
+            preview_rows[idx][target_column] = base_value
+        st.session_state["labor_yearly_increment_preview_rows"] = preview_rows
+
+    preview_rows = st.session_state.get("labor_yearly_increment_preview_rows")
+    active_settings_rows = preview_rows if isinstance(preview_rows, list) else settings_rows
+
+    if cancel_increment:
+        st.session_state.pop("labor_yearly_increment_preview_rows", None)
+        _rerun()
+
+    if save_increment and isinstance(preview_rows, list):
+        st.session_state["labor_model_settings_rows"] = preview_rows
+        settings_rows = preview_rows
+        st.session_state.pop("labor_yearly_increment_preview_rows", None)
+        _rerun()
+
     edited_settings = st.data_editor(
-        settings_rows,
+        active_settings_rows,
         num_rows="fixed",
         use_container_width=True,
         key="labor_model_settings_editor",
@@ -3487,6 +3543,7 @@ def _render_labor_mode_section(payload: dict) -> None:
     if isinstance(edited_settings, list):
         st.session_state["labor_model_settings_rows"] = edited_settings
         settings_rows = edited_settings
+        st.session_state.pop("labor_yearly_increment_preview_rows", None)
 
     action_cols = st.columns(2)
     save_changes = action_cols[0].button("Save Advanced Labour Changes", key="labor_advanced_edit_save")
@@ -3504,6 +3561,7 @@ def _render_labor_mode_section(payload: dict) -> None:
         st.session_state["labor_advanced_edit_mode"] = False
         st.session_state.pop("labor_advanced_draft_roles", None)
         st.session_state.pop("labor_advanced_draft_settings", None)
+        st.session_state.pop("labor_yearly_increment_preview_rows", None)
         _rerun()
 
     if save_changes:
@@ -3512,6 +3570,7 @@ def _render_labor_mode_section(payload: dict) -> None:
         st.session_state["labor_advanced_edit_mode"] = False
         st.session_state.pop("labor_advanced_draft_roles", None)
         st.session_state.pop("labor_advanced_draft_settings", None)
+        st.session_state.pop("labor_yearly_increment_preview_rows", None)
         _rerun()
 
 
