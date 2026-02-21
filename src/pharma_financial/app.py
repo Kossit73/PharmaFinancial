@@ -586,8 +586,13 @@ def main() -> None:
         st.session_state["last_run_digest"] = digest
         _clear_analysis_cache()
     elif last_digest != digest:
-        model = None
-        outputs = None
+        # Auto-refresh model outputs when assumptions change so actions on
+        # downstream tabs (e.g. RAG bundle generation) are immediately usable
+        # without requiring a manual return to the Input Landing Page.
+        model, outputs = _cached_model_run(inputs, digest)
+        st.session_state["last_model"] = model
+        st.session_state["last_outputs"] = outputs
+        st.session_state["last_run_digest"] = digest
         _clear_analysis_cache()
 
     tabs = st.tabs(
