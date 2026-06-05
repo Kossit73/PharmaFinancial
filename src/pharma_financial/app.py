@@ -8821,6 +8821,82 @@ def _parse_year_number(label: str) -> int | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Scenario state hooks — called by the parent NumQuants shell to save/restore
+# the full workspace state across sessions.
+#
+# Architecture: input_payload is the canonical source of truth. All row-based
+# session_state keys (core_assumption_rows, commission_rows, etc.) are derived
+# from it by _resolve_inputs() on each run via setdefault(). So:
+#   get_state() saves input_payload + labor_mode + all derived row keys.
+#   set_state() restores them; _resolve_inputs() then uses the pre-set rows
+#               directly (setdefault is a no-op when the key already exists).
+# ---------------------------------------------------------------------------
+
+_PHARMA_ROW_KEYS: list[str] = [
+    "core_assumption_rows",
+    "commission_rows",
+    "utility_entries",
+    "receivable_rows",
+    "inventory_rows",
+    "direct_labor_rows",
+    "indirect_labor_rows",
+    "labor_model_rows",
+    "labor_model_settings_rows",
+    "fixed_variable_rows",
+    "break_even_rows",
+    "depreciation_rows",
+    "inflation_rows",
+    "risk_rows",
+    "sensitivity_rows",
+    "senior_debt_rows",
+    "revolver_rows",
+    "overdraft_rows",
+    "tax_entries",
+]
+
+
+def get_state() -> dict:
+    """Snapshot all user-editable inputs.
+
+    Saves input_payload (canonical dict of all assumptions) plus labor_mode
+    and each derived row list. This is sufficient to fully restore the workspace
+    because _resolve_inputs() initialises every row key from input_payload when
+    the key is absent, and respects pre-set keys via setdefault.
+    """
+    import copy as _copy
+    import streamlit as _st
+
+    state: dict = {}
+
+    payload = _st.session_state.get("input_payload")
+    if payload is not None:
+        state["input_payload"] = _copy.deepcopy(payload)
+
+    for key in ["labor_mode"] + _PHARMA_ROW_KEYS:
+        val = _st.session_state.get(key)
+        if val is not None:
+            # break_even_overrides is a set — convert to list for JSON safety
+            state[key] = list(val) if isinstance(val, set) else val
+
+    return state
+
+
+def set_state(state: dict) -> None:
+    """Restore a previously saved state snapshot.
+
+    Writes input_payload and all row keys before main() runs so that
+    _resolve_inputs() picks them up via setdefault on the next render.
+    """
+    import streamlit as _st
+
+    for key, val in state.items():
+        if key == "break_even_overrides" and isinstance(val, list):
+            _st.session_state[key] = set(val)
+        else:
+            _st.session_state[key] = val
+
+
 if __name__ == "__main__":  # pragma: no cover - Streamlit executes the script directly
     if _streamlit_runtime_exists():
         main()
