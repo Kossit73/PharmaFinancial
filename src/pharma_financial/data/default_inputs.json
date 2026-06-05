@@ -1,124 +1,864 @@
 {
-  "years": [2024,2025,2026,2027,2028,2029,2030,2031,2032,2033],
+  "years": [
+    2024,
+    2025,
+    2026,
+    2027,
+    2028,
+    2029,
+    2030,
+    2031,
+    2032,
+    2033
+  ],
   "production_estimate": {
-    "Tablets": [25.0,45.0,55.0,75.0,100.0,130.0,169.0,219.7,285.6,350.0],
-    "Capsules": [5.0,8.0,10.0,15.0,20.0,27.0,39.2,50.9,66.2,75.0],
-    "Liquid": [0.10,0.15,0.20,0.25,0.30,0.39,0.49,0.63,0.82,1.00],
-    "Ointment": [0.01,0.02,0.02,0.03,0.03,0.04,0.05,0.06,0.08,0.10]
+    "Tablets": [
+      25.0,
+      45.0,
+      55.0,
+      75.0,
+      100.0,
+      130.0,
+      169.0,
+      219.7,
+      285.6,
+      350.0
+    ],
+    "Capsules": [
+      5.0,
+      8.0,
+      10.0,
+      15.0,
+      20.0,
+      27.0,
+      39.2,
+      50.9,
+      66.2,
+      75.0
+    ],
+    "Liquid": [
+      0.1,
+      0.15,
+      0.2,
+      0.25,
+      0.3,
+      0.39,
+      0.49,
+      0.63,
+      0.82,
+      1.0
+    ],
+    "Ointment": [
+      0.01,
+      0.02,
+      0.02,
+      0.03,
+      0.03,
+      0.04,
+      0.05,
+      0.06,
+      0.08,
+      0.1
+    ]
+  },
+  "total_production_units": {
+    "Tablets": 10000000.0,
+    "Capsules": 10000000.0,
+    "Liquid": 10000000.0,
+    "Ointment": 10000000.0
+  },
+  "production_capacity": {
+    "Tablets": 10000000.0,
+    "Capsules": 10000000.0,
+    "Liquid": 10000000.0,
+    "Ointment": 10000000.0
   },
   "unit_costs": {
-    "Tablets": {"production": 0.03, "price": 0.047, "freight": 0.020},
-    "Capsules": {"production": 0.05, "price": 0.080, "freight": 0.015},
-    "Liquid": {"production": 1.50, "price": 2.48, "freight": 0.025},
-    "Ointment": {"production": 3.00, "price": 4.80, "freight": 0.026}
+    "Tablets": {
+      "production": 0.03,
+      "price": 0.047,
+      "freight": 0.02
+    },
+    "Capsules": {
+      "production": 0.05,
+      "price": 0.08,
+      "freight": 0.015
+    },
+    "Liquid": {
+      "production": 1.5,
+      "price": 2.48,
+      "freight": 0.025
+    },
+    "Ointment": {
+      "production": 3.0,
+      "price": 4.8,
+      "freight": 0.026
+    }
+  },
+  "price_adjustments": {
+    "Tablets": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "Capsules": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "Liquid": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "Ointment": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ]
   },
   "markup": {
     "Tablets": 0.55,
-    "Capsules": 0.60,
+    "Capsules": 0.6,
     "Liquid": 0.65,
-    "Ointment": 0.60
+    "Ointment": 0.6
   },
   "inflation_rate": 0.038,
-  "inflation_series": [0.038,0.038,0.038,0.038,0.038,0.038,0.038,0.038,0.038,0.038],
+  "inflation_series": [
+    0.038,
+    0.038,
+    0.038,
+    0.038,
+    0.038,
+    0.038,
+    0.038,
+    0.038,
+    0.038,
+    0.038
+  ],
   "raw_material_cost": {
     "per_unit": 0.003,
-    "annual": [0.9,2.178,3.267]
+    "annual": [
+      0.9,
+      2.178,
+      3.267
+    ]
   },
   "utility_costs": {
-    "electricity_per_day": 187.5,
-    "water_per_day": 107.25,
-    "steam_per_hour": 0.0,
-    "days": [260,260,312,312,312,312,312,312,312,312],
-    "hours": [10,12,16,16,16,16,16,16,16,16]
+    "years": [
+      {
+        "label": "Year 1",
+        "electricity_per_day": 1.0,
+        "electricity_rate": 1.0,
+        "electricity_days": 1,
+        "water_per_day": 1.0,
+        "water_rate": 1.0,
+        "water_days": 1,
+        "steam_per_hour": 1.0,
+        "steam_rate": 1.0,
+        "steam_days": 1,
+        "steam_hours": 1
+      },
+      {
+        "label": "Year 2",
+        "electricity_per_day": 1.0,
+        "electricity_rate": 1.0,
+        "electricity_days": 1,
+        "water_per_day": 1.0,
+        "water_rate": 1.0,
+        "water_days": 1,
+        "steam_per_hour": 1.0,
+        "steam_rate": 1.0,
+        "steam_days": 1,
+        "steam_hours": 1
+      },
+      {
+        "label": "Year 3",
+        "electricity_per_day": 1.0,
+        "electricity_rate": 1.0,
+        "electricity_days": 1,
+        "water_per_day": 1.0,
+        "water_rate": 1.0,
+        "water_days": 1,
+        "steam_per_hour": 1.0,
+        "steam_rate": 1.0,
+        "steam_days": 1,
+        "steam_hours": 1
+      },
+      {
+        "label": "Year 4",
+        "electricity_per_day": 1.0,
+        "electricity_rate": 1.0,
+        "electricity_days": 1,
+        "water_per_day": 1.0,
+        "water_rate": 1.0,
+        "water_days": 1,
+        "steam_per_hour": 1.0,
+        "steam_rate": 1.0,
+        "steam_days": 1,
+        "steam_hours": 1
+      },
+      {
+        "label": "Year 5",
+        "electricity_per_day": 1.0,
+        "electricity_rate": 1.0,
+        "electricity_days": 1,
+        "water_per_day": 1.0,
+        "water_rate": 1.0,
+        "water_days": 1,
+        "steam_per_hour": 1.0,
+        "steam_rate": 1.0,
+        "steam_days": 1,
+        "steam_hours": 1
+      },
+      {
+        "label": "Year 6",
+        "electricity_per_day": 1.0,
+        "electricity_rate": 1.0,
+        "electricity_days": 1,
+        "water_per_day": 1.0,
+        "water_rate": 1.0,
+        "water_days": 1,
+        "steam_per_hour": 1.0,
+        "steam_rate": 1.0,
+        "steam_days": 1,
+        "steam_hours": 1
+      },
+      {
+        "label": "Year 7",
+        "electricity_per_day": 1.0,
+        "electricity_rate": 1.0,
+        "electricity_days": 1,
+        "water_per_day": 1.0,
+        "water_rate": 1.0,
+        "water_days": 1,
+        "steam_per_hour": 1.0,
+        "steam_rate": 1.0,
+        "steam_days": 1,
+        "steam_hours": 1
+      },
+      {
+        "label": "Year 8",
+        "electricity_per_day": 1.0,
+        "electricity_rate": 1.0,
+        "electricity_days": 1,
+        "water_per_day": 1.0,
+        "water_rate": 1.0,
+        "water_days": 1,
+        "steam_per_hour": 1.0,
+        "steam_rate": 1.0,
+        "steam_days": 1,
+        "steam_hours": 1
+      },
+      {
+        "label": "Year 9",
+        "electricity_per_day": 1.0,
+        "electricity_rate": 1.0,
+        "electricity_days": 1,
+        "water_per_day": 1.0,
+        "water_rate": 1.0,
+        "water_days": 1,
+        "steam_per_hour": 1.0,
+        "steam_rate": 1.0,
+        "steam_days": 1,
+        "steam_hours": 1
+      },
+      {
+        "label": "Year 10",
+        "electricity_per_day": 1.0,
+        "electricity_rate": 1.0,
+        "electricity_days": 1,
+        "water_per_day": 1.0,
+        "water_rate": 1.0,
+        "water_days": 1,
+        "steam_per_hour": 1.0,
+        "steam_rate": 1.0,
+        "steam_days": 1,
+        "steam_hours": 1
+      }
+    ]
+  },
+  "utility_allocation": {
+    "cost_of_sales_share": 0.8
   },
   "labor": {
     "direct": {
-      "Production Manager": 0.050,
-      "Production Operators": 0.008,
-      "Process Engineer": 0.060,
-      "Process Technician": 0.035,
-      "QA Pharmacist": 0.050,
-      "Production Pharmacist": 0.050,
-      "Manufacturing Chemist": 0.050,
-      "Analytical Chemist": 0.050
+      "Production Manager": 1.0,
+      "Production Operators": 1.0,
+      "Process Engineer": 1.0,
+      "Process Technician": 1.0,
+      "QA Pharmacist": 1.0,
+      "Production Pharmacist": 1.0,
+      "Manufacturing Chemist": 1.0,
+      "Analytical Chemist": 1.0
     },
     "indirect": {
-      "General Manager": 0.100,
-      "Sales & Marketing Manager": 0.090,
-      "Accountant": 0.050,
-      "Procurement Officer": 0.036,
-      "Support Staff": 0.030,
-      "Packers": 0.005,
-      "Secretary": 0.005,
-      "Security": 0.004,
-      "Cleaner": 0.005,
-      "Movers": 0.004,
-      "Canteen Staff": 0.005,
-      "Driver": 0.005
+      "General Manager": 1.0,
+      "Sales & Marketing Manager": 1.0,
+      "Accountant": 1.0,
+      "Procurement Officer": 1.0,
+      "Support Staff": 1.0,
+      "Packers": 1.0,
+      "Secretary": 1.0,
+      "Security": 1.0,
+      "Cleaner": 1.0,
+      "Movers": 1.0,
+      "Canteen Staff": 1.0,
+      "Driver": 1.0
     }
   },
+  "fixed_variable_costs": {
+    "rows": [
+      {
+        "product": "Tablets",
+        "variable_cost": 0.05
+      },
+      {
+        "product": "Capsules",
+        "variable_cost": 0.065
+      },
+      {
+        "product": "Liquid",
+        "variable_cost": 1.525
+      },
+      {
+        "product": "Ointment",
+        "variable_cost": 3.026
+      }
+    ]
+  },
   "depreciation": {
-    "Land": {"value": 0.0, "life": null},
-    "GMP Facility": {"value": 7.60, "life": 30},
-    "Equipment & Installation": {"value": 4.40, "life": 10},
-    "Office Equipment": {"value": 0.15, "life": 3},
-    "Software": {"value": 0.15, "life": 3},
-    "Vehicles": {"value": 0.25, "life": 5}
+    "rows": [
+      {
+        "asset_type": "Land",
+        "year": 2024,
+        "acquisition": 1.0,
+        "depreciation_rate": 1.0,
+        "asset_life": 1,
+        "method": "straight_line",
+        "opening_net_book": 0.0,
+        "opening_cumulative": 0.0,
+        "override_net_book": true,
+        "override_cumulative": true
+      },
+      {
+        "asset_type": "GMP Facility",
+        "year": 2024,
+        "acquisition": 1.0,
+        "depreciation_rate": 1.0,
+        "asset_life": 1,
+        "method": "straight_line",
+        "opening_net_book": 0.0,
+        "opening_cumulative": 0.0,
+        "override_net_book": true,
+        "override_cumulative": true
+      },
+      {
+        "asset_type": "Equipment & Installation",
+        "year": 2024,
+        "acquisition": 1.0,
+        "depreciation_rate": 1.0,
+        "asset_life": 1,
+        "method": "straight_line",
+        "opening_net_book": 0.0,
+        "opening_cumulative": 0.0,
+        "override_net_book": true,
+        "override_cumulative": true
+      },
+      {
+        "asset_type": "Office Equipment",
+        "year": 2024,
+        "acquisition": 1.0,
+        "depreciation_rate": 1.0,
+        "asset_life": 1,
+        "method": "straight_line",
+        "opening_net_book": 0.0,
+        "opening_cumulative": 0.0,
+        "override_net_book": true,
+        "override_cumulative": true
+      },
+      {
+        "asset_type": "Vehicles",
+        "year": 2024,
+        "acquisition": 1.0,
+        "depreciation_rate": 1.0,
+        "asset_life": 1,
+        "method": "reducing_balance",
+        "opening_net_book": 0.0,
+        "opening_cumulative": 0.0,
+        "override_net_book": true,
+        "override_cumulative": true
+      }
+    ]
   },
   "capital_expenditure": {
-    "initial": 15.036,
-    "contingency": 0.5,
-    "project_reserve": 0.983675,
-    "annual_additions": {"2025": 0.25}
+    "initial": 1.0,
+    "contingency": 1.0,
+    "project_reserve": 1.0,
+    "annual_additions": {
+      "2025": 1.0
+    }
   },
   "financing": {
-    "initial_investment": 15.036,
-    "discount_rate": 0.10,
-    "senior_debt_interest": 0.10,
-    "revolver_interest": 0.20,
-    "cash_interest": 0.04,
-    "dividend_payout": 0.20,
-    "senior_debt_schedule": {"2024": -0.5, "2025": 4.54, "2026": -0.5, "2027": -0.5, "2028": -0.5, "2029": -0.5, "2030": -0.5, "2031": -0.5, "2032": -0.5, "2033": -0.5},
-    "revolver_initial": 1.0,
-    "share_capital": 5.0
+    "initial_investment": 1.0,
+    "discount_rate": 1.0,
+    "senior_debt_interest": 1.0,
+    "revolver_interest": 1.0,
+    "cash_interest": 1.0,
+    "dividend_payout": 1.0,
+    "share_capital": 1.0,
+    "senior_debt": [
+      {
+        "year": 2024,
+        "amount": 1.0,
+        "outstanding": 1.0,
+        "duration": 1
+      }
+    ],
+    "revolver": [
+      {
+        "year": 2024,
+        "amount": 1.0,
+        "outstanding": 1.0,
+        "duration": 1
+      },
+      {
+        "year": 2025,
+        "amount": 1.0,
+        "outstanding": 1.0,
+        "duration": 1
+      }
+    ],
+    "overdraft": [
+      {
+        "year": 2024,
+        "amount": 1.0,
+        "outstanding": 1.0,
+        "duration": 1
+      }
+    ]
   },
   "working_capital": {
     "days": {
-      "accounts_receivable": [45,45,45,40,40,40,30,30,30,30],
-      "inventory": [50,50,50,50,50,50,50,50,50,50],
-      "prepaid_expenses": [30,30,30,30,30,30,30,30,30,30],
-      "other_assets": [5,5,5,5,5,5,5,5,5,5],
-      "accounts_payable": [45,45,45,45,45,45,45,45,45,45],
-      "other_liabilities": [20,20,20,20,20,20,20,20,20,20]
-    }
+      "accounts_receivable": [
+        45,
+        45,
+        45,
+        40,
+        40,
+        40,
+        30,
+        30,
+        30,
+        30
+      ],
+      "inventory": [
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50,
+        50
+      ],
+      "prepaid_expenses": [
+        30,
+        30,
+        30,
+        30,
+        30,
+        30,
+        30,
+        30,
+        30,
+        30
+      ],
+      "other_assets": [
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5
+      ],
+      "accounts_payable": [
+        45,
+        45,
+        45,
+        45,
+        45,
+        45,
+        45,
+        45,
+        45,
+        45
+      ],
+      "other_liabilities": [
+        20,
+        20,
+        20,
+        20,
+        20,
+        20,
+        20,
+        20,
+        20,
+        20
+      ]
+    },
+    "calendar_days": [
+      366,
+      365,
+      365,
+      365,
+      366,
+      365,
+      365,
+      365,
+      366,
+      365
+    ]
   },
   "tax": {
     "rate": 0.0,
-    "timing_adjustment": 0.5
+    "timing_adjustment": 0.5,
+    "loss_carryforward": true,
+    "loss_carryforward_limit": 1.0,
+    "schedule": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "risk": {
+    "inherent": [
+      0.05,
+      0.05,
+      0.05,
+      0.05,
+      0.05,
+      0.05,
+      0.05,
+      0.05,
+      0.05,
+      0.05
+    ],
+    "climate": [
+      0.02,
+      0.02,
+      0.02,
+      0.02,
+      0.02,
+      0.02,
+      0.02,
+      0.02,
+      0.02,
+      0.02
+    ],
+    "political": [
+      0.03,
+      0.03,
+      0.03,
+      0.03,
+      0.03,
+      0.03,
+      0.03,
+      0.03,
+      0.03,
+      0.03
+    ]
+  },
+  "risk_weights": {
+    "inherent": {
+      "revenue": 1.0,
+      "costs": 1.0
+    },
+    "climate": {
+      "revenue": 1.0,
+      "costs": 1.0
+    },
+    "political": {
+      "revenue": 1.0,
+      "costs": 1.0
+    }
   },
   "scenarios": {
     "base": {
-      "inflation": [0.04,0.04,0.041,0.042,0.043,0.044,0.044,0.045,0.045,0.045],
-      "interest": [0.125,0.125,0.125,0.125,0.125,0.125,0.125,0.125,0.125,0.125]
+      "inflation": [
+        0.04,
+        0.04,
+        0.041,
+        0.042,
+        0.043,
+        0.044,
+        0.044,
+        0.045,
+        0.045,
+        0.045
+      ],
+      "interest": [
+        0.125,
+        0.125,
+        0.125,
+        0.125,
+        0.125,
+        0.125,
+        0.125,
+        0.125,
+        0.125,
+        0.125
+      ]
     },
     "best": {
-      "inflation": [0.0384,0.038,0.038,0.038,0.038,0.038,0.038,0.038,0.038,0.038],
-      "interest": [0.10,0.10,0.10,0.10,0.10,0.10,0.10,0.10,0.10,0.10]
+      "inflation": [
+        0.0384,
+        0.038,
+        0.038,
+        0.038,
+        0.038,
+        0.038,
+        0.038,
+        0.038,
+        0.038,
+        0.038
+      ],
+      "interest": [
+        0.1,
+        0.1,
+        0.1,
+        0.1,
+        0.1,
+        0.1,
+        0.1,
+        0.1,
+        0.1,
+        0.1
+      ]
     },
     "worst": {
-      "inflation": [0.062,0.062,0.062,0.062,0.062,0.062,0.066,0.066,0.066,0.066],
-      "interest": [0.135,0.135,0.135,0.135,0.135,0.135,0.135,0.135,0.135,0.135]
+      "inflation": [
+        0.062,
+        0.062,
+        0.062,
+        0.062,
+        0.062,
+        0.062,
+        0.066,
+        0.066,
+        0.066,
+        0.066
+      ],
+      "interest": [
+        0.135,
+        0.135,
+        0.135,
+        0.135,
+        0.135,
+        0.135,
+        0.135,
+        0.135,
+        0.135,
+        0.135
+      ]
     }
   },
+  "scenario_files": [
+    "scenarios/base.json",
+    "scenarios/best.json",
+    "scenarios/worst.json"
+  ],
   "sensitivity": {
     "variables": {
-      "tablet_price": [0.90,1.0,1.1],
-      "raw_material_cost": [0.9,1.0,1.1],
-      "discount_rate": [0.08,0.10,0.12]
+      "tablet_price": [
+        0.9,
+        1.0,
+        1.1
+      ],
+      "raw_material_cost": [
+        0.9,
+        1.0,
+        1.1
+      ],
+      "discount_rate": [
+        0.08,
+        0.1,
+        0.12
+      ]
     }
+  },
+  "scenario_tools": {
+    "decision_tree": [
+      "Net Revenue",
+      "Net Income"
+    ],
+    "stress_testing": [
+      "Net Revenue",
+      "EBITDA"
+    ],
+    "backtesting": [
+      "Net Revenue"
+    ],
+    "walk_forward": [
+      "Net Revenue"
+    ],
+    "driver_based": [
+      "EBITDA",
+      "EBIT"
+    ],
+    "real_options": [
+      "Net Income"
+    ]
   },
   "monte_carlo": {
     "iterations": 1000,
-    "revenue_growth_range": [0.05, 0.15]
+    "revenue_growth_range": [
+      0.05,
+      0.15
+    ],
+    "seed": 42,
+    "distribution": "uniform",
+    "distributions": {
+      "revenue_growth": {
+        "type": "normal",
+        "mean": 0.1,
+        "std": 0.02,
+        "min": 0.05,
+        "max": 0.15
+      },
+      "raw_material_cost": {
+        "type": "triangular",
+        "low": -0.03,
+        "mode": 0.0,
+        "high": 0.04
+      },
+      "labor_cost": {
+        "type": "normal",
+        "mean": 0.0,
+        "std": 0.02,
+        "min": -0.05,
+        "max": 0.05
+      }
+    },
+    "metrics": [
+      "NPV",
+      "Average Net Income",
+      "Average EBITDA"
+    ],
+    "variables": [
+      "revenue_growth"
+    ],
+    "correlations": {
+      "revenue_growth": {
+        "raw_material_cost": -0.2,
+        "labor_cost": -0.1
+      }
+    },
+    "scenario_weights": {
+      "base": 0.7,
+      "best": 0.15,
+      "worst": 0.15
+    },
+    "deterministic_share": 0.1
+  },
+  "viability": {
+    "metrics": {
+      "IRR": {
+        "min": 0.12,
+        "max": 0.25
+      },
+      "Profitability Index": {
+        "min": 1.1,
+        "max": 1.6
+      },
+      "Payback": {
+        "min": 3.0,
+        "max": 8.0,
+        "inverse": true
+      },
+      "EBITDA Margin": {
+        "min": 0.15,
+        "max": 0.35
+      },
+      "Revenue CAGR": {
+        "min": 0.05,
+        "max": 0.2
+      },
+      "DSCR": {
+        "min": 1.2,
+        "max": 2.0
+      }
+    },
+    "weights": {
+      "IRR": 0.2,
+      "Profitability Index": 0.2,
+      "Payback": 0.15,
+      "EBITDA Margin": 0.15,
+      "Revenue CAGR": 0.15,
+      "DSCR": 0.15
+    }
+  },
+  "ai": {
+    "enabled": true,
+    "provider": "OpenAI",
+    "model": "gpt-4o-mini",
+    "forecast_horizon": 3,
+    "ml_methods": [
+      "linear_regression",
+      "cagr"
+    ],
+    "generative_features": [
+      "summary",
+      "risk_review",
+      "cash_flow_highlight"
+    ],
+    "api_key": ""
+  },
+  "goal_seek": {
+    "metric": "Net Income",
+    "source": "income_statement",
+    "target": 20.0,
+    "year": 2033
   }
 }
