@@ -186,7 +186,7 @@ def _render_model_hero() -> None:
         f"""
         <section class="designer-hero">
             <p class="designer-kicker">Pharma planning suite</p>
-            <h1 class="designer-title">Longevity Pharmaceuticals Financial Model</h1>
+            <h1 class="designer-title">Longevity Pharmaceuticals</h1>
             <p class="designer-copy">
                 Review revenue, operations, financing, and risk assumptions in a cleaner executive shell
                 built for management review and investor presentation.
