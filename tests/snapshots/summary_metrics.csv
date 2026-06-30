@@ -1,5 +1,23 @@
 Metric,Value
 NPV,-70.3921342450854
-IRR,
-Payback Period,
-Discounted Payback,
+IRR,nan
+Payback Period,nan
+Discounted Payback,nan
+Profitability Index,-6.0392134245085405
+Revenue CAGR,0.3870067101279189
+Mid-period Revenue CAGR,0.33621601567775405
+Rolling Revenue CAGR (3Y Avg),0.37539780357192554
+Weighted Average Gross Margin,-4.619456326226541
+Weighted Average EBITDA Margin,-6.015683279767449
+Weighted Average Net Margin,-6.089913605902795
+Weighted Average Operating Cash Flow Margin,-6.131192552277875
+Average Debt Service Coverage,-9.572340538530485
+Investor Viability Score,23.076923076923077
+Investor Gate Pass Count,0.0
+Investor Gate Pass Ratio,0.0
+Investor Gate Status,0.0
+Assumption Data Quality Score,34.0
+Probability NPV < 0,1.0
+NPV P10,-430.7503560989485
+NPV P50,-392.5936212324347
+NPV P90,-390.3344388731093

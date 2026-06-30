@@ -170,8 +170,15 @@ class FinancialModelTest(unittest.TestCase):
 
     def test_summary_metrics_index(self):
         summary = self.outputs.summary_metrics
-        expected = ["NPV", "IRR", "Payback Period", "Discounted Payback"]
-        self.assertEqual(summary.index, expected)
+        expected_prefix = ["NPV", "IRR", "Payback Period", "Discounted Payback"]
+        self.assertEqual(summary.index[:4], expected_prefix)
+        for metric in [
+            "Profitability Index",
+            "Revenue CAGR",
+            "Investor Viability Score",
+            "Probability NPV < 0",
+        ]:
+            self.assertIn(metric, summary.index)
 
     def test_summary_metrics_regression(self):
         summary = self.outputs.summary_metrics.column("Value")
