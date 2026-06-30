@@ -1420,9 +1420,6 @@ def _render_inputs_tab(
     st.markdown("### Risk Schedule")
     _render_risk_schedule(payload)
 
-    st.markdown("### AI & Machine Learning Summary")
-    _render_ai_summary(payload)
-
     _core_rows_to_payload(st.session_state.get("core_assumption_rows", []), payload)
     _commission_rows_to_payload(st.session_state.get("commission_rows", []), payload)
     _utility_entries_to_payload(st.session_state.get("utility_entries", []), payload)

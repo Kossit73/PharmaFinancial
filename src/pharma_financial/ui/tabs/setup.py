@@ -72,9 +72,6 @@ def render_setup_and_validation(
         else:
             st.warning(label)
 
-    st.markdown("### AI & Machine Learning Summary")
-    legacy._render_ai_summary(payload)
-
     if model is not None and outputs is not None:
         st.caption(
             "The current workspace is live. Updates in the operations and funding tabs will refresh this run on the next rerender."
