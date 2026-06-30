@@ -49,6 +49,10 @@ from .model import (
 )
 from .report import ReportSection, ReportTable, collect_report_sections, generate_report
 from .table import Table
+from .ui import io as ui_io
+from .ui import shell as ui_shell
+from .ui import state as ui_state
+from .ui import tab_registry as ui_tab_registry
 
 try:  # pragma: no cover - executed in environments with pandas available
     import pandas as pd
@@ -671,92 +675,20 @@ def main() -> None:
         layout="wide",
     )
 
-    _inject_app_theme()
-    _render_model_hero()
+    ui_shell.render_workspace_shell()
 
     config_container = st.container()
-
     inputs, digest = _resolve_inputs(config_container)
-    run_requested = bool(st.session_state.pop("run_requested", False))
-    last_digest = st.session_state.get("last_run_digest")
-    model = st.session_state.get("last_model")
-    outputs = st.session_state.get("last_outputs")
-    if run_requested:
-        model, outputs = _cached_model_run(inputs, digest)
-        st.session_state["last_model"] = model
-        st.session_state["last_outputs"] = outputs
-        st.session_state["last_run_digest"] = digest
-        _clear_analysis_cache()
-    elif last_digest != digest:
-        # Auto-refresh model outputs when assumptions change so actions on
-        # downstream tabs (e.g. RAG bundle generation) are immediately usable
-        # without requiring a manual return to the Input Landing Page.
-        model, outputs = _cached_model_run(inputs, digest)
-        st.session_state["last_model"] = model
-        st.session_state["last_outputs"] = outputs
-        st.session_state["last_run_digest"] = digest
-        _clear_analysis_cache()
+    model, outputs = ui_state.resolve_model_outputs(inputs, digest)
 
-    tabs = st.tabs(
-        [
-            "Input Landing Page",
-            "Financial Performance",
-            "Financial Position",
-            "Cash Flow Statement",
-            "RAG Assistant",
-            "Key Metrics Dashboard",
-        ]
-    )
-
-    with tabs[0]:
-        _render_inputs_tab(inputs, model, outputs)
-    with tabs[1]:
-        if outputs is None or model is None:
-            st.info("Press Run on the Input Landing Page to generate results.")
-        else:
-            _render_income_statement(model, outputs)
-    with tabs[2]:
-        if outputs is None:
-            st.info("Press Run on the Input Landing Page to generate results.")
-        else:
-            _render_statement_tab("Statement of Financial Position", outputs.balance_sheet)
-    with tabs[3]:
-        if outputs is None:
-            st.info("Press Run on the Input Landing Page to generate results.")
-        else:
-            _render_statement_tab("Statement of Cash Flows", outputs.cash_flow)
-    with tabs[4]:
-        if outputs is None or model is None:
-            st.info("Press Run on the Input Landing Page to generate results.")
-        else:
-            _render_rag_tab(model, outputs, digest)
-    with tabs[5]:
-        if outputs is None or model is None:
-            st.info("Press Run on the Input Landing Page to generate results.")
-        else:
-            dashboard_tabs = st.tabs(
-                [
-                    "Executive Summary",
-                    "Key Metrics Dashboard",
-                    "Sensitivity Analysis",
-                    "Scenario / IFs Analysis",
-                    "Monte Carlo Simulation",
-                    "Break-even & Payback",
-                ]
-            )
-            with dashboard_tabs[0]:
-                _render_executive_summary(model, outputs, digest)
-            with dashboard_tabs[1]:
-                _render_excel_model_download(st.container(), model, outputs)
-                _render_dashboard_tab(model, outputs, digest)
-            with dashboard_tabs[2]:
-                _render_sensitivity(model, outputs, digest)
-            with dashboard_tabs[3]:
-                _render_scenarios(outputs)
-            with dashboard_tabs[4]:
-                _render_monte_carlo(model, outputs, digest)
-            with dashboard_tabs[5]:
-                _render_break_even(outputs)
+    workspace_tabs = ui_tab_registry.build_workspace_tabs()
+    tab_slots = st.tabs([tab.title for tab in workspace_tabs])
+    for tab_def, tab_slot in zip(workspace_tabs, tab_slots):
+        with tab_slot:
+            if tab_def.requires_model and (model is None or outputs is None):
+                st.info("Update the setup tabs and click Run Model to generate results.")
+                continue
+            tab_def.render(inputs, model, outputs, digest)
 
 
 def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:
@@ -8895,6 +8827,30 @@ def set_state(state: dict) -> None:
             _st.session_state[key] = set(val)
         else:
             _st.session_state[key] = val
+
+
+# Compatibility exports while the pharma workspace is migrated to the new ui package.
+_inject_app_theme = ui_shell.inject_app_theme
+_render_model_hero = ui_shell.render_model_hero
+
+_cached_parse_inputs = ui_state.cached_parse_inputs
+_cached_model_run = ui_state.cached_model_run
+_clear_analysis_cache = ui_state.clear_analysis_cache
+_analysis_cache_value = ui_state.analysis_cache_value
+_store_analysis_cache = ui_state.store_analysis_cache
+_merge_analysis_outputs = ui_state.merge_analysis_outputs
+get_state = ui_state.get_state
+set_state = ui_state.set_state
+
+_load_payload_from_bytes = ui_io.load_payload_from_bytes
+_load_payload_from_text = ui_io.load_payload_from_text
+_load_payload_from_csv = ui_io.load_payload_from_csv
+_load_payload_from_excel = ui_io.load_payload_from_excel
+_load_payload_from_docx = ui_io.load_payload_from_docx
+_load_payload_from_pdf = ui_io.load_payload_from_pdf
+_extract_text_from_upload = ui_io.extract_text_from_upload
+_build_rag_chunks = ui_io.build_rag_chunks
+_score_chunks = ui_io.score_chunks
 
 
 if __name__ == "__main__":  # pragma: no cover - Streamlit executes the script directly
