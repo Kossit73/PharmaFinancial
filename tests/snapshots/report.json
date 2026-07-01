@@ -76,8 +76,16 @@
               "Value": 0.0
             },
             {
+              "Metric": "Minimum Ending Cash",
+              "Value": -752.371824473584
+            },
+            {
+              "Metric": "Evidence Coverage Ratio",
+              "Value": 0.25
+            },
+            {
               "Metric": "Assumption Data Quality Score",
-              "Value": 34.0
+              "Value": 0.0
             },
             {
               "Metric": "Probability NPV < 0",
@@ -85,15 +93,15 @@
             },
             {
               "Metric": "NPV P10",
-              "Value": -430.7503560989485
+              "Value": -442.09589362659193
             },
             {
               "Metric": "NPV P50",
-              "Value": -392.5936212324347
+              "Value": -410.7608563194256
             },
             {
               "Metric": "NPV P90",
-              "Value": -390.3344388731093
+              "Value": -388.3238397970134
             }
           ]
         }

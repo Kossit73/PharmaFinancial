@@ -1,8 +1,8 @@
 Metric,Value
 NPV,-70.3921342450854
-IRR,nan
-Payback Period,nan
-Discounted Payback,nan
+IRR,
+Payback Period,
+Discounted Payback,
 Profitability Index,-6.0392134245085405
 Revenue CAGR,0.3870067101279189
 Mid-period Revenue CAGR,0.33621601567775405
@@ -16,8 +16,10 @@ Investor Viability Score,23.076923076923077
 Investor Gate Pass Count,0.0
 Investor Gate Pass Ratio,0.0
 Investor Gate Status,0.0
-Assumption Data Quality Score,34.0
+Minimum Ending Cash,-752.371824473584
+Evidence Coverage Ratio,0.25
+Assumption Data Quality Score,0.0
 Probability NPV < 0,1.0
-NPV P10,-430.7503560989485
-NPV P50,-392.5936212324347
-NPV P90,-390.3344388731093
+NPV P10,-442.09589362659193
+NPV P50,-410.7608563194256
+NPV P90,-388.3238397970134

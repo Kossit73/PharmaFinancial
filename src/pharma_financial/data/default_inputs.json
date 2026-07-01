@@ -779,6 +779,37 @@
         "std": 0.02,
         "min": -0.05,
         "max": 0.05
+      },
+      "selling_price": {
+        "type": "normal",
+        "mean": 0.0,
+        "std": 0.03,
+        "min": -0.08,
+        "max": 0.08
+      },
+      "receivable_days": {
+        "type": "triangular",
+        "low": -10.0,
+        "mode": 0.0,
+        "high": 25.0,
+        "min": -10.0,
+        "max": 30.0
+      },
+      "capex": {
+        "type": "triangular",
+        "low": -0.05,
+        "mode": 0.0,
+        "high": 0.2,
+        "min": -0.1,
+        "max": 0.25
+      },
+      "approval_delay": {
+        "type": "triangular",
+        "low": 0.0,
+        "mode": 0.0,
+        "high": 2.0,
+        "min": 0.0,
+        "max": 2.0
       }
     },
     "metrics": [
@@ -787,12 +818,19 @@
       "Average EBITDA"
     ],
     "variables": [
-      "revenue_growth"
+      "revenue_growth",
+      "raw_material_cost",
+      "labor_cost",
+      "selling_price",
+      "receivable_days",
+      "capex",
+      "approval_delay"
     ],
     "correlations": {
       "revenue_growth": {
         "raw_material_cost": -0.2,
-        "labor_cost": -0.1
+        "labor_cost": -0.1,
+        "selling_price": 0.15
       }
     },
     "scenario_weights": {
@@ -802,6 +840,183 @@
     },
     "deterministic_share": 0.1
   },
+  "bankability": {
+    "min_irr": 0.18,
+    "min_dscr": 1.25,
+    "max_discounted_payback": 7.0,
+    "min_cash_buffer": 5.0,
+    "min_assumption_quality": 80.0,
+    "min_evidence_coverage": 0.75,
+    "min_viability_score": 70.0
+  },
+  "assumption_evidence": [
+    {
+      "assumption": "Tablet selling price",
+      "category": "Commercial",
+      "value_reference": "unit_costs.Tablets.price",
+      "source": "",
+      "owner": "Commercial",
+      "benchmark_year": "",
+      "rationale": "",
+      "required": true
+    },
+    {
+      "assumption": "Production ramp and capacity",
+      "category": "Operations",
+      "value_reference": "production_estimate / production_capacity",
+      "source": "",
+      "owner": "Operations",
+      "benchmark_year": "",
+      "rationale": "",
+      "required": true
+    },
+    {
+      "assumption": "Raw material cost per unit",
+      "category": "COGS",
+      "value_reference": "raw_material_cost.per_unit",
+      "source": "",
+      "owner": "Procurement",
+      "benchmark_year": "",
+      "rationale": "",
+      "required": true
+    },
+    {
+      "assumption": "Utility schedule",
+      "category": "COGS",
+      "value_reference": "utility_costs.years",
+      "source": "",
+      "owner": "Engineering",
+      "benchmark_year": "",
+      "rationale": "",
+      "required": true
+    },
+    {
+      "assumption": "Capex and reserve build",
+      "category": "Funding",
+      "value_reference": "capital_expenditure",
+      "source": "",
+      "owner": "Finance",
+      "benchmark_year": "",
+      "rationale": "",
+      "required": true
+    },
+    {
+      "assumption": "Debt pricing and structure",
+      "category": "Funding",
+      "value_reference": "financing",
+      "source": "",
+      "owner": "Treasury",
+      "benchmark_year": "",
+      "rationale": "",
+      "required": true
+    },
+    {
+      "assumption": "Working capital days",
+      "category": "Liquidity",
+      "value_reference": "working_capital.days",
+      "source": "",
+      "owner": "Finance",
+      "benchmark_year": "",
+      "rationale": "",
+      "required": true
+    },
+    {
+      "assumption": "Tax regime",
+      "category": "Tax",
+      "value_reference": "tax",
+      "source": "",
+      "owner": "Tax",
+      "benchmark_year": "",
+      "rationale": "",
+      "required": true
+    }
+  ],
+  "downside_cases": [
+    {
+      "name": "Approval Delay",
+      "approval_delay_years": 1,
+      "volume_multiplier": 0.95,
+      "price_multiplier": 1.0,
+      "raw_material_multiplier": 1.0,
+      "direct_labor_multiplier": 1.0,
+      "overhead_multiplier": 1.05,
+      "receivable_days_delta": 20,
+      "inventory_days_delta": 10,
+      "payable_days_delta": 0,
+      "capex_multiplier": 1.1,
+      "include_in_monte_carlo": true
+    },
+    {
+      "name": "GMP Validation Delay",
+      "approval_delay_years": 1,
+      "volume_multiplier": 0.9,
+      "price_multiplier": 1.0,
+      "raw_material_multiplier": 1.02,
+      "direct_labor_multiplier": 1.03,
+      "overhead_multiplier": 1.08,
+      "receivable_days_delta": 10,
+      "inventory_days_delta": 15,
+      "payable_days_delta": 0,
+      "capex_multiplier": 1.15,
+      "include_in_monte_carlo": true
+    },
+    {
+      "name": "Batch Yield Loss",
+      "approval_delay_years": 0,
+      "volume_multiplier": 0.88,
+      "price_multiplier": 1.0,
+      "raw_material_multiplier": 1.1,
+      "direct_labor_multiplier": 1.05,
+      "overhead_multiplier": 1.0,
+      "receivable_days_delta": 0,
+      "inventory_days_delta": 12,
+      "payable_days_delta": 0,
+      "capex_multiplier": 1.0,
+      "include_in_monte_carlo": true
+    },
+    {
+      "name": "Price Erosion",
+      "approval_delay_years": 0,
+      "volume_multiplier": 1.0,
+      "price_multiplier": 0.9,
+      "raw_material_multiplier": 1.0,
+      "direct_labor_multiplier": 1.0,
+      "overhead_multiplier": 1.0,
+      "receivable_days_delta": 5,
+      "inventory_days_delta": 0,
+      "payable_days_delta": 0,
+      "capex_multiplier": 1.0,
+      "include_in_monte_carlo": true
+    },
+    {
+      "name": "FX and Input Cost Shock",
+      "approval_delay_years": 0,
+      "volume_multiplier": 0.97,
+      "price_multiplier": 0.98,
+      "raw_material_multiplier": 1.2,
+      "direct_labor_multiplier": 1.02,
+      "overhead_multiplier": 1.05,
+      "receivable_days_delta": 5,
+      "inventory_days_delta": 8,
+      "payable_days_delta": -5,
+      "capex_multiplier": 1.1,
+      "include_in_monte_carlo": true
+    },
+    {
+      "name": "Capex Overrun",
+      "approval_delay_years": 0,
+      "volume_multiplier": 1.0,
+      "price_multiplier": 1.0,
+      "raw_material_multiplier": 1.0,
+      "direct_labor_multiplier": 1.0,
+      "overhead_multiplier": 1.0,
+      "receivable_days_delta": 0,
+      "inventory_days_delta": 0,
+      "payable_days_delta": 0,
+      "capex_multiplier": 1.25,
+      "include_in_monte_carlo": true
+    }
+  ],
   "viability": {
     "metrics": {
       "IRR": {

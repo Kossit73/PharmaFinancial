@@ -201,6 +201,45 @@ class ViabilityParameters:
 
 
 @dataclass
+class BankabilityParameters:
+    min_irr: float = 0.12
+    min_dscr: float = 1.2
+    max_discounted_payback: float = 8.0
+    min_cash_buffer: float = 0.0
+    min_assumption_quality: float = 80.0
+    min_evidence_coverage: float = 0.8
+    min_viability_score: float = 70.0
+
+
+@dataclass
+class AssumptionEvidence:
+    assumption: str
+    category: str
+    value_reference: str = ""
+    source: str = ""
+    owner: str = ""
+    benchmark_year: str = ""
+    rationale: str = ""
+    required: bool = True
+
+
+@dataclass
+class DownsideCaseParameters:
+    name: str
+    approval_delay_years: int = 0
+    volume_multiplier: float = 1.0
+    price_multiplier: float = 1.0
+    raw_material_multiplier: float = 1.0
+    direct_labor_multiplier: float = 1.0
+    overhead_multiplier: float = 1.0
+    receivable_days_delta: int = 0
+    inventory_days_delta: int = 0
+    payable_days_delta: int = 0
+    capex_multiplier: float = 1.0
+    include_in_monte_carlo: bool = True
+
+
+@dataclass
 class LaborRoleParameters:
     name: str
     labor_type: str
@@ -274,6 +313,9 @@ class ModelInputs:
     ai: AIParameters
     utility_cost_of_sales_share: float
     viability: ViabilityParameters
+    bankability: BankabilityParameters
+    assumption_evidence: List[AssumptionEvidence]
+    downside_cases: List[DownsideCaseParameters]
 
     @property
     def products(self) -> List[str]:
@@ -603,6 +645,97 @@ def _parse_viability(data: object) -> ViabilityParameters:
                 continue
 
     return ViabilityParameters(metrics=metrics, weights=weights)
+
+
+def _parse_bankability(data: object) -> BankabilityParameters:
+    if not isinstance(data, Mapping):
+        data = {}
+
+    def _float_value(key: str, default: float) -> float:
+        try:
+            return float(data.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
+    return BankabilityParameters(
+        min_irr=max(_float_value("min_irr", 0.12), 0.0),
+        min_dscr=max(_float_value("min_dscr", 1.2), 0.0),
+        max_discounted_payback=max(_float_value("max_discounted_payback", 8.0), 0.0),
+        min_cash_buffer=_float_value("min_cash_buffer", 0.0),
+        min_assumption_quality=min(max(_float_value("min_assumption_quality", 80.0), 0.0), 100.0),
+        min_evidence_coverage=min(max(_float_value("min_evidence_coverage", 0.8), 0.0), 1.0),
+        min_viability_score=min(max(_float_value("min_viability_score", 70.0), 0.0), 100.0),
+    )
+
+
+def _parse_assumption_evidence(data: object) -> List[AssumptionEvidence]:
+    if not isinstance(data, Iterable) or isinstance(data, (str, bytes, Mapping)):
+        return []
+
+    entries: List[AssumptionEvidence] = []
+    for item in data:
+        if not isinstance(item, Mapping):
+            continue
+        assumption = str(item.get("assumption", "") or "").strip()
+        category = str(item.get("category", "General") or "General").strip()
+        if not assumption:
+            continue
+        entries.append(
+            AssumptionEvidence(
+                assumption=assumption,
+                category=category or "General",
+                value_reference=str(item.get("value_reference", "") or "").strip(),
+                source=str(item.get("source", "") or "").strip(),
+                owner=str(item.get("owner", "") or "").strip(),
+                benchmark_year=str(item.get("benchmark_year", "") or "").strip(),
+                rationale=str(item.get("rationale", "") or "").strip(),
+                required=bool(item.get("required", True)),
+            )
+        )
+    return entries
+
+
+def _parse_downside_cases(data: object) -> List[DownsideCaseParameters]:
+    if not isinstance(data, Iterable) or isinstance(data, (str, bytes, Mapping)):
+        return []
+
+    cases: List[DownsideCaseParameters] = []
+
+    def _float_value(mapping: Mapping[str, object], key: str, default: float) -> float:
+        try:
+            return float(mapping.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
+    def _int_value(mapping: Mapping[str, object], key: str, default: int) -> int:
+        try:
+            return int(mapping.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
+    for item in data:
+        if not isinstance(item, Mapping):
+            continue
+        name = str(item.get("name", "") or "").strip()
+        if not name:
+            continue
+        cases.append(
+            DownsideCaseParameters(
+                name=name,
+                approval_delay_years=max(_int_value(item, "approval_delay_years", 0), 0),
+                volume_multiplier=max(_float_value(item, "volume_multiplier", 1.0), 0.0),
+                price_multiplier=max(_float_value(item, "price_multiplier", 1.0), 0.0),
+                raw_material_multiplier=max(_float_value(item, "raw_material_multiplier", 1.0), 0.0),
+                direct_labor_multiplier=max(_float_value(item, "direct_labor_multiplier", 1.0), 0.0),
+                overhead_multiplier=max(_float_value(item, "overhead_multiplier", 1.0), 0.0),
+                receivable_days_delta=_int_value(item, "receivable_days_delta", 0),
+                inventory_days_delta=_int_value(item, "inventory_days_delta", 0),
+                payable_days_delta=_int_value(item, "payable_days_delta", 0),
+                capex_multiplier=max(_float_value(item, "capex_multiplier", 1.0), 0.0),
+                include_in_monte_carlo=bool(item.get("include_in_monte_carlo", True)),
+            )
+        )
+    return cases
 
 
 def _parse_working_capital(
@@ -1164,6 +1297,9 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
 
     ai_params = _parse_ai(raw.get("ai", {}))
     viability = _parse_viability(raw.get("viability", {}))
+    bankability = _parse_bankability(raw.get("bankability", {}))
+    assumption_evidence = _parse_assumption_evidence(raw.get("assumption_evidence", []))
+    downside_cases = _parse_downside_cases(raw.get("downside_cases", []))
 
     if not production_estimate:
         production_estimate = {
@@ -1208,6 +1344,9 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         ai=ai_params,
         utility_cost_of_sales_share=cost_share_value,
         viability=viability,
+        bankability=bankability,
+        assumption_evidence=assumption_evidence,
+        downside_cases=downside_cases,
     )
 
 
@@ -1468,6 +1607,9 @@ __all__ = [
     "AIParameters",
     "ViabilityMetricConfig",
     "ViabilityParameters",
+    "BankabilityParameters",
+    "AssumptionEvidence",
+    "DownsideCaseParameters",
     "parse_inputs",
     "load_inputs",
     "load_raw_inputs",

@@ -965,8 +965,22 @@ class FinancialModelTest(unittest.TestCase):
 
         self.assertIn("Investor Gate Pass Ratio", summary.index)
         self.assertIn("Investor Gate Status", summary.index)
+        self.assertIn("Minimum Ending Cash", summary.index)
+        self.assertIn("Evidence Coverage Ratio", summary.index)
         self.assertIn("Assumption Data Quality Score", summary.index)
         self.assertIn("Probability NPV < 0", summary.index)
+
+    def test_bankability_outputs_are_available(self):
+        outputs = self.model.run_core()
+        self.assertIsNotNone(outputs.bankability_gate)
+        self.assertIsNotNone(outputs.sources_and_uses)
+        self.assertIsNotNone(outputs.liquidity_bridge)
+        self.assertIsNotNone(outputs.covenant_headroom)
+        self.assertIsNotNone(outputs.downside_case_summary)
+        self.assertIsInstance(outputs.evidence_register, list)
+        self.assertIsInstance(outputs.data_quality_exceptions, list)
+        self.assertGreaterEqual(len(outputs.evidence_register), 1)
+        self.assertGreaterEqual(len(outputs.data_quality_exceptions), 1)
 
 
 

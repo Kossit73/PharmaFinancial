@@ -11,12 +11,16 @@ import numpy as np
 from .ai import AIInsights, GenerativeAdvisor, MachineLearningAdvisor
 from .debt import amortise_entries
 from .inputs import (
+    AssumptionEvidence,
+    BankabilityParameters,
     BreakEvenRow,
     DebtEntry,
+    DownsideCaseParameters,
     LaborModelParameters,
     LaborRoleParameters,
     ModelInputs,
     ProductParameters,
+    WorkingCapitalDays,
 )
 from .table import Table, build_table
 
@@ -45,6 +49,14 @@ class FinancialOutputs:
     scenario_tool_results: Mapping[str, "ScenarioToolResult"]
     risk_factor_diagnostics: Optional[Table] = None
     ai_insights: Optional[AIInsights] = None
+    commercial_diagnostics: Optional[Table] = None
+    bankability_gate: Optional[Table] = None
+    data_quality_exceptions: Optional[List[Mapping[str, object]]] = None
+    evidence_register: Optional[List[Mapping[str, object]]] = None
+    sources_and_uses: Optional[Table] = None
+    liquidity_bridge: Optional[Table] = None
+    covenant_headroom: Optional[Table] = None
+    downside_case_summary: Optional[Table] = None
 
 
 @dataclass
@@ -220,6 +232,14 @@ class FinancialModel:
         self._utility_arrays_cache: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
         self._labor_kpi_cache: Dict[str, float] | None = None
         self._monte_carlo_cache: Table | None = None
+        self._commercial_diagnostics_cache: Table | None = None
+        self._bankability_gate_cache: Table | None = None
+        self._data_quality_exceptions_cache: List[Mapping[str, object]] | None = None
+        self._evidence_register_cache: List[Mapping[str, object]] | None = None
+        self._sources_and_uses_cache: Table | None = None
+        self._liquidity_bridge_cache: Table | None = None
+        self._covenant_headroom_cache: Table | None = None
+        self._downside_case_summary_cache: Table | None = None
 
     # ------------------------------------------------------------------ core
     def _build_inflation_factors(self, series: Iterable[Number]) -> List[float]:
@@ -267,6 +287,14 @@ class FinancialModel:
         self._utility_arrays_cache = None
         self._labor_kpi_cache = None
         self._monte_carlo_cache = None
+        self._commercial_diagnostics_cache = None
+        self._bankability_gate_cache = None
+        self._data_quality_exceptions_cache = None
+        self._evidence_register_cache = None
+        self._sources_and_uses_cache = None
+        self._liquidity_bridge_cache = None
+        self._covenant_headroom_cache = None
+        self._downside_case_summary_cache = None
 
     def _inflation_array(self) -> np.ndarray:
         if self._inflation_array_cache is None:
@@ -459,6 +487,182 @@ class FinancialModel:
             totals += np.array(values, dtype=float)
         self._total_units_cache = totals.tolist()
         return self._total_units_cache
+
+    def _shift_series(self, values: Sequence[Number], periods: int, *, fill: float = 0.0) -> List[float]:
+        if periods <= 0:
+            return [float(value) for value in values]
+        shifted = [float(fill) for _ in range(periods)] + [float(value) for value in values]
+        return shifted[: len(values)]
+
+    def _scale_capex_mapping(
+        self,
+        mapping: Mapping[str, object],
+        multiplier: float,
+    ) -> Dict[str, object]:
+        scaled: Dict[str, object] = dict(mapping)
+        for key in ("initial", "contingency", "project_reserve"):
+            try:
+                scaled[key] = float(mapping.get(key, 0.0)) * multiplier
+            except (TypeError, ValueError, AttributeError):
+                scaled[key] = 0.0
+        additions = mapping.get("annual_additions", {})
+        if isinstance(additions, Mapping):
+            scaled["annual_additions"] = {
+                str(year): float(value) * multiplier for year, value in additions.items()
+            }
+        return scaled
+
+    def _adjust_working_capital_days(
+        self,
+        days: WorkingCapitalDays,
+        *,
+        receivable_delta: int = 0,
+        inventory_delta: int = 0,
+        payable_delta: int = 0,
+    ) -> WorkingCapitalDays:
+        def _shift(values: Sequence[int], delta: int) -> List[int]:
+            return [max(int(value) + delta, 0) for value in values]
+
+        return WorkingCapitalDays(
+            accounts_receivable=_shift(days.accounts_receivable, receivable_delta),
+            inventory=_shift(days.inventory, inventory_delta),
+            prepaid_expenses=list(days.prepaid_expenses),
+            other_assets=list(days.other_assets),
+            accounts_payable=_shift(days.accounts_payable, payable_delta),
+            other_liabilities=list(days.other_liabilities),
+            calendar_days=list(days.calendar_days),
+        )
+
+    def _inputs_for_downside_case(self, case: DownsideCaseParameters) -> ModelInputs:
+        scenario_inputs = copy.deepcopy(self.inputs)
+        if case.approval_delay_years > 0 or abs(case.volume_multiplier - 1.0) > 1e-9:
+            updated_production: Dict[str, List[float]] = {}
+            for product, series in scenario_inputs.production_estimate.items():
+                scaled = [float(value) * case.volume_multiplier for value in series]
+                updated_production[product] = self._shift_series(
+                    scaled,
+                    case.approval_delay_years,
+                    fill=0.0,
+                )
+            scenario_inputs.production_estimate = updated_production
+
+        if abs(case.price_multiplier - 1.0) > 1e-9:
+            for params in scenario_inputs.unit_costs.values():
+                params.selling_price *= case.price_multiplier
+
+        if abs(case.raw_material_multiplier - 1.0) > 1e-9:
+            scenario_inputs.raw_material_cost_per_unit *= case.raw_material_multiplier
+            scenario_inputs.variable_cost_overrides = {
+                product: float(value) * case.raw_material_multiplier
+                for product, value in scenario_inputs.variable_cost_overrides.items()
+            }
+
+        if abs(case.direct_labor_multiplier - 1.0) > 1e-9:
+            scenario_inputs.direct_labor_costs = {
+                role: float(value) * case.direct_labor_multiplier
+                for role, value in scenario_inputs.direct_labor_costs.items()
+            }
+            if scenario_inputs.labor_model is not None:
+                for role in scenario_inputs.labor_model.roles:
+                    if role.labor_type == "direct":
+                        role.base_salary *= case.direct_labor_multiplier
+                scenario_inputs.labor_model.contractor_rate = [
+                    float(value) * case.direct_labor_multiplier
+                    for value in scenario_inputs.labor_model.contractor_rate
+                ]
+
+        if abs(case.overhead_multiplier - 1.0) > 1e-9:
+            scenario_inputs.indirect_labor_costs = {
+                role: float(value) * case.overhead_multiplier
+                for role, value in scenario_inputs.indirect_labor_costs.items()
+            }
+            if scenario_inputs.labor_model is not None:
+                for role in scenario_inputs.labor_model.roles:
+                    if role.labor_type != "direct":
+                        role.base_salary *= case.overhead_multiplier
+            utility = scenario_inputs.utility_schedule
+            utility.electricity_rate = [
+                float(value) * case.overhead_multiplier for value in utility.electricity_rate
+            ]
+            utility.water_rate = [
+                float(value) * case.overhead_multiplier for value in utility.water_rate
+            ]
+            utility.steam_rate = [
+                float(value) * case.overhead_multiplier for value in utility.steam_rate
+            ]
+
+        if (
+            case.receivable_days_delta
+            or case.inventory_days_delta
+            or case.payable_days_delta
+        ):
+            scenario_inputs.working_capital_days = self._adjust_working_capital_days(
+                scenario_inputs.working_capital_days,
+                receivable_delta=case.receivable_days_delta,
+                inventory_delta=case.inventory_days_delta,
+                payable_delta=case.payable_days_delta,
+            )
+
+        if abs(case.capex_multiplier - 1.0) > 1e-9:
+            scenario_inputs.capital_expenditure = self._scale_capex_mapping(
+                scenario_inputs.capital_expenditure,
+                case.capex_multiplier,
+            )
+            for row in scenario_inputs.depreciation_schedule:
+                row.acquisition *= case.capex_multiplier
+
+        return scenario_inputs
+
+    def _summary_metric_value(self, name: str, table: Optional[Table] = None) -> float:
+        source = table or self.summary_metrics()
+        if name in source.index:
+            position = source.index.index(name)
+            return float(source.data["Value"][position])
+        return float("nan")
+
+    def _evidence_rows(self) -> List[Dict[str, object]]:
+        rows: List[Dict[str, object]] = []
+        for entry in self.inputs.assumption_evidence:
+            completed = sum(
+                1
+                for value in (entry.source, entry.owner, entry.benchmark_year, entry.rationale)
+                if str(value).strip()
+            )
+            required_fields = 4
+            coverage = completed / required_fields if required_fields else 1.0
+            missing_fields = [
+                label
+                for label, value in (
+                    ("source", entry.source),
+                    ("owner", entry.owner),
+                    ("benchmark_year", entry.benchmark_year),
+                    ("rationale", entry.rationale),
+                )
+                if not str(value).strip()
+            ]
+            status = "Ready" if coverage >= 1.0 else "Partial" if coverage > 0 else "Missing"
+            rows.append(
+                {
+                    "Assumption": entry.assumption,
+                    "Category": entry.category,
+                    "Value Reference": entry.value_reference,
+                    "Source": entry.source,
+                    "Owner": entry.owner,
+                    "Benchmark Year": entry.benchmark_year,
+                    "Rationale": entry.rationale,
+                    "Coverage Ratio": coverage,
+                    "Missing Fields": ", ".join(missing_fields),
+                    "Status": status,
+                    "Required": "Yes" if entry.required else "No",
+                }
+            )
+        return rows
+
+    def _evidence_coverage_ratio(self) -> float:
+        rows = [row for row in self._evidence_rows() if row.get("Required") == "Yes"]
+        if not rows:
+            return 0.0
+        return float(sum(float(row["Coverage Ratio"]) for row in rows) / len(rows))
 
     # -------------------------------------------------------------- schedules
     def revenue_schedule(self) -> Table:
@@ -1321,8 +1525,9 @@ class FinancialModel:
         *,
         distributor_weighted: Optional[Sequence[float]] = None,
         distributor_share: Optional[Sequence[float]] = None,
+        days: Optional[WorkingCapitalDays] = None,
     ) -> Dict[str, List[float]]:
-        days = self.inputs.working_capital_days
+        days = days or self.inputs.working_capital_days
 
         def _pad(series: Sequence[float]) -> List[float]:
             values = [float(value) for value in series]
@@ -1595,6 +1800,322 @@ class FinancialModel:
         return [financing.share_capital + value for value in retained]
 
     # ---------------------------------------------------- analysis & metrics
+    def evidence_register(self) -> List[Mapping[str, object]]:
+        if self._evidence_register_cache is not None:
+            return self._evidence_register_cache
+
+        rows = self._evidence_rows()
+        self._evidence_register_cache = rows
+        return self._evidence_register_cache
+
+    def data_quality_exceptions(self) -> List[Mapping[str, object]]:
+        if self._data_quality_exceptions_cache is not None:
+            return self._data_quality_exceptions_cache
+
+        issues: List[Mapping[str, object]] = []
+        financing = self.inputs.financing
+
+        def _add_issue(area: str, severity: str, issue: str, action: str) -> None:
+            issues.append(
+                {
+                    "Area": area,
+                    "Severity": severity,
+                    "Issue": issue,
+                    "Recommended Action": action,
+                }
+            )
+
+        if abs(float(financing.discount_rate) - 1.0) < 1e-9:
+            _add_issue(
+                "Funding",
+                "Critical",
+                "Discount rate is still set to the placeholder value 1.0.",
+                "Replace with an evidence-backed hurdle rate or WACC.",
+            )
+        for label, value in (
+            ("Senior debt interest", financing.senior_debt_interest),
+            ("Revolver interest", financing.revolver_interest),
+            ("Cash interest", financing.cash_interest),
+            ("Dividend payout", financing.dividend_payout),
+            ("Share capital", financing.share_capital),
+        ):
+            if abs(float(value) - 1.0) < 1e-9:
+                _add_issue(
+                    "Funding",
+                    "High",
+                    f"{label} is still set to the placeholder value 1.0.",
+                    "Replace placeholder funding assumptions with sourced financing terms.",
+                )
+
+        capex = self.inputs.capital_expenditure
+        for key in ("initial", "contingency", "project_reserve"):
+            try:
+                value = float(capex.get(key, 0.0)) if isinstance(capex, Mapping) else 0.0
+            except (TypeError, ValueError):
+                value = 0.0
+            if abs(value - 1.0) < 1e-9:
+                _add_issue(
+                    "Capex",
+                    "High",
+                    f"Capital expenditure field '{key}' is still set to the placeholder value 1.0.",
+                    "Replace with a quoted or benchmarked capex number.",
+                )
+
+        if abs(float(self.inputs.tax_rate)) < 1e-9 and not any(abs(float(value)) > 1e-9 for value in self.inputs.tax_rates):
+            _add_issue(
+                "Tax",
+                "High",
+                "Tax assumptions are zero across the model horizon.",
+                "Set the applicable tax regime and carryforward treatment.",
+            )
+
+        dep_placeholders = [
+            row.asset_type
+            for row in self.inputs.depreciation_schedule
+            if abs(float(row.depreciation_rate) - 1.0) < 1e-9 or abs(float(row.acquisition) - 1.0) < 1e-9
+        ]
+        if dep_placeholders:
+            _add_issue(
+                "Fixed Assets",
+                "High",
+                f"Depreciation schedule contains placeholder rows for {', '.join(dep_placeholders[:4])}.",
+                "Replace placeholder asset costs, useful lives, and depreciation rates.",
+            )
+
+        utility = self.inputs.utility_schedule
+        utility_samples = (
+            list(utility.electricity_rate)
+            + list(utility.water_rate)
+            + list(utility.steam_rate)
+        )
+        if utility_samples and sum(1 for value in utility_samples if abs(float(value) - 1.0) < 1e-9) / len(utility_samples) > 0.5:
+            _add_issue(
+                "Utilities",
+                "Medium",
+                "Utility schedule still relies heavily on placeholder rate assumptions.",
+                "Replace utility rates and usage with plant-level estimates or supplier quotes.",
+            )
+
+        for row in self._evidence_rows():
+            if row["Required"] == "Yes" and float(row["Coverage Ratio"]) < 1.0:
+                _add_issue(
+                    "Evidence",
+                    "Medium",
+                    f"{row['Assumption']} is missing: {row['Missing Fields'] or 'required metadata'}.",
+                    "Complete the evidence register before circulating the model to investors.",
+                )
+
+        if not issues:
+            issues.append(
+                {
+                    "Area": "Validation",
+                    "Severity": "Info",
+                    "Issue": "No structural data-quality exceptions were detected.",
+                    "Recommended Action": "Continue validating economics and investor downside cases.",
+                }
+            )
+
+        self._data_quality_exceptions_cache = issues
+        return self._data_quality_exceptions_cache
+
+    def commercial_diagnostics(self) -> Table:
+        if self._commercial_diagnostics_cache is not None:
+            return self._commercial_diagnostics_cache
+
+        production = self._production()
+        prices = self._unit_prices()
+        production_costs = self._unit_costs()
+        freight_costs = self._freight_costs()
+        raw_material_costs = self._variable_costs()
+
+        rows: List[Mapping[str, float | str]] = []
+        for product in self.products:
+            volume_series = [float(value) for value in production.get(product, [])]
+            capacity = float(self.inputs.production_capacity.get(product, 0.0) or 0.0)
+            peak_units = max(volume_series) if volume_series else 0.0
+            first_units = volume_series[0] if volume_series else 0.0
+            realized_capacity = peak_units / capacity if capacity > 0 else float("nan")
+            selling_price = float(prices.get(product, 0.0))
+            production_cost = float(production_costs.get(product, 0.0))
+            freight_cost = float(freight_costs.get(product, 0.0))
+            raw_cost = float(raw_material_costs.get(product, 0.0))
+            contribution = selling_price - production_cost - freight_cost - raw_cost
+            rows.append(
+                {
+                    "Product": product,
+                    "Year 1 Units": first_units,
+                    "Peak Units": peak_units,
+                    "Peak Capacity Utilisation": realized_capacity,
+                    "Selling Price": selling_price,
+                    "Production Cost": production_cost,
+                    "Freight Cost": freight_cost,
+                    "Raw Material Cost per Unit": raw_cost,
+                    "Estimated Contribution per Unit": contribution,
+                }
+            )
+
+        self._commercial_diagnostics_cache = build_table(
+            [str(row["Product"]) for row in rows],
+            {
+                "Year 1 Units": [float(row["Year 1 Units"]) for row in rows],
+                "Peak Units": [float(row["Peak Units"]) for row in rows],
+                "Peak Capacity Utilisation": [float(row["Peak Capacity Utilisation"]) for row in rows],
+                "Selling Price": [float(row["Selling Price"]) for row in rows],
+                "Production Cost": [float(row["Production Cost"]) for row in rows],
+                "Freight Cost": [float(row["Freight Cost"]) for row in rows],
+                "Raw Material Cost per Unit": [float(row["Raw Material Cost per Unit"]) for row in rows],
+                "Estimated Contribution per Unit": [float(row["Estimated Contribution per Unit"]) for row in rows],
+            },
+            index_name="Product",
+        )
+        return self._commercial_diagnostics_cache
+
+    def sources_and_uses(self) -> Table:
+        if self._sources_and_uses_cache is not None:
+            return self._sources_and_uses_cache
+
+        financing = self.inputs.financing
+        capex_total = sum(self._capex_series())
+        sources = [
+            ("Source", "Share Capital", float(financing.share_capital or 0.0)),
+            (
+                "Source",
+                "Senior Debt",
+                float(sum(max(float(entry.amount), 0.0) for entry in financing.senior_debt_entries)),
+            ),
+            (
+                "Source",
+                "Revolver",
+                float(sum(max(float(entry.amount), 0.0) for entry in financing.revolver_entries)),
+            ),
+            (
+                "Source",
+                "Overdraft",
+                float(sum(max(float(entry.amount), 0.0) for entry in financing.overdraft_entries)),
+            ),
+        ]
+        uses = [
+            ("Use", "Initial Investment", abs(float(financing.initial_investment or 0.0))),
+            ("Use", "Capital Expenditure", float(capex_total)),
+        ]
+        all_rows = sources + uses
+        total_sources = sum(amount for row_type, _, amount in all_rows if row_type == "Source")
+        total_uses = sum(amount for row_type, _, amount in all_rows if row_type == "Use")
+        all_rows.extend(
+            [
+                ("Summary", "Total Sources", total_sources),
+                ("Summary", "Total Uses", total_uses),
+                ("Summary", "Funding Gap", total_sources - total_uses),
+            ]
+        )
+        self._sources_and_uses_cache = build_table(
+            [label for _, label, _ in all_rows],
+            {
+                "Amount": [
+                    amount if row_type == "Source" else -amount if row_type == "Use" else amount
+                    for row_type, _, amount in all_rows
+                ],
+            },
+            index_name="Line Item",
+        )
+        return self._sources_and_uses_cache
+
+    def liquidity_bridge(self) -> Table:
+        if self._liquidity_bridge_cache is not None:
+            return self._liquidity_bridge_cache
+
+        cash_flow = self.cash_flow_statement()
+        min_buffer = float(self.inputs.bankability.min_cash_buffer)
+        ending_cash = cash_flow.column(CASH_FLOW_END_COLUMN)
+        headroom = [float(value) - min_buffer for value in ending_cash]
+        self._liquidity_bridge_cache = build_table(
+            self.years,
+            {
+                "Net Cash Generated from Operating Activities": cash_flow.column("Net Cash Generated from Operating Activities"),
+                "Net Cash Used in Investing Activities": cash_flow.column("Net Cash Used in Investing Activities"),
+                "Net Cash Used in Financing Activities": cash_flow.column("Net Cash Used in Financing Activities"),
+                CASH_FLOW_NET_COLUMN: cash_flow.column(CASH_FLOW_NET_COLUMN),
+                CASH_FLOW_END_COLUMN: ending_cash,
+                "Minimum Cash Buffer": [min_buffer for _ in self.years],
+                "Cash Buffer Headroom": headroom,
+            },
+        )
+        return self._liquidity_bridge_cache
+
+    def covenant_headroom(self) -> Table:
+        if self._covenant_headroom_cache is not None:
+            return self._covenant_headroom_cache
+
+        debt_service = self._debt_service_schedule()
+        operating_cash = self.cash_flow_statement().column("Net Cash Generated from Operating Activities")
+        min_dscr = float(self.inputs.bankability.min_dscr)
+        min_buffer = float(self.inputs.bankability.min_cash_buffer)
+        ending_cash = self.cash_flow_statement().column(CASH_FLOW_END_COLUMN)
+        dscr_values = [
+            _safe_ratio(operating_value, service)
+            for operating_value, service in zip(operating_cash, debt_service)
+        ]
+        self._covenant_headroom_cache = build_table(
+            self.years,
+            {
+                "Debt Service": debt_service,
+                "Operating Cash Flow": operating_cash,
+                "DSCR": dscr_values,
+                "Minimum DSCR": [min_dscr for _ in self.years],
+                "DSCR Headroom": [float(value) - min_dscr for value in dscr_values],
+                "Ending Cash": ending_cash,
+                "Minimum Cash Buffer": [min_buffer for _ in self.years],
+                "Cash Buffer Headroom": [float(value) - min_buffer for value in ending_cash],
+            },
+        )
+        return self._covenant_headroom_cache
+
+    def downside_case_summary(self) -> Table:
+        if self._downside_case_summary_cache is not None:
+            return self._downside_case_summary_cache
+
+        rows: List[Mapping[str, float | str]] = []
+        for case in self.inputs.downside_cases:
+            scenario_model = FinancialModel(self._inputs_for_downside_case(case))
+            summary = scenario_model.summary_metrics()
+            ending_cash = scenario_model.cash_flow_statement().column(CASH_FLOW_END_COLUMN)
+            rows.append(
+                {
+                    "Case": case.name,
+                    "NPV": scenario_model._summary_metric_value("NPV", summary),
+                    "IRR": scenario_model._summary_metric_value("IRR", summary),
+                    "Average Debt Service Coverage": scenario_model._summary_metric_value(
+                        "Average Debt Service Coverage",
+                        summary,
+                    ),
+                    "Investor Viability Score": scenario_model._summary_metric_value(
+                        "Investor Viability Score",
+                        summary,
+                    ),
+                    "Investor Gate Pass Ratio": scenario_model._summary_metric_value(
+                        "Investor Gate Pass Ratio",
+                        summary,
+                    ),
+                    "Minimum Ending Cash": min(float(value) for value in ending_cash) if ending_cash else float("nan"),
+                }
+            )
+
+        self._downside_case_summary_cache = build_table(
+            [str(row["Case"]) for row in rows],
+            {
+                "NPV": [float(row["NPV"]) for row in rows],
+                "IRR": [float(row["IRR"]) for row in rows],
+                "Average Debt Service Coverage": [
+                    float(row["Average Debt Service Coverage"]) for row in rows
+                ],
+                "Investor Viability Score": [float(row["Investor Viability Score"]) for row in rows],
+                "Investor Gate Pass Ratio": [float(row["Investor Gate Pass Ratio"]) for row in rows],
+                "Minimum Ending Cash": [float(row["Minimum Ending Cash"]) for row in rows],
+            },
+            index_name="Case",
+        )
+        return self._downside_case_summary_cache
+
     def scenario_analysis(self) -> Dict[str, Table]:
         results: Dict[str, Table] = {}
         base_inflation = list(self.inputs.inflation_series)
@@ -1614,6 +2135,12 @@ class FinancialModel:
             scenario_model = FinancialModel(scenario_inputs)
             income = scenario_model.income_statement()
             results[name] = income.select(["Net Revenue", "EBITDA", "EBIT", "Net Income"])
+        for case in self.inputs.downside_cases:
+            scenario_model = FinancialModel(self._inputs_for_downside_case(case))
+            income = scenario_model.income_statement()
+            results[f"Downside: {case.name}"] = income.select(
+                ["Net Revenue", "EBITDA", "EBIT", "Net Income"]
+            )
         return results
 
     def scenario_toolkit(self, scenarios: Mapping[str, Table]) -> Dict[str, ScenarioToolResult]:
@@ -1874,8 +2401,14 @@ class FinancialModel:
             irrs = []
             for multiplier in adjustments:
                 scenario_inputs = copy.deepcopy(self.inputs)
-                if variable == "tablet_price":
-                    scenario_inputs.unit_costs["Tablets"].selling_price *= multiplier
+                if variable in {"tablet_price", "selling_price", "price"}:
+                    for params in scenario_inputs.unit_costs.values():
+                        params.selling_price *= multiplier
+                elif variable in {"volume", "production"}:
+                    scenario_inputs.production_estimate = {
+                        product: [float(value) * multiplier for value in values]
+                        for product, values in scenario_inputs.production_estimate.items()
+                    }
                 elif variable == "raw_material_cost":
                     scaled = {
                         product: value * multiplier
@@ -1889,6 +2422,23 @@ class FinancialModel:
                     }
                 elif variable == "discount_rate":
                     scenario_inputs.financing.discount_rate = multiplier
+                elif variable == "receivable_days":
+                    scenario_inputs.working_capital_days.accounts_receivable = [
+                        max(int(round(value * multiplier)), 0)
+                        for value in scenario_inputs.working_capital_days.accounts_receivable
+                    ]
+                elif variable == "inventory_days":
+                    scenario_inputs.working_capital_days.inventory = [
+                        max(int(round(value * multiplier)), 0)
+                        for value in scenario_inputs.working_capital_days.inventory
+                    ]
+                elif variable == "capex":
+                    scenario_inputs.capital_expenditure = self._scale_capex_mapping(
+                        scenario_inputs.capital_expenditure,
+                        multiplier,
+                    )
+                    for row in scenario_inputs.depreciation_schedule:
+                        row.acquisition *= multiplier
                 elif variable in {
                     "wage_direct",
                     "wage_indirect",
@@ -2193,6 +2743,13 @@ class FinancialModel:
             else:
                 growth_rates = np.zeros(len(self.years), dtype=float)
 
+            price_factor = 1.0
+            if "selling_price" in variable_codes and not deterministic:
+                price_factor += _sample_value("selling_price", shock=shocks.get("selling_price"))
+            if "price" in variable_codes and not deterministic:
+                price_factor += _sample_value("price", shock=shocks.get("price"))
+            price_factor = max(price_factor, 0.0)
+
             raw_factor = 1.0
             if "raw_material_cost" in variable_codes and not deterministic:
                 raw_factor += _sample_value("raw_material_cost", shock=shocks.get("raw_material_cost"))
@@ -2222,6 +2779,36 @@ class FinancialModel:
             if tax_factor < 0:
                 tax_factor = 0.0
 
+            approval_delay_years = 0
+            if "approval_delay" in variable_codes and not deterministic:
+                approval_delay_years = max(
+                    int(round(_sample_value("approval_delay", shock=shocks.get("approval_delay")))),
+                    0,
+                )
+
+            receivable_days_delta = 0
+            if "receivable_days" in variable_codes and not deterministic:
+                receivable_days_delta = int(
+                    round(_sample_value("receivable_days", shock=shocks.get("receivable_days")))
+                )
+
+            inventory_days_delta = 0
+            if "inventory_days" in variable_codes and not deterministic:
+                inventory_days_delta = int(
+                    round(_sample_value("inventory_days", shock=shocks.get("inventory_days")))
+                )
+
+            payable_days_delta = 0
+            if "payable_days" in variable_codes and not deterministic:
+                payable_days_delta = int(
+                    round(_sample_value("payable_days", shock=shocks.get("payable_days")))
+                )
+
+            capex_factor = 1.0
+            if "capex" in variable_codes and not deterministic:
+                capex_factor += _sample_value("capex", shock=shocks.get("capex"))
+            capex_factor = max(capex_factor, 0.0)
+
             risk_adjustment = 1.0
             if "other" in variable_codes and not deterministic:
                 risk_adjustment = max(0.0, 1.0 - _sample_value("other", shock=shocks.get("other")))
@@ -2231,7 +2818,12 @@ class FinancialModel:
                 else np.ones(len(self.years), dtype=float)
             )
 
-            simulated_revenue = base_revenue * (1.0 + growth_rates) * risk_series
+            simulated_revenue = base_revenue * (1.0 + growth_rates) * price_factor * risk_series
+            if approval_delay_years > 0:
+                simulated_revenue = np.array(
+                    self._shift_series(simulated_revenue.tolist(), approval_delay_years, fill=0.0),
+                    dtype=float,
+                )
 
             if per_product_raw_materials:
                 per_product_raw_series = self._scale_series_map(
@@ -2290,12 +2882,19 @@ class FinancialModel:
 
             ratio = simulated_revenue / base_revenue_safe
             weighted_adjusted = base_weighted * ratio
+            working_capital_days = self._adjust_working_capital_days(
+                self.inputs.working_capital_days,
+                receivable_delta=receivable_days_delta,
+                inventory_delta=inventory_days_delta,
+                payable_delta=payable_days_delta,
+            )
 
             working_balances = self._working_capital_series_from_inputs(
                 simulated_revenue,
                 simulated_cost_of_sales,
                 distributor_weighted=weighted_adjusted.tolist(),
                 distributor_share=base_distributor_share.tolist(),
+                days=working_capital_days,
             )
 
             inventory_change = _difference(working_balances["Inventory"])
@@ -2337,6 +2936,8 @@ class FinancialModel:
                 for idx in range(len(self.years))
             ]
 
+            if capex_factor != 1.0:
+                capital_expenditure = [value * capex_factor for value in capital_expenditure]
             net_cash_from_investing = list(capital_expenditure)
 
             dividends = [-max(ni, 0.0) * self.inputs.financing.dividend_payout for ni in net_income]
@@ -2403,6 +3004,32 @@ class FinancialModel:
         placeholder_ratio = (placeholder_hits / placeholder_total) if placeholder_total else 0.0
         checks.append((placeholder_ratio <= 0.25, 25.0))
 
+        capex_mapping = self.inputs.capital_expenditure
+        if isinstance(capex_mapping, Mapping):
+            capex_values = [
+                float(capex_mapping.get("initial", 0.0) or 0.0),
+                float(capex_mapping.get("contingency", 0.0) or 0.0),
+                float(capex_mapping.get("project_reserve", 0.0) or 0.0),
+            ]
+            checks.append((all(abs(value - 1.0) >= 1e-9 for value in capex_values), 10.0))
+
+        utility = self.inputs.utility_schedule
+        utility_rates = (
+            list(utility.electricity_rate)
+            + list(utility.water_rate)
+            + list(utility.steam_rate)
+        )
+        if utility_rates:
+            placeholder_rate_ratio = sum(
+                1 for value in utility_rates if abs(float(value) - 1.0) < 1e-9
+            ) / len(utility_rates)
+            checks.append((placeholder_rate_ratio <= 0.5, 8.0))
+
+        tax_configured = abs(float(self.inputs.tax_rate)) > 1e-9 or any(
+            abs(float(value)) > 1e-9 for value in self.inputs.tax_rates
+        )
+        checks.append((tax_configured, 8.0))
+
         labor = self.inputs.labor_model
         if labor is not None and labor.roles:
             metadata_completion = sum(
@@ -2412,11 +3039,107 @@ class FinancialModel:
             ) / max(len(labor.roles), 1)
             checks.append((metadata_completion >= 0.8, 10.0))
 
+        checks.append(
+            (
+                self._evidence_coverage_ratio()
+                >= float(self.inputs.bankability.min_evidence_coverage),
+                16.0,
+            )
+        )
+
         score = 100.0
         for passed, penalty in checks:
             if not passed:
                 score -= penalty
         return max(0.0, min(score, 100.0))
+
+    def _bankability_checks(
+        self,
+        *,
+        npv_value: float,
+        irr_value: float,
+        discounted_payback_years: float,
+        average_dscr: float,
+        cash_end: Sequence[Number],
+        quality_score: float,
+        evidence_coverage: float,
+        viability_score: float,
+    ) -> tuple[List[Dict[str, float | str]], Dict[str, float]]:
+        thresholds = self.inputs.bankability
+        irr_hurdle = max(float(self.inputs.financing.discount_rate), float(thresholds.min_irr))
+        min_cash = min(float(value) for value in cash_end) if cash_end else float("nan")
+        rows: List[Dict[str, float | str]] = [
+            {
+                "Gate": "NPV Positive",
+                "Actual": float(npv_value),
+                "Threshold": 0.0,
+                "Comparator": ">",
+                "Passed": 1.0 if npv_value > 0.0 else 0.0,
+            },
+            {
+                "Gate": "IRR Hurdle",
+                "Actual": float(irr_value),
+                "Threshold": float(irr_hurdle),
+                "Comparator": ">=",
+                "Passed": 1.0 if _is_finite(irr_value) and irr_value >= irr_hurdle else 0.0,
+            },
+            {
+                "Gate": "Average DSCR",
+                "Actual": float(average_dscr),
+                "Threshold": float(thresholds.min_dscr),
+                "Comparator": ">=",
+                "Passed": 1.0
+                if _is_finite(average_dscr) and average_dscr >= float(thresholds.min_dscr)
+                else 0.0,
+            },
+            {
+                "Gate": "Discounted Payback",
+                "Actual": float(discounted_payback_years),
+                "Threshold": float(thresholds.max_discounted_payback),
+                "Comparator": "<=",
+                "Passed": 1.0
+                if _is_finite(discounted_payback_years)
+                and discounted_payback_years <= float(thresholds.max_discounted_payback)
+                else 0.0,
+            },
+            {
+                "Gate": "Minimum Ending Cash",
+                "Actual": float(min_cash),
+                "Threshold": float(thresholds.min_cash_buffer),
+                "Comparator": ">=",
+                "Passed": 1.0
+                if _is_finite(min_cash) and min_cash >= float(thresholds.min_cash_buffer)
+                else 0.0,
+            },
+            {
+                "Gate": "Assumption Quality",
+                "Actual": float(quality_score),
+                "Threshold": float(thresholds.min_assumption_quality),
+                "Comparator": ">=",
+                "Passed": 1.0
+                if quality_score >= float(thresholds.min_assumption_quality)
+                else 0.0,
+            },
+            {
+                "Gate": "Evidence Coverage",
+                "Actual": float(evidence_coverage),
+                "Threshold": float(thresholds.min_evidence_coverage),
+                "Comparator": ">=",
+                "Passed": 1.0
+                if evidence_coverage >= float(thresholds.min_evidence_coverage)
+                else 0.0,
+            },
+            {
+                "Gate": "Viability Score",
+                "Actual": float(viability_score),
+                "Threshold": float(thresholds.min_viability_score),
+                "Comparator": ">=",
+                "Passed": 1.0
+                if viability_score >= float(thresholds.min_viability_score)
+                else 0.0,
+            },
+        ]
+        return rows, {"IRR Hurdle": float(irr_hurdle), "Minimum Ending Cash": float(min_cash)}
 
     def _investor_gate_metrics(
         self,
@@ -2426,31 +3149,28 @@ class FinancialModel:
         discounted_payback_years: float,
         average_dscr: float,
         cash_end: Sequence[Number],
+        quality_score: float,
+        evidence_coverage: float,
+        viability_score: float,
     ) -> Dict[str, float]:
-        viability_config = self.inputs.viability
-        irr_gate = viability_config.metrics.get("IRR", None)
-        dscr_gate = viability_config.metrics.get("DSCR", None)
-        payback_gate = viability_config.metrics.get("Payback", None)
-
-        irr_hurdle = max(float(self.inputs.financing.discount_rate), float(irr_gate.low if irr_gate else 0.12))
-        dscr_min = float(dscr_gate.low if dscr_gate else 1.2)
-        payback_max = float(payback_gate.high if payback_gate else 8.0)
-        liquidity_ok = not any(float(value) < 0.0 for value in cash_end)
-
-        gates = [
-            npv_value > 0.0,
-            _is_finite(irr_value) and irr_value >= irr_hurdle,
-            _is_finite(average_dscr) and average_dscr >= dscr_min,
-            _is_finite(discounted_payback_years) and discounted_payback_years <= payback_max,
-            liquidity_ok,
-        ]
-        passed = sum(1 for flag in gates if flag)
-        ratio = passed / len(gates) if gates else float("nan")
+        rows, metadata = self._bankability_checks(
+            npv_value=npv_value,
+            irr_value=irr_value,
+            discounted_payback_years=discounted_payback_years,
+            average_dscr=average_dscr,
+            cash_end=cash_end,
+            quality_score=quality_score,
+            evidence_coverage=evidence_coverage,
+            viability_score=viability_score,
+        )
+        passed = sum(int(float(row["Passed"])) for row in rows)
+        ratio = passed / len(rows) if rows else float("nan")
         return {
             "Investor Gate Pass Count": float(passed),
             "Investor Gate Pass Ratio": ratio,
-            "Investor Gate Status": 1.0 if passed == len(gates) else 0.0,
-            "IRR Hurdle": irr_hurdle,
+            "Investor Gate Status": 1.0 if passed == len(rows) else 0.0,
+            "IRR Hurdle": float(metadata["IRR Hurdle"]),
+            "Minimum Ending Cash": float(metadata["Minimum Ending Cash"]),
         }
 
     def _investor_risk_metrics(self, irr_hurdle: float) -> Dict[str, float]:
@@ -2484,6 +3204,33 @@ class FinancialModel:
                 result["IRR P50"] = float(np.percentile(irr_array, 50))
                 result["IRR P90"] = float(np.percentile(irr_array, 90))
         return result
+
+    def bankability_gate(self) -> Table:
+        if self._bankability_gate_cache is not None:
+            return self._bankability_gate_cache
+
+        summary = self.summary_metrics()
+        cash_end = self.cash_flow_statement().column(CASH_FLOW_END_COLUMN)
+        rows, _ = self._bankability_checks(
+            npv_value=self._summary_metric_value("NPV", summary),
+            irr_value=self._summary_metric_value("IRR", summary),
+            discounted_payback_years=self._summary_metric_value("Discounted Payback", summary),
+            average_dscr=self._summary_metric_value("Average Debt Service Coverage", summary),
+            cash_end=cash_end,
+            quality_score=self._summary_metric_value("Assumption Data Quality Score", summary),
+            evidence_coverage=self._summary_metric_value("Evidence Coverage Ratio", summary),
+            viability_score=self._summary_metric_value("Investor Viability Score", summary),
+        )
+        self._bankability_gate_cache = build_table(
+            [str(row["Gate"]) for row in rows],
+            {
+                "Actual": [float(row["Actual"]) for row in rows],
+                "Threshold": [float(row["Threshold"]) for row in rows],
+                "Passed": [float(row["Passed"]) for row in rows],
+            },
+            index_name="Gate",
+        )
+        return self._bankability_gate_cache
 
     def summary_metrics(self) -> Table:
         if self._summary_metrics_cache is not None:
@@ -2629,15 +3376,21 @@ class FinancialModel:
                 metric_values.append(float(labor_kpis[label]))
 
         cash_end = cash_flow_table.column(CASH_FLOW_END_COLUMN)
+        quality_score = self._assumption_data_quality_score()
+        evidence_coverage = self._evidence_coverage_ratio()
         gate_metrics = self._investor_gate_metrics(
             npv_value=npv_value,
             irr_value=irr_value,
             discounted_payback_years=discounted_payback_years,
             average_dscr=average_dscr,
             cash_end=cash_end,
+            quality_score=quality_score,
+            evidence_coverage=evidence_coverage,
+            viability_score=viability_score,
         )
-        quality_score = self._assumption_data_quality_score()
-        risk_metrics = self._investor_risk_metrics(gate_metrics.get("IRR Hurdle", float(self.inputs.financing.discount_rate)))
+        risk_metrics = self._investor_risk_metrics(
+            gate_metrics.get("IRR Hurdle", float(self.inputs.financing.discount_rate))
+        )
 
         for label, value in gate_metrics.items():
             if label == "IRR Hurdle":
@@ -2645,6 +3398,8 @@ class FinancialModel:
             metric_names.append(label)
             metric_values.append(float(value))
 
+        metric_names.append("Evidence Coverage Ratio")
+        metric_values.append(float(evidence_coverage))
         metric_names.append("Assumption Data Quality Score")
         metric_values.append(float(quality_score))
 
@@ -2932,6 +3687,14 @@ class FinancialModel:
             scenario_tool_results=scenario_tools,
             risk_factor_diagnostics=core.risk_factor_diagnostics,
             ai_insights=ai_insights,
+            commercial_diagnostics=core.commercial_diagnostics,
+            bankability_gate=core.bankability_gate,
+            data_quality_exceptions=core.data_quality_exceptions,
+            evidence_register=core.evidence_register,
+            sources_and_uses=core.sources_and_uses,
+            liquidity_bridge=core.liquidity_bridge,
+            covenant_headroom=core.covenant_headroom,
+            downside_case_summary=core.downside_case_summary,
         )
 
     def run_core(self) -> FinancialOutputs:
@@ -2943,6 +3706,14 @@ class FinancialModel:
         break_even = self.break_even_analysis()
         payback = self.payback_schedule()
         discounted_payback = self.discounted_payback_schedule()
+        commercial_diagnostics = self.commercial_diagnostics()
+        bankability_gate = self.bankability_gate()
+        data_quality_exceptions = self.data_quality_exceptions()
+        evidence_register = self.evidence_register()
+        sources_and_uses = self.sources_and_uses()
+        liquidity_bridge = self.liquidity_bridge()
+        covenant_headroom = self.covenant_headroom()
+        downside_case_summary = self.downside_case_summary()
         empty_monte_carlo = build_table([], {"NPV": []}, index_name="Iteration")
         return FinancialOutputs(
             income_statement=income,
@@ -2959,6 +3730,14 @@ class FinancialModel:
             scenario_tool_results={},
             risk_factor_diagnostics=self.risk_factor_diagnostics(),
             ai_insights=None,
+            commercial_diagnostics=commercial_diagnostics,
+            bankability_gate=bankability_gate,
+            data_quality_exceptions=data_quality_exceptions,
+            evidence_register=evidence_register,
+            sources_and_uses=sources_and_uses,
+            liquidity_bridge=liquidity_bridge,
+            covenant_headroom=covenant_headroom,
+            downside_case_summary=downside_case_summary,
         )
 
 

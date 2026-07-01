@@ -81,6 +81,21 @@
         }
       }
     },
+    "bankability": {
+      "type": "object"
+    },
+    "assumption_evidence": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "downside_cases": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
     "ai": {
       "type": "object"
     },
