@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "years",
+    "unit_costs",
+    "markup",
+    "inflation_series",
+    "utility_costs",
+    "working_capital",
+    "financing",
+    "tax",
+    "risk",
+    "risk_weights",
+    "scenarios",
+    "sensitivity",
+    "monte_carlo",
+    "ai",
+    "labor"
+  ],
+  "properties": {
+    "years": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      },
+      "minItems": 1
+    },
+    "unit_costs": {
+      "type": "object"
+    },
+    "markup": {
+      "type": "object"
+    },
+    "inflation_series": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 1
+    },
+    "utility_costs": {
+      "type": "object"
+    },
+    "working_capital": {
+      "type": "object"
+    },
+    "financing": {
+      "type": "object"
+    },
+    "tax": {
+      "type": "object"
+    },
+    "risk": {
+      "type": "object"
+    },
+    "risk_weights": {
+      "type": "object"
+    },
+    "scenarios": {
+      "type": "object"
+    },
+    "scenario_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "sensitivity": {
+      "type": "object"
+    },
+    "monte_carlo": {
+      "type": "object",
+      "required": [
+        "iterations"
+      ],
+      "properties": {
+        "iterations": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "bankability": {
+      "type": "object"
+    },
+    "assumption_evidence": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "downside_cases": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "ai": {
+      "type": "object"
+    },
+    "labor": {
+      "type": "object",
+      "properties": {
+        "direct": {
+          "type": "object"
+        },
+        "indirect": {
+          "type": "object"
+        },
+        "model_v1": {
+          "type": "object",
+          "properties": {
+            "roles": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "settings": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    }
+  }
+}

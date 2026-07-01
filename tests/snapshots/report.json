@@ -1,0 +1,111 @@
+{
+  "generated": "TIMESTAMP",
+  "sections": [
+    {
+      "title": "Summary Metrics",
+      "tables": [
+        {
+          "title": "Summary Metrics",
+          "rows": [
+            {
+              "Metric": "NPV",
+              "Value": -70.3921342450854
+            },
+            {
+              "Metric": "IRR",
+              "Value": NaN
+            },
+            {
+              "Metric": "Payback Period",
+              "Value": NaN
+            },
+            {
+              "Metric": "Discounted Payback",
+              "Value": NaN
+            },
+            {
+              "Metric": "Profitability Index",
+              "Value": -6.0392134245085405
+            },
+            {
+              "Metric": "Revenue CAGR",
+              "Value": 0.3870067101279189
+            },
+            {
+              "Metric": "Mid-period Revenue CAGR",
+              "Value": 0.33621601567775405
+            },
+            {
+              "Metric": "Rolling Revenue CAGR (3Y Avg)",
+              "Value": 0.37539780357192554
+            },
+            {
+              "Metric": "Weighted Average Gross Margin",
+              "Value": -4.619456326226541
+            },
+            {
+              "Metric": "Weighted Average EBITDA Margin",
+              "Value": -6.015683279767449
+            },
+            {
+              "Metric": "Weighted Average Net Margin",
+              "Value": -6.089913605902795
+            },
+            {
+              "Metric": "Weighted Average Operating Cash Flow Margin",
+              "Value": -6.131192552277875
+            },
+            {
+              "Metric": "Average Debt Service Coverage",
+              "Value": -9.572340538530485
+            },
+            {
+              "Metric": "Investor Viability Score",
+              "Value": 23.076923076923077
+            },
+            {
+              "Metric": "Investor Gate Pass Count",
+              "Value": 0.0
+            },
+            {
+              "Metric": "Investor Gate Pass Ratio",
+              "Value": 0.0
+            },
+            {
+              "Metric": "Investor Gate Status",
+              "Value": 0.0
+            },
+            {
+              "Metric": "Minimum Ending Cash",
+              "Value": -752.371824473584
+            },
+            {
+              "Metric": "Evidence Coverage Ratio",
+              "Value": 0.25
+            },
+            {
+              "Metric": "Assumption Data Quality Score",
+              "Value": 0.0
+            },
+            {
+              "Metric": "Probability NPV < 0",
+              "Value": 1.0
+            },
+            {
+              "Metric": "NPV P10",
+              "Value": -442.09589362659193
+            },
+            {
+              "Metric": "NPV P50",
+              "Value": -410.7608563194256
+            },
+            {
+              "Metric": "NPV P90",
+              "Value": -388.3238397970134
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

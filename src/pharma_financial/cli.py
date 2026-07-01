@@ -1,12 +1,17 @@
-"""Command line entry point for running the Longevity Pharmaceuticals model."""
+"""Command line entry point for running the Pharmaceuticals model."""
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
-import pandas as pd
-
-from .inputs import load_inputs
+from .inputs import (
+    apply_scenario_files,
+    load_inputs,
+    load_raw_inputs,
+    parse_inputs,
+    validate_inputs,
+)
 from .model import FinancialModel
 
 
@@ -18,28 +23,69 @@ def run_model(input_path: Path | None = None, output: Path | None = None) -> Non
     output = output or Path.cwd()
     output.mkdir(parents=True, exist_ok=True)
 
-    def _write(name: str, df: pd.DataFrame) -> None:
-        df.to_csv(output / f"{name}.csv")
+    def _write_table(name: str, table) -> None:
+        path = output / f"{name}.csv"
+        try:
+            table.to_frame().to_csv(path)  # type: ignore[attr-defined]
+        except Exception:
+            table.to_csv(path)
 
-    _write("income_statement", results.income_statement)
-    _write("balance_sheet", results.balance_sheet)
-    _write("cash_flow", results.cash_flow)
-    _write("summary_metrics", results.summary_metrics)
-    _write("break_even", results.break_even)
-    _write("payback", results.payback)
-    _write("discounted_payback", results.discounted_payback)
+    _write_table(
+        "income_statement",
+        results.income_statement.rounded(0, exclude_keywords=("Margin", "Return")),
+    )
+    _write_table("balance_sheet", results.balance_sheet.rounded(0))
+    _write_table("cash_flow", results.cash_flow.rounded(0))
+    _write_table("summary_metrics", results.summary_metrics)
+    _write_table("break_even", results.break_even)
+    _write_table("payback", results.payback)
+    _write_table("discounted_payback", results.discounted_payback)
 
     for scenario, df in results.scenario_results.items():
-        _write(f"scenario_{scenario}", df)
+        _write_table(f"scenario_{scenario}", df)
 
     for variable, df in results.sensitivity_results.items():
-        _write(f"sensitivity_{variable}", df)
+        _write_table(f"sensitivity_{variable}", df)
 
-    results.monte_carlo.to_csv(output / "monte_carlo.csv", index=False)
+    _write_table("monte_carlo", results.monte_carlo)
+
+
+def run_scenario_batch(
+    input_path: Path | None,
+    scenario_dir: Path,
+    output: Path | None = None,
+) -> None:
+    raw_inputs = load_raw_inputs(input_path)
+    scenario_files = sorted(scenario_dir.glob("*.json"))
+    raw_inputs["scenario_files"] = [str(path) for path in scenario_files]
+    apply_scenario_files(raw_inputs, scenario_dir)
+    errors, warnings_list = validate_inputs(raw_inputs)
+    for warning_message in warnings_list:
+        print(f"Warning: {warning_message}")
+    if errors:
+        for error in errors:
+            print(f"Error: {error}")
+        raise SystemExit(1)
+
+    inputs = parse_inputs(raw_inputs)
+    model = FinancialModel(inputs)
+    scenarios = model.scenario_analysis()
+
+    output = output or Path.cwd()
+    output.mkdir(parents=True, exist_ok=True)
+    scenario_output = output / "scenarios"
+    scenario_output.mkdir(parents=True, exist_ok=True)
+
+    for name, table in scenarios.items():
+        path = scenario_output / f"{name}.csv"
+        try:
+            table.to_frame().to_csv(path)  # type: ignore[attr-defined]
+        except Exception:
+            table.to_csv(path)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the Longevity Pharmaceuticals financial model")
+    parser = argparse.ArgumentParser(description="Run the Pharmaceuticals financial model")
     parser.add_argument("--inputs", type=Path, default=None, help="Path to an inputs JSON file")
     parser.add_argument(
         "--output",
@@ -47,7 +93,42 @@ def main() -> None:
         default=Path("outputs"),
         help="Directory to store generated CSV schedules",
     )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Validate input assumptions and exit without running the model",
+    )
+    parser.add_argument(
+        "--scenario-dir",
+        type=Path,
+        default=None,
+        help="Directory containing scenario JSON definitions for batch runs",
+    )
+    parser.add_argument(
+        "--batch-scenarios",
+        action="store_true",
+        help="Run scenario analysis for all files in --scenario-dir and write CSV outputs",
+    )
     args = parser.parse_args()
+    if args.validate:
+        raw_inputs = load_raw_inputs(args.inputs)
+        errors, warnings_list = validate_inputs(raw_inputs)
+        for warning_message in warnings_list:
+            print(f"Warning: {warning_message}")
+        if errors:
+            for error in errors:
+                print(f"Error: {error}")
+            sys.exit(1)
+        print("Inputs validation succeeded.")
+        sys.exit(0)
+
+    if args.batch_scenarios:
+        if args.scenario_dir is None:
+            print("Error: --scenario-dir is required with --batch-scenarios.")
+            sys.exit(1)
+        run_scenario_batch(args.inputs, args.scenario_dir, args.output)
+        sys.exit(0)
+
     run_model(args.inputs, args.output)
 
 

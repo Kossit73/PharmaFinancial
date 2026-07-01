@@ -1,0 +1,82 @@
+import json
+import unittest
+
+from pharma_financial.report import (
+    ReportGenerationError,
+    ReportSection,
+    ReportTable,
+    collect_report_sections,
+    generate_report,
+)
+from pharma_financial.inputs import load_inputs
+from pharma_financial.model import FinancialModel
+from pharma_financial.table import build_table
+
+
+class ReportGenerationTest(unittest.TestCase):
+    def setUp(self):
+        table = build_table([2024, 2025], {"Metric": [1.0, 2.0]})
+        self.sections = [
+            ReportSection("Key Metrics Dashboard", [ReportTable("Summary", table)]),
+        ]
+
+    def test_generate_json_report(self):
+        data, mime, filename = generate_report(self.sections, "JSON")
+        self.assertEqual(mime, "application/json")
+        self.assertTrue(filename.endswith(".json"))
+        payload = json.loads(data.decode("utf-8"))
+        self.assertIn("sections", payload)
+        self.assertEqual(payload["sections"][0]["title"], "Key Metrics Dashboard")
+
+    def test_generate_csv_report(self):
+        data, mime, filename = generate_report(self.sections, "CSV")
+        self.assertEqual(mime, "text/csv")
+        self.assertTrue(filename.endswith(".csv"))
+        text = data.decode("utf-8")
+        self.assertIn("# Section: Key Metrics Dashboard", text)
+        self.assertIn("Metric", text)
+
+    def test_generate_excel_report(self):
+        data, mime, filename = generate_report(self.sections, "Excel")
+        self.assertEqual(mime, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        self.assertTrue(filename.endswith(".xlsx"))
+        self.assertGreater(len(data), 0)
+
+    def test_generate_word_report(self):
+        data, mime, filename = generate_report(self.sections, "Word")
+        self.assertEqual(mime, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        self.assertTrue(filename.endswith(".docx"))
+        self.assertGreater(len(data), 0)
+
+    def test_generate_pdf_report(self):
+        data, mime, filename = generate_report(self.sections, "PDF")
+        self.assertEqual(mime, "application/pdf")
+        self.assertTrue(filename.endswith(".pdf"))
+        self.assertGreater(len(data), 0)
+
+    def test_invalid_format_raises(self):
+        with self.assertRaises(ReportGenerationError):
+            generate_report(self.sections, "invalid")
+
+    def test_empty_sections_raise(self):
+        with self.assertRaises(ReportGenerationError):
+            generate_report([], "JSON")
+
+    def test_collect_report_sections_includes_explicit_chart_pack(self):
+        model = FinancialModel(load_inputs())
+        outputs = model.run()
+
+        sections = collect_report_sections(model, outputs)
+        chart_pack = next((section for section in sections if section.title == "Chart Pack"), None)
+
+        self.assertIsNotNone(chart_pack)
+        table_titles = {table.title for table in chart_pack.tables}
+        self.assertIn("Revenue & EBITDA Trend", table_titles)
+        self.assertIn("Cost Split Trend", table_titles)
+        self.assertIn("Cash Flow Trend", table_titles)
+        self.assertIn("Break-even Overview", table_titles)
+        self.assertIn("Monte Carlo Simulation Trend", table_titles)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()
