@@ -548,5 +548,51 @@ class UploadLoaderTests(unittest.TestCase):
         self.assertTrue(loaded["example"])
 
 
+class SetupTabRenderTests(unittest.TestCase):
+    def setUp(self):
+        self.setup_tab = importlib.import_module("pharma_financial.ui.tabs.setup")
+        self.app = importlib.import_module("pharma_financial.app")
+        self.original_streamlit = self.app.st
+        self.original_header = self.setup_tab.shell.render_section_header
+        self.original_collapsible = self.setup_tab._render_collapsible_section
+        self.original_table = self.setup_tab._render_table_like
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        fake_streamlit = types.SimpleNamespace(
+            session_state={"input_payload": payload},
+            markdown=lambda *args, **kwargs: None,
+        )
+        self.app.st = fake_streamlit
+
+        self.setup_tab.shell.render_section_header = lambda *args, **kwargs: None
+        self.setup_tab._render_collapsible_section = lambda *args, **kwargs: None
+        self.setup_tab._render_table_like = lambda *args, **kwargs: None
+
+    def tearDown(self):
+        self.app.st = self.original_streamlit
+        self.setup_tab.shell.render_section_header = self.original_header
+        self.setup_tab._render_collapsible_section = self.original_collapsible
+        self.setup_tab._render_table_like = self.original_table
+
+    def test_render_commercial_operations_keeps_outputs_available(self):
+        outputs = types.SimpleNamespace(
+            commercial_diagnostics=[{"metric": "Gross Margin", "value": "68%"}]
+        )
+
+        self.setup_tab.render_commercial_operations(None, None, outputs, "digest")
+
+    def test_render_funding_working_capital_keeps_outputs_available(self):
+        outputs = types.SimpleNamespace(
+            sources_and_uses=[{"source": "Equity", "amount": 100.0}],
+            covenant_headroom=[{"year": 2026, "headroom": 1.4}],
+        )
+
+        self.setup_tab.render_funding_working_capital(None, None, outputs, "digest")
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
