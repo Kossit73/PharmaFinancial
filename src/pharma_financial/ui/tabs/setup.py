@@ -493,7 +493,7 @@ def render_commercial_operations(
 ) -> None:
     from ... import app as legacy
 
-    del inputs, model, outputs, digest
+    del inputs, model, digest
     payload = legacy.st.session_state["input_payload"]
     shell.render_section_header(
         "Commercial & Operations",
@@ -567,7 +567,7 @@ def render_funding_working_capital(
 ) -> None:
     from ... import app as legacy
 
-    del inputs, model, outputs, digest
+    del inputs, model, digest
     payload = legacy.st.session_state["input_payload"]
     shell.render_section_header(
         "Funding & Working Capital",
