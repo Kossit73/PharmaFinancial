@@ -98,6 +98,38 @@ DEFAULT_INPUT_JSON = DEFAULT_INPUT_PATH.read_text(encoding="utf-8")
 DEFAULT_RISK_CATEGORIES = ["inherent", "climate", "political"]
 RUNTIME_STATE_FINGERPRINT_ENV = "PHARMA_RUNTIME_STATE_FINGERPRINT"
 RUNTIME_STATE_FINGERPRINT_KEY = "_pharma_runtime_state_fingerprint"
+_LEGACY_INVALID_DEFAULT_PAYLOAD_DIGESTS: frozenset[str] = frozenset(
+    {
+        "16a57793fd38cc8a583821d5465f309564ef9a5d3c19c006253353319e25fa4c",
+        "c4aa269fa2305ce9ab02641e6726408fd61b7a560dd45d8b4c6e529824ecb597",
+        "7b8137fcdaf193e645c06fdda935cb9b75b33c69a2d13ab83499ecd621ae93db",
+        "30a3dc6d353be584288fc132c971619ead17c94282a1318bb91994a679131534",
+        "c8a7b2ba0d4d805f70ebc78417e3eed68e81f369b33f60bf71aa13fa1070c27d",
+        "4f45f44febf20df3129e1780cf8f5e7e77977d932b445e6b39aa857942371db7",
+        "5eadc2d59a686b3fb80412038563d6c52e3237f1838576c0af45e2b029fc4125",
+        "7350f5fdc4e13e40e18be482a5db2e4884bf22c3fc6fc93ca7adf4ad3df40050",
+        "618e186ee04e30e08f0a387a1d2b3116b51cf0d3b40bf46f477b1517024d9de4",
+        "c5ac88311f6c95e6e7d2b8d815604d5e6ac19dc70fba803fe3a8207f153cd9b0",
+        "274a181f59fa6de0ba9bb8a1791e0143c172eca30ce862fd82b9d63fd7dfe8c3",
+        "c6a5d122aebe8d46c0de32be6a8c2d2320f2fce59a2bbac718d633b111504ead",
+        "2cf2f2dfb172ef69116dfb551559ae10b112d2a908317434aff00d33eaa47479",
+        "2e2fe0a3f7e36484be0cf07123fd0350e9d4a78edde8142b40727e11e651bbac",
+        "ef35ace45d185984fe6b70bebbef7967a910f0aaab368551f6ddae3e8cb0ad48",
+        "a8de4c9fd48136a69780fbc49442f91433b5bd975c0cdbbddaaabdd9c5c819c3",
+        "1ab27ad6627f8e1cfdc23722e517209b29e0b55e98b26b8ae235a613ed16da1a",
+        "68642007865ade4bacacbbc5feb7592e4709cb05de4465aec8215ffe3b120256",
+        "e36e22446ba4d7d9f6b9dc3c437f5d06f6b1367f7bd21f6a76d93e7815578f5d",
+        "0fa0db264db794ccc361ec15d38f810e35dae87e49554671dc1631c8b0d87ce5",
+        "39fa12215abedfcd01aa84f3f451dd32be44450e5313d5088e327cc0b645ab45",
+        "9fc4eb0259f73d963d12e8963a4ce055940dd635bfdd504baf5ae7f12498e441",
+        "ef7a35097070c43f502cdd66e22ab9f244fd2f702b4108beace4b682b1da5565",
+        "b627816217451e81caedc5e172c2a675ad233592c85ebd4b1f68b617cc49be9d",
+        "61c95fbd0bcb579e032917c1cd2889ca88a38670865df8720e496aba00d20a4c",
+        "adbccc87a02a06e52fd8aa298186e166c56a0ab21fa052d9e706b0a15ea8d461",
+        "aad9624cd34fb92c57690207fb43ee772646e83c76cb94771b198adeeb26ca4c",
+        "31e341d9271c4d2dfaa328919b3e4f6b5f1de5c69384590bb985ce15674f4758",
+    }
+)
 _DERIVED_STATE_KEYS: tuple[str, ...] = (
     "core_assumption_rows",
     "commission_rows",
@@ -210,16 +242,21 @@ def _looks_like_legacy_placeholder_payload(payload: Mapping[str, object]) -> boo
         return False
 
 
-def _refresh_runtime_session_state() -> bool:
-    runtime_fingerprint = _runtime_state_fingerprint()
-    previous_fingerprint = str(st.session_state.get(RUNTIME_STATE_FINGERPRINT_KEY, "") or "")
-    if previous_fingerprint == runtime_fingerprint:
-        return False
+def _default_input_payload() -> dict[str, object]:
+    return json.loads(DEFAULT_INPUT_JSON)
 
-    payload = st.session_state.get("input_payload")
-    if isinstance(payload, Mapping) and _looks_like_legacy_placeholder_payload(payload):
-        st.session_state["input_payload"] = json.loads(DEFAULT_INPUT_JSON)
 
+def _replacement_payload_for_legacy_defaults(
+    payload: Mapping[str, object],
+) -> dict[str, object] | None:
+    if _looks_like_legacy_placeholder_payload(payload):
+        return _default_input_payload()
+    if _payload_digest(payload) in _LEGACY_INVALID_DEFAULT_PAYLOAD_DIGESTS:
+        return _default_input_payload()
+    return None
+
+
+def _clear_payload_derived_state() -> None:
     for key in _DERIVED_STATE_KEYS + _RUNTIME_CACHE_KEYS:
         st.session_state.pop(key, None)
     for key in _ANALYSIS_CACHE_KEYS:
@@ -231,6 +268,21 @@ def _refresh_runtime_session_state() -> bool:
             continue
         if key.startswith(_RUNTIME_WIDGET_PREFIXES):
             st.session_state.pop(key, None)
+
+
+def _refresh_runtime_session_state() -> bool:
+    runtime_fingerprint = _runtime_state_fingerprint()
+    previous_fingerprint = str(st.session_state.get(RUNTIME_STATE_FINGERPRINT_KEY, "") or "")
+    if previous_fingerprint == runtime_fingerprint:
+        return False
+
+    payload = st.session_state.get("input_payload")
+    if isinstance(payload, Mapping):
+        replacement = _replacement_payload_for_legacy_defaults(payload)
+        if replacement is not None:
+            st.session_state["input_payload"] = replacement
+
+    _clear_payload_derived_state()
 
     st.session_state[RUNTIME_STATE_FINGERPRINT_KEY] = runtime_fingerprint
     return True
@@ -834,9 +886,15 @@ def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:
     with container:
         _refresh_runtime_session_state()
         if "input_payload" not in st.session_state:
-            _initialise_session_payload(json.loads(DEFAULT_INPUT_JSON))
+            _initialise_session_payload(_default_input_payload())
 
         payload = st.session_state["input_payload"]
+        if isinstance(payload, Mapping):
+            replacement = _replacement_payload_for_legacy_defaults(payload)
+            if replacement is not None:
+                st.session_state["input_payload"] = replacement
+                _clear_payload_derived_state()
+                payload = replacement
 
     _ai_settings_to_payload(st.session_state.get("ai_settings", {}), payload)
     rows = st.session_state.setdefault(
