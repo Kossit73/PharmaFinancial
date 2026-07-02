@@ -30,12 +30,36 @@ class _NoOp:
         return self
 
 
+class DummyColumn:
+    def __init__(self, owner):
+        self._owner = owner
+
+    def __getattr__(self, name):  # pragma: no cover - delegate to streamlit stub
+        return getattr(self._owner, name)
+
+
 class DummyStreamlit(types.ModuleType):
     def __init__(self):
         super().__init__("streamlit")
         self._no_op = _NoOp()
         self.calls: list[str] = []
         self.session_state: dict = {}
+        self.widget_values: dict[str, object] = {}
+        self.messages: list[tuple[str, str]] = []
+
+    def _remember(self, kind: str, message: object) -> None:
+        self.messages.append((kind, str(message)))
+
+    def _widget_value(self, key: str | None, default: object) -> object:
+        if key is not None and key in self.widget_values:
+            value = self.widget_values[key]
+            self.session_state[key] = value
+            return value
+        if key is not None and key in self.session_state:
+            return self.session_state[key]
+        if key is not None:
+            self.session_state[key] = default
+        return default
 
     def rerun(self):  # pragma: no cover - behaviour exercised in tests
         self.calls.append("rerun")
@@ -44,6 +68,68 @@ class DummyStreamlit(types.ModuleType):
     def experimental_rerun(self):  # pragma: no cover - exercised in tests
         self.calls.append("experimental_rerun")
         raise RuntimeError("experimental rerun not available")
+
+    def columns(self, spec):  # pragma: no cover - layout helper for UI tests
+        count = len(spec) if isinstance(spec, (list, tuple)) else int(spec)
+        return [DummyColumn(self) for _ in range(max(count, 1))]
+
+    def radio(self, _label, options, index=0, key=None, **_kwargs):
+        choices = list(options)
+        default = choices[index] if choices else None
+        return self._widget_value(key, default)
+
+    def selectbox(self, _label, options, index=0, key=None, **_kwargs):
+        choices = list(options)
+        default = choices[index] if choices else None
+        return self._widget_value(key, default)
+
+    def text_input(self, _label, value="", key=None, **_kwargs):
+        return self._widget_value(key, value)
+
+    def text_area(self, _label, value="", key=None, **_kwargs):
+        return self._widget_value(key, value)
+
+    def number_input(self, _label=None, value=0, key=None, **_kwargs):
+        return self._widget_value(key, value)
+
+    def checkbox(self, _label, value=False, key=None, **_kwargs):
+        return bool(self._widget_value(key, value))
+
+    def button(self, _label, key=None, **_kwargs):
+        if key is not None and key in self.widget_values:
+            return bool(self.widget_values.pop(key))
+        return False
+
+    def data_editor(self, data, key=None, **_kwargs):
+        if hasattr(data, "to_dict"):
+            default = data.to_dict("records")
+        else:
+            default = data
+        return self._widget_value(key, default)
+
+    def caption(self, message):
+        self._remember("caption", message)
+        return None
+
+    def warning(self, message):
+        self._remember("warning", message)
+        return None
+
+    def success(self, message):
+        self._remember("success", message)
+        return None
+
+    def info(self, message):
+        self._remember("info", message)
+        return None
+
+    def markdown(self, message):
+        self._remember("markdown", message)
+        return None
+
+    def subheader(self, message):
+        self._remember("subheader", message)
+        return None
 
     def __getattr__(self, name):  # pragma: no cover - fallback for unused attrs
         return getattr(self._no_op, name, self._no_op)
@@ -178,6 +264,93 @@ class RerunHelperTest(unittest.TestCase):
         self.assertEqual(len(merged), 1)
         self.assertTrue(merged[0]["__has_fixed__"])
         self.assertEqual(merged[0]["Fixed Cost"], 12.0)
+
+    def test_selectable_row_editor_requires_explicit_save(self):
+        rows = [{"Role": "Operator", "Annual Cost": 1200.0}]
+        editor_key = "row_editor_test"
+        field_key = self.app._editor_state_key(editor_key, "row_field::Role")
+        self.stub.widget_values[f"{editor_key}_mode"] = "row"
+        self.stub.widget_values[field_key] = "Supervisor"
+
+        first_result = self.app._render_selectable_data_editor(
+            rows,
+            key=editor_key,
+            label_builder=lambda row, index: self.app._editor_row_label(
+                row,
+                index,
+                name_fields=("Role",),
+                fallback_prefix="Role",
+            ),
+        )
+
+        self.assertEqual(first_result, rows)
+        draft_rows = self.stub.session_state[self.app._editor_state_key(editor_key, "draft_rows")]
+        saved_rows = self.stub.session_state[self.app._editor_state_key(editor_key, "saved_rows")]
+        self.assertEqual(draft_rows[0]["Role"], "Supervisor")
+        self.assertEqual(saved_rows[0]["Role"], "Operator")
+
+        self.stub.widget_values[f"{editor_key}_mode"] = "row"
+        self.stub.widget_values[field_key] = "Supervisor"
+        self.stub.widget_values[f"{editor_key}_row_save"] = True
+        second_result = self.app._render_selectable_data_editor(
+            rows,
+            key=editor_key,
+            label_builder=lambda row, index: self.app._editor_row_label(
+                row,
+                index,
+                name_fields=("Role",),
+                fallback_prefix="Role",
+            ),
+        )
+
+        self.assertEqual(second_result[0]["Role"], "Supervisor")
+        committed_rows = self.stub.session_state[self.app._editor_state_key(editor_key, "saved_rows")]
+        self.assertEqual(committed_rows[0]["Role"], "Supervisor")
+
+    def test_selectable_full_editor_applies_only_after_explicit_button(self):
+        rows = [{"Year": 2026, "Rate": 0.05}]
+        editor_key = "full_editor_test"
+        editor_widget_key = f"{editor_key}_full_editor_v0"
+        edited_rows = [{"Year": 2026, "Rate": 0.08}]
+
+        self.stub.widget_values[f"{editor_key}_mode"] = "full"
+        self.stub.widget_values[editor_widget_key] = edited_rows
+        first_result = self.app._render_selectable_data_editor(
+            rows,
+            key=editor_key,
+            label_builder=lambda row, index: self.app._editor_row_label(
+                row,
+                index,
+                year_fields=("Year",),
+                fallback_prefix="Year",
+            ),
+        )
+
+        self.assertEqual(first_result, rows)
+        self.assertEqual(
+            self.stub.session_state[self.app._editor_state_key(editor_key, "draft_rows")],
+            edited_rows,
+        )
+
+        self.stub.widget_values[f"{editor_key}_mode"] = "full"
+        self.stub.widget_values[editor_widget_key] = edited_rows
+        self.stub.widget_values[f"{editor_key}_full_apply"] = True
+        second_result = self.app._render_selectable_data_editor(
+            rows,
+            key=editor_key,
+            label_builder=lambda row, index: self.app._editor_row_label(
+                row,
+                index,
+                year_fields=("Year",),
+                fallback_prefix="Year",
+            ),
+        )
+
+        self.assertEqual(second_result, edited_rows)
+        self.assertEqual(
+            self.stub.session_state[self.app._editor_state_key(editor_key, "saved_rows")],
+            edited_rows,
+        )
 
     def test_projection_horizon_dropdown_updates_years(self):
         payload = json.loads(
