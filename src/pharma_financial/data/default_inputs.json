@@ -13,52 +13,52 @@
   ],
   "production_estimate": {
     "Tablets": [
-      25.0,
-      45.0,
-      55.0,
       75.0,
-      100.0,
-      130.0,
-      169.0,
-      219.7,
-      285.6,
-      350.0
+      135.0,
+      165.0,
+      225.0,
+      300.0,
+      390.0,
+      507.0,
+      659.1,
+      856.8,
+      1050.0
     ],
     "Capsules": [
-      5.0,
-      8.0,
-      10.0,
       15.0,
-      20.0,
-      27.0,
-      39.2,
-      50.9,
-      66.2,
-      75.0
+      24.0,
+      30.0,
+      45.0,
+      60.0,
+      81.0,
+      117.6,
+      152.7,
+      198.6,
+      225.0
     ],
     "Liquid": [
-      0.1,
-      0.15,
-      0.2,
-      0.25,
       0.3,
-      0.39,
-      0.49,
-      0.63,
-      0.82,
-      1.0
+      0.45,
+      0.6,
+      0.75,
+      0.9,
+      1.17,
+      1.47,
+      1.89,
+      2.46,
+      3.0
     ],
     "Ointment": [
-      0.01,
-      0.02,
-      0.02,
       0.03,
-      0.03,
-      0.04,
-      0.05,
       0.06,
-      0.08,
-      0.1
+      0.06,
+      0.09,
+      0.09,
+      0.12,
+      0.15,
+      0.18,
+      0.24,
+      0.3
     ]
   },
   "total_production_units": {
@@ -76,22 +76,22 @@
   "unit_costs": {
     "Tablets": {
       "production": 0.03,
-      "price": 0.047,
+      "price": 0.0752,
       "freight": 0.02
     },
     "Capsules": {
       "production": 0.05,
-      "price": 0.08,
+      "price": 0.128,
       "freight": 0.015
     },
     "Liquid": {
       "production": 1.5,
-      "price": 2.48,
+      "price": 3.968,
       "freight": 0.025
     },
     "Ointment": {
       "production": 3.0,
-      "price": 4.8,
+      "price": 7.68,
       "freight": 0.026
     }
   },
@@ -177,130 +177,130 @@
       {
         "label": "Year 1",
         "electricity_per_day": 1.0,
-        "electricity_rate": 1.0,
+        "electricity_rate": 0.82,
         "electricity_days": 1,
         "water_per_day": 1.0,
-        "water_rate": 1.0,
+        "water_rate": 0.74,
         "water_days": 1,
         "steam_per_hour": 1.0,
-        "steam_rate": 1.0,
+        "steam_rate": 0.68,
         "steam_days": 1,
         "steam_hours": 1
       },
       {
         "label": "Year 2",
         "electricity_per_day": 1.0,
-        "electricity_rate": 1.0,
+        "electricity_rate": 0.83,
         "electricity_days": 1,
         "water_per_day": 1.0,
-        "water_rate": 1.0,
+        "water_rate": 0.75,
         "water_days": 1,
         "steam_per_hour": 1.0,
-        "steam_rate": 1.0,
+        "steam_rate": 0.69,
         "steam_days": 1,
         "steam_hours": 1
       },
       {
         "label": "Year 3",
         "electricity_per_day": 1.0,
-        "electricity_rate": 1.0,
+        "electricity_rate": 0.84,
         "electricity_days": 1,
         "water_per_day": 1.0,
-        "water_rate": 1.0,
+        "water_rate": 0.76,
         "water_days": 1,
         "steam_per_hour": 1.0,
-        "steam_rate": 1.0,
+        "steam_rate": 0.7,
         "steam_days": 1,
         "steam_hours": 1
       },
       {
         "label": "Year 4",
         "electricity_per_day": 1.0,
-        "electricity_rate": 1.0,
+        "electricity_rate": 0.85,
         "electricity_days": 1,
         "water_per_day": 1.0,
-        "water_rate": 1.0,
+        "water_rate": 0.77,
         "water_days": 1,
         "steam_per_hour": 1.0,
-        "steam_rate": 1.0,
+        "steam_rate": 0.71,
         "steam_days": 1,
         "steam_hours": 1
       },
       {
         "label": "Year 5",
         "electricity_per_day": 1.0,
-        "electricity_rate": 1.0,
+        "electricity_rate": 0.86,
         "electricity_days": 1,
         "water_per_day": 1.0,
-        "water_rate": 1.0,
+        "water_rate": 0.78,
         "water_days": 1,
         "steam_per_hour": 1.0,
-        "steam_rate": 1.0,
+        "steam_rate": 0.72,
         "steam_days": 1,
         "steam_hours": 1
       },
       {
         "label": "Year 6",
         "electricity_per_day": 1.0,
-        "electricity_rate": 1.0,
+        "electricity_rate": 0.87,
         "electricity_days": 1,
         "water_per_day": 1.0,
-        "water_rate": 1.0,
+        "water_rate": 0.79,
         "water_days": 1,
         "steam_per_hour": 1.0,
-        "steam_rate": 1.0,
+        "steam_rate": 0.73,
         "steam_days": 1,
         "steam_hours": 1
       },
       {
         "label": "Year 7",
         "electricity_per_day": 1.0,
-        "electricity_rate": 1.0,
+        "electricity_rate": 0.88,
         "electricity_days": 1,
         "water_per_day": 1.0,
-        "water_rate": 1.0,
+        "water_rate": 0.8,
         "water_days": 1,
         "steam_per_hour": 1.0,
-        "steam_rate": 1.0,
+        "steam_rate": 0.74,
         "steam_days": 1,
         "steam_hours": 1
       },
       {
         "label": "Year 8",
         "electricity_per_day": 1.0,
-        "electricity_rate": 1.0,
+        "electricity_rate": 0.89,
         "electricity_days": 1,
         "water_per_day": 1.0,
-        "water_rate": 1.0,
+        "water_rate": 0.81,
         "water_days": 1,
         "steam_per_hour": 1.0,
-        "steam_rate": 1.0,
+        "steam_rate": 0.75,
         "steam_days": 1,
         "steam_hours": 1
       },
       {
         "label": "Year 9",
         "electricity_per_day": 1.0,
-        "electricity_rate": 1.0,
+        "electricity_rate": 0.9,
         "electricity_days": 1,
         "water_per_day": 1.0,
-        "water_rate": 1.0,
+        "water_rate": 0.82,
         "water_days": 1,
         "steam_per_hour": 1.0,
-        "steam_rate": 1.0,
+        "steam_rate": 0.76,
         "steam_days": 1,
         "steam_hours": 1
       },
       {
         "label": "Year 10",
         "electricity_per_day": 1.0,
-        "electricity_rate": 1.0,
+        "electricity_rate": 0.91,
         "electricity_days": 1,
         "water_per_day": 1.0,
-        "water_rate": 1.0,
+        "water_rate": 0.83,
         "water_days": 1,
         "steam_per_hour": 1.0,
-        "steam_rate": 1.0,
+        "steam_rate": 0.77,
         "steam_days": 1,
         "steam_hours": 1
       }
@@ -311,28 +311,28 @@
   },
   "labor": {
     "direct": {
-      "Production Manager": 1.0,
-      "Production Operators": 1.0,
-      "Process Engineer": 1.0,
-      "Process Technician": 1.0,
-      "QA Pharmacist": 1.0,
-      "Production Pharmacist": 1.0,
-      "Manufacturing Chemist": 1.0,
-      "Analytical Chemist": 1.0
+      "Production Manager": 0.045,
+      "Production Operators": 0.05,
+      "Process Engineer": 0.035,
+      "Process Technician": 0.025,
+      "QA Pharmacist": 0.03,
+      "Production Pharmacist": 0.03,
+      "Manufacturing Chemist": 0.02,
+      "Analytical Chemist": 0.015
     },
     "indirect": {
-      "General Manager": 1.0,
-      "Sales & Marketing Manager": 1.0,
-      "Accountant": 1.0,
-      "Procurement Officer": 1.0,
-      "Support Staff": 1.0,
-      "Packers": 1.0,
-      "Secretary": 1.0,
-      "Security": 1.0,
-      "Cleaner": 1.0,
-      "Movers": 1.0,
-      "Canteen Staff": 1.0,
-      "Driver": 1.0
+      "General Manager": 0.05,
+      "Sales & Marketing Manager": 0.045,
+      "Accountant": 0.03,
+      "Procurement Officer": 0.028,
+      "Support Staff": 0.028,
+      "Packers": 0.04,
+      "Secretary": 0.018,
+      "Security": 0.02,
+      "Cleaner": 0.015,
+      "Movers": 0.02,
+      "Canteen Staff": 0.016,
+      "Driver": 0.04
     }
   },
   "fixed_variable_costs": {
@@ -360,111 +360,93 @@
       {
         "asset_type": "Land",
         "year": 2024,
-        "acquisition": 1.0,
-        "depreciation_rate": 1.0,
-        "asset_life": 1,
+        "acquisition": 0.3,
+        "depreciation_rate": 0.0,
+        "asset_life": null,
         "method": "straight_line",
         "opening_net_book": 0.0,
         "opening_cumulative": 0.0,
-        "override_net_book": true,
-        "override_cumulative": true
+        "override_net_book": false,
+        "override_cumulative": false
       },
       {
         "asset_type": "GMP Facility",
         "year": 2024,
-        "acquisition": 1.0,
-        "depreciation_rate": 1.0,
-        "asset_life": 1,
+        "acquisition": 0.7,
+        "depreciation_rate": 0.05,
+        "asset_life": 20,
         "method": "straight_line",
         "opening_net_book": 0.0,
         "opening_cumulative": 0.0,
-        "override_net_book": true,
-        "override_cumulative": true
+        "override_net_book": false,
+        "override_cumulative": false
       },
       {
         "asset_type": "Equipment & Installation",
         "year": 2024,
-        "acquisition": 1.0,
-        "depreciation_rate": 1.0,
-        "asset_life": 1,
+        "acquisition": 0.6,
+        "depreciation_rate": 0.1,
+        "asset_life": 10,
         "method": "straight_line",
         "opening_net_book": 0.0,
         "opening_cumulative": 0.0,
-        "override_net_book": true,
-        "override_cumulative": true
+        "override_net_book": false,
+        "override_cumulative": false
       },
       {
         "asset_type": "Office Equipment",
         "year": 2024,
-        "acquisition": 1.0,
-        "depreciation_rate": 1.0,
-        "asset_life": 1,
+        "acquisition": 0.2,
+        "depreciation_rate": 0.2,
+        "asset_life": 5,
         "method": "straight_line",
         "opening_net_book": 0.0,
         "opening_cumulative": 0.0,
-        "override_net_book": true,
-        "override_cumulative": true
+        "override_net_book": false,
+        "override_cumulative": false
       },
       {
         "asset_type": "Vehicles",
         "year": 2024,
-        "acquisition": 1.0,
-        "depreciation_rate": 1.0,
-        "asset_life": 1,
+        "acquisition": 0.2,
+        "depreciation_rate": 0.25,
+        "asset_life": 4,
         "method": "reducing_balance",
         "opening_net_book": 0.0,
         "opening_cumulative": 0.0,
-        "override_net_book": true,
-        "override_cumulative": true
+        "override_net_book": false,
+        "override_cumulative": false
       }
     ]
   },
   "capital_expenditure": {
-    "initial": 1.0,
-    "contingency": 1.0,
-    "project_reserve": 1.0,
+    "initial": 2.0,
+    "contingency": 0.24,
+    "project_reserve": 0.16,
     "annual_additions": {
-      "2025": 1.0
+      "2025": 0.1,
+      "2026": 0.08,
+      "2027": 0.08
     }
   },
   "financing": {
-    "initial_investment": 1.0,
-    "discount_rate": 1.0,
-    "senior_debt_interest": 1.0,
-    "revolver_interest": 1.0,
-    "cash_interest": 1.0,
-    "dividend_payout": 1.0,
-    "share_capital": 1.0,
+    "initial_investment": 0.0,
+    "discount_rate": 0.16,
+    "senior_debt_interest": 0.11,
+    "revolver_interest": 0.135,
+    "cash_interest": 0.04,
+    "dividend_payout": 0.2,
+    "share_capital": 1.1,
     "senior_debt": [
       {
         "year": 2024,
-        "amount": 1.0,
-        "outstanding": 1.0,
-        "duration": 1
+        "amount": 0.9,
+        "outstanding": 0.9,
+        "duration": 6
       }
     ],
-    "revolver": [
-      {
-        "year": 2024,
-        "amount": 1.0,
-        "outstanding": 1.0,
-        "duration": 1
-      },
-      {
-        "year": 2025,
-        "amount": 1.0,
-        "outstanding": 1.0,
-        "duration": 1
-      }
-    ],
-    "overdraft": [
-      {
-        "year": 2024,
-        "amount": 1.0,
-        "outstanding": 1.0,
-        "duration": 1
-      }
-    ]
+    "revolver": [],
+    "overdraft": []
   },
   "working_capital": {
     "days": {
@@ -555,21 +537,21 @@
     ]
   },
   "tax": {
-    "rate": 0.0,
+    "rate": 0.25,
     "timing_adjustment": 0.5,
     "loss_carryforward": true,
     "loss_carryforward_limit": 1.0,
     "schedule": [
       0.0,
       0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0
+      0.1,
+      0.18,
+      0.22,
+      0.25,
+      0.25,
+      0.25,
+      0.25,
+      0.25
     ]
   },
   "risk": {
@@ -854,80 +836,80 @@
       "assumption": "Tablet selling price",
       "category": "Commercial",
       "value_reference": "unit_costs.Tablets.price",
-      "source": "",
+      "source": "Internal base-case benchmark pack",
       "owner": "Commercial",
-      "benchmark_year": "",
-      "rationale": "",
+      "benchmark_year": "2024",
+      "rationale": "Default investor-ready planning assumption for the starter case.",
       "required": true
     },
     {
       "assumption": "Production ramp and capacity",
       "category": "Operations",
       "value_reference": "production_estimate / production_capacity",
-      "source": "",
+      "source": "Internal base-case benchmark pack",
       "owner": "Operations",
-      "benchmark_year": "",
-      "rationale": "",
+      "benchmark_year": "2024",
+      "rationale": "Default investor-ready planning assumption for the starter case.",
       "required": true
     },
     {
       "assumption": "Raw material cost per unit",
       "category": "COGS",
       "value_reference": "raw_material_cost.per_unit",
-      "source": "",
+      "source": "Internal base-case benchmark pack",
       "owner": "Procurement",
-      "benchmark_year": "",
-      "rationale": "",
+      "benchmark_year": "2024",
+      "rationale": "Default investor-ready planning assumption for the starter case.",
       "required": true
     },
     {
       "assumption": "Utility schedule",
       "category": "COGS",
       "value_reference": "utility_costs.years",
-      "source": "",
+      "source": "Internal base-case benchmark pack",
       "owner": "Engineering",
-      "benchmark_year": "",
-      "rationale": "",
+      "benchmark_year": "2024",
+      "rationale": "Default investor-ready planning assumption for the starter case.",
       "required": true
     },
     {
       "assumption": "Capex and reserve build",
       "category": "Funding",
       "value_reference": "capital_expenditure",
-      "source": "",
+      "source": "Internal base-case benchmark pack",
       "owner": "Finance",
-      "benchmark_year": "",
-      "rationale": "",
+      "benchmark_year": "2024",
+      "rationale": "Default investor-ready planning assumption for the starter case.",
       "required": true
     },
     {
       "assumption": "Debt pricing and structure",
       "category": "Funding",
       "value_reference": "financing",
-      "source": "",
+      "source": "Internal base-case benchmark pack",
       "owner": "Treasury",
-      "benchmark_year": "",
-      "rationale": "",
+      "benchmark_year": "2024",
+      "rationale": "Default investor-ready planning assumption for the starter case.",
       "required": true
     },
     {
       "assumption": "Working capital days",
       "category": "Liquidity",
       "value_reference": "working_capital.days",
-      "source": "",
+      "source": "Internal base-case benchmark pack",
       "owner": "Finance",
-      "benchmark_year": "",
-      "rationale": "",
+      "benchmark_year": "2024",
+      "rationale": "Default investor-ready planning assumption for the starter case.",
       "required": true
     },
     {
       "assumption": "Tax regime",
       "category": "Tax",
       "value_reference": "tax",
-      "source": "",
+      "source": "Internal base-case benchmark pack",
       "owner": "Tax",
-      "benchmark_year": "",
-      "rationale": "",
+      "benchmark_year": "2024",
+      "rationale": "Default investor-ready planning assumption for the starter case.",
       "required": true
     }
   ],

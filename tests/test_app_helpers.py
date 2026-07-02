@@ -89,6 +89,18 @@ class RerunHelperTest(unittest.TestCase):
         self.assertEqual(self.stub.calls, ["rerun", "experimental_rerun"])
 
     def test_summary_metric_returns_none_for_non_finite_values(self):
+        outputs = types.SimpleNamespace(
+            summary_metrics=self.app.Table(
+                ["IRR", "Payback Period"],
+                {"Value": [float("nan"), float("inf")]},
+                index_name="Metric",
+            )
+        )
+
+        self.assertIsNone(self.app._summary_metric(outputs, "IRR"))
+        self.assertIsNone(self.app._summary_metric(outputs, "Payback Period"))
+
+    def test_summary_metric_returns_default_case_values(self):
         payload = json.loads(
             Path("src/pharma_financial/data/default_inputs.json").read_text(
                 encoding="utf-8"
@@ -98,13 +110,43 @@ class RerunHelperTest(unittest.TestCase):
         model = self.app.FinancialModel(inputs)
         outputs = model.run_core()
 
-        self.assertIsNone(self.app._summary_metric(outputs, "IRR"))
-        self.assertIsNone(self.app._summary_metric(outputs, "Payback Period"))
+        irr = self.app._summary_metric(outputs, "IRR")
+        payback = self.app._summary_metric(outputs, "Payback Period")
+
+        self.assertIsNotNone(irr)
+        self.assertIsNotNone(payback)
+        assert irr is not None
+        assert payback is not None
+        self.assertGreater(irr, 0.0)
+        self.assertGreaterEqual(payback, 0.0)
 
     def test_format_number_returns_na_for_nan(self):
         self.assertEqual(self.app._format_number(float("nan")), "N/A")
 
     def test_irr_diagnostic_message_explains_missing_sign_change(self):
+        cash_flow = self.app.Table(
+            [2024, 2025, 2026],
+            {self.app.CASH_FLOW_NET_COLUMN: [-3.0, -2.0, -1.0]},
+        )
+        irr_info = types.SimpleNamespace(
+            converged=False,
+            value=float("nan"),
+            message="Cash flows do not change sign, so IRR is undefined.",
+            method="no_sign_change",
+        )
+        model = types.SimpleNamespace(
+            irr_diagnostics=lambda: irr_info,
+            cash_flow_statement=lambda: cash_flow,
+        )
+
+        message = self.app._irr_diagnostic_message(model)
+
+        self.assertIsNotNone(message)
+        assert message is not None
+        self.assertIn("Cash flows do not change sign", message)
+        self.assertIn("All projected net cash flow periods are non-positive", message)
+
+    def test_irr_diagnostic_message_returns_none_when_irr_available(self):
         payload = json.loads(
             Path("src/pharma_financial/data/default_inputs.json").read_text(
                 encoding="utf-8"
@@ -114,12 +156,28 @@ class RerunHelperTest(unittest.TestCase):
         model = self.app.FinancialModel(inputs)
         model.run_core()
 
-        message = self.app._irr_diagnostic_message(model)
+        self.assertIsNone(self.app._irr_diagnostic_message(model))
 
-        self.assertIsNotNone(message)
-        assert message is not None
-        self.assertIn("Cash flows do not change sign", message)
-        self.assertIn("All projected net cash flow periods are non-positive", message)
+    def test_editor_row_label_combines_name_and_year(self):
+        label = self.app._editor_row_label(
+            {"Product": "Tablets", "Year": 2027},
+            0,
+            name_fields=("Product",),
+            year_fields=("Year",),
+            fallback_prefix="Row",
+        )
+
+        self.assertEqual(label, "Tablets | 2027")
+
+    def test_merge_editor_row_updates_preserves_hidden_fields(self):
+        merged = self.app._merge_editor_row_updates(
+            [{"Product": "Tablets", "__has_fixed__": True, "Fixed Cost": 10.0}],
+            [{"Product": "Tablets", "Fixed Cost": 12.0}],
+        )
+
+        self.assertEqual(len(merged), 1)
+        self.assertTrue(merged[0]["__has_fixed__"])
+        self.assertEqual(merged[0]["Fixed Cost"], 12.0)
 
     def test_projection_horizon_dropdown_updates_years(self):
         payload = json.loads(
