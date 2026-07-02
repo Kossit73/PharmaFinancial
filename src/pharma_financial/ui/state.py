@@ -78,6 +78,7 @@ def resolve_model_outputs(
 ) -> tuple[FinancialModel | None, FinancialOutputs | None]:
     from .. import app as legacy
 
+    legacy._refresh_runtime_session_state()
     run_requested = bool(legacy.st.session_state.pop("run_requested", False))
     last_digest = legacy.st.session_state.get("last_run_digest")
     model = legacy.st.session_state.get("last_model")

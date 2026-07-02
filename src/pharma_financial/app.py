@@ -6,6 +6,7 @@ import csv
 import hashlib
 import io
 import json
+import os
 import re
 from dataclasses import replace
 from datetime import datetime
@@ -95,6 +96,144 @@ except Exception:  # pragma: no cover - import guard when package missing
 DEFAULT_INPUT_PATH = Path(__file__).resolve().parent / "data" / "default_inputs.json"
 DEFAULT_INPUT_JSON = DEFAULT_INPUT_PATH.read_text(encoding="utf-8")
 DEFAULT_RISK_CATEGORIES = ["inherent", "climate", "political"]
+RUNTIME_STATE_FINGERPRINT_ENV = "PHARMA_RUNTIME_STATE_FINGERPRINT"
+RUNTIME_STATE_FINGERPRINT_KEY = "_pharma_runtime_state_fingerprint"
+_DERIVED_STATE_KEYS: tuple[str, ...] = (
+    "core_assumption_rows",
+    "commission_rows",
+    "utility_entries",
+    "receivable_rows",
+    "inventory_rows",
+    "direct_labor_rows",
+    "indirect_labor_rows",
+    "labor_model_rows",
+    "labor_model_settings_rows",
+    "fixed_variable_rows",
+    "break_even_rows",
+    "depreciation_rows",
+    "inflation_rows",
+    "risk_rows",
+    "sensitivity_rows",
+    "senior_debt_rows",
+    "revolver_rows",
+    "overdraft_rows",
+    "tax_entries",
+)
+_RUNTIME_CACHE_KEYS: tuple[str, ...] = (
+    "last_model",
+    "last_outputs",
+    "last_run_digest",
+    "run_requested",
+)
+_RUNTIME_WIDGET_PREFIXES: tuple[str, ...] = (
+    "core_",
+    "commission_",
+    "utility_",
+    "receivable_",
+    "inventory_",
+    "direct_labor_",
+    "indirect_labor_",
+    "labor_model_",
+    "fixed_variable_",
+    "break_even_",
+    "dep_",
+    "inflation_",
+    "risk_",
+    "sensitivity_",
+    "senior_debt_",
+    "senior_debt_rows_",
+    "revolver_",
+    "revolver_rows_",
+    "overdraft_",
+    "overdraft_rows_",
+    "tax_",
+    "finance_",
+    "raw_material_",
+)
+
+
+def _runtime_state_fingerprint() -> str:
+    env_value = os.environ.get(RUNTIME_STATE_FINGERPRINT_ENV, "").strip()
+    if env_value:
+        return env_value
+
+    hasher = hashlib.sha256()
+    for path in (
+        Path(__file__).resolve(),
+        Path(__file__).resolve().parent / "ui" / "state.py",
+        DEFAULT_INPUT_PATH,
+    ):
+        hasher.update(path.name.encode("utf-8"))
+        try:
+            hasher.update(path.read_bytes())
+        except OSError:
+            hasher.update(str(path).encode("utf-8"))
+    return hasher.hexdigest()
+
+
+def _looks_like_legacy_placeholder_payload(payload: Mapping[str, object]) -> bool:
+    capex = payload.get("capital_expenditure")
+    financing = payload.get("financing")
+    if not isinstance(capex, Mapping) or not isinstance(financing, Mapping):
+        return False
+
+    placeholder_values = (
+        capex.get("initial"),
+        capex.get("contingency"),
+        capex.get("project_reserve"),
+        financing.get("initial_investment"),
+        financing.get("discount_rate"),
+        financing.get("senior_debt_interest"),
+        financing.get("revolver_interest"),
+        financing.get("cash_interest"),
+        financing.get("dividend_payout"),
+        financing.get("share_capital"),
+    )
+    try:
+        if not all(abs(float(value) - 1.0) < 1e-9 for value in placeholder_values):
+            return False
+    except (TypeError, ValueError):
+        return False
+
+    senior_debt = financing.get("senior_debt")
+    if not isinstance(senior_debt, Sequence) or not senior_debt:
+        return False
+    first_entry = senior_debt[0]
+    if not isinstance(first_entry, Mapping):
+        return False
+    try:
+        return (
+            abs(float(first_entry.get("amount", 0.0)) - 1.0) < 1e-9
+            and abs(float(first_entry.get("outstanding", 0.0)) - 1.0) < 1e-9
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _refresh_runtime_session_state() -> bool:
+    runtime_fingerprint = _runtime_state_fingerprint()
+    previous_fingerprint = str(st.session_state.get(RUNTIME_STATE_FINGERPRINT_KEY, "") or "")
+    if previous_fingerprint == runtime_fingerprint:
+        return False
+
+    payload = st.session_state.get("input_payload")
+    if isinstance(payload, Mapping) and _looks_like_legacy_placeholder_payload(payload):
+        st.session_state["input_payload"] = json.loads(DEFAULT_INPUT_JSON)
+
+    for key in _DERIVED_STATE_KEYS + _RUNTIME_CACHE_KEYS:
+        st.session_state.pop(key, None)
+    for key in _ANALYSIS_CACHE_KEYS:
+        st.session_state.pop(key, None)
+        st.session_state.pop(f"{key}_digest", None)
+
+    for key in list(st.session_state):
+        if key == RUNTIME_STATE_FINGERPRINT_KEY:
+            continue
+        if key.startswith(_RUNTIME_WIDGET_PREFIXES):
+            st.session_state.pop(key, None)
+
+    st.session_state[RUNTIME_STATE_FINGERPRINT_KEY] = runtime_fingerprint
+    return True
 
 
 def _inject_app_theme() -> None:
@@ -693,6 +832,7 @@ def main() -> None:
 
 def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:
     with container:
+        _refresh_runtime_session_state()
         if "input_payload" not in st.session_state:
             _initialise_session_payload(json.loads(DEFAULT_INPUT_JSON))
 
@@ -9789,27 +9929,7 @@ def _parse_year_number(label: str) -> int | None:
 #               directly (setdefault is a no-op when the key already exists).
 # ---------------------------------------------------------------------------
 
-_PHARMA_ROW_KEYS: list[str] = [
-    "core_assumption_rows",
-    "commission_rows",
-    "utility_entries",
-    "receivable_rows",
-    "inventory_rows",
-    "direct_labor_rows",
-    "indirect_labor_rows",
-    "labor_model_rows",
-    "labor_model_settings_rows",
-    "fixed_variable_rows",
-    "break_even_rows",
-    "depreciation_rows",
-    "inflation_rows",
-    "risk_rows",
-    "sensitivity_rows",
-    "senior_debt_rows",
-    "revolver_rows",
-    "overdraft_rows",
-    "tax_entries",
-]
+_PHARMA_ROW_KEYS: list[str] = list(_DERIVED_STATE_KEYS)
 
 
 def get_state() -> dict:

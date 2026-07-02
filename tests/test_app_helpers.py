@@ -1,5 +1,6 @@
 import importlib
 import json
+import os
 import sys
 import types
 import unittest
@@ -139,6 +140,9 @@ class RerunHelperTest(unittest.TestCase):
     def setUp(self):
         self.original_streamlit = sys.modules.get("streamlit")
         self.original_runtime = sys.modules.get("streamlit.runtime")
+        self.original_runtime_fingerprint_env = os.environ.get(
+            "PHARMA_RUNTIME_STATE_FINGERPRINT"
+        )
 
         stub = DummyStreamlit()
         runtime = types.ModuleType("streamlit.runtime")
@@ -157,6 +161,13 @@ class RerunHelperTest(unittest.TestCase):
         self.app._MODEL_CACHE.clear()
 
     def tearDown(self):
+        if self.original_runtime_fingerprint_env is None:
+            os.environ.pop("PHARMA_RUNTIME_STATE_FINGERPRINT", None)
+        else:
+            os.environ["PHARMA_RUNTIME_STATE_FINGERPRINT"] = (
+                self.original_runtime_fingerprint_env
+            )
+
         if self.original_streamlit is None:
             sys.modules.pop("streamlit", None)
         else:
@@ -243,6 +254,91 @@ class RerunHelperTest(unittest.TestCase):
         model.run_core()
 
         self.assertIsNone(self.app._irr_diagnostic_message(model))
+
+    def test_refresh_runtime_session_state_replaces_legacy_placeholder_payload(self):
+        default_payload = json.loads(self.app.DEFAULT_INPUT_JSON)
+        placeholder_payload = json.loads(self.app.DEFAULT_INPUT_JSON)
+        placeholder_payload["capital_expenditure"]["initial"] = 1.0
+        placeholder_payload["capital_expenditure"]["contingency"] = 1.0
+        placeholder_payload["capital_expenditure"]["project_reserve"] = 1.0
+        placeholder_payload["financing"]["initial_investment"] = 1.0
+        placeholder_payload["financing"]["discount_rate"] = 1.0
+        placeholder_payload["financing"]["senior_debt_interest"] = 1.0
+        placeholder_payload["financing"]["revolver_interest"] = 1.0
+        placeholder_payload["financing"]["cash_interest"] = 1.0
+        placeholder_payload["financing"]["dividend_payout"] = 1.0
+        placeholder_payload["financing"]["share_capital"] = 1.0
+        placeholder_payload["financing"]["senior_debt"][0]["amount"] = 1.0
+        placeholder_payload["financing"]["senior_debt"][0]["outstanding"] = 1.0
+
+        os.environ["PHARMA_RUNTIME_STATE_FINGERPRINT"] = "runtime-v2"
+        self.stub.session_state.update(
+            {
+                self.app.RUNTIME_STATE_FINGERPRINT_KEY: "runtime-v1",
+                "input_payload": placeholder_payload,
+                "last_model": object(),
+                "last_outputs": object(),
+                "last_run_digest": "stale-digest",
+                "run_requested": True,
+                "core_assumption_rows": [{"name": "stale"}],
+                "senior_debt_rows_amount_0": 1.0,
+                "finance_share_capital": 1.0,
+                "sensitivity_results": {"stale": True},
+                "sensitivity_results_digest": "stale",
+            }
+        )
+
+        refreshed = self.app._refresh_runtime_session_state()
+
+        self.assertTrue(refreshed)
+        self.assertEqual(
+            self.stub.session_state[self.app.RUNTIME_STATE_FINGERPRINT_KEY],
+            "runtime-v2",
+        )
+        self.assertEqual(
+            self.stub.session_state["input_payload"]["capital_expenditure"]["initial"],
+            default_payload["capital_expenditure"]["initial"],
+        )
+        self.assertEqual(
+            self.stub.session_state["input_payload"]["financing"]["discount_rate"],
+            default_payload["financing"]["discount_rate"],
+        )
+        self.assertEqual(
+            self.stub.session_state["input_payload"]["financing"]["share_capital"],
+            default_payload["financing"]["share_capital"],
+        )
+        self.assertNotIn("last_model", self.stub.session_state)
+        self.assertNotIn("last_outputs", self.stub.session_state)
+        self.assertNotIn("last_run_digest", self.stub.session_state)
+        self.assertNotIn("run_requested", self.stub.session_state)
+        self.assertNotIn("core_assumption_rows", self.stub.session_state)
+        self.assertNotIn("senior_debt_rows_amount_0", self.stub.session_state)
+        self.assertNotIn("finance_share_capital", self.stub.session_state)
+        self.assertNotIn("sensitivity_results", self.stub.session_state)
+        self.assertNotIn("sensitivity_results_digest", self.stub.session_state)
+
+    def test_refresh_runtime_session_state_preserves_non_placeholder_payload(self):
+        payload = json.loads(self.app.DEFAULT_INPUT_JSON)
+        payload["financing"]["share_capital"] = 9.9
+
+        os.environ["PHARMA_RUNTIME_STATE_FINGERPRINT"] = "runtime-v3"
+        self.stub.session_state.update(
+            {
+                self.app.RUNTIME_STATE_FINGERPRINT_KEY: "runtime-v2",
+                "input_payload": payload,
+                "last_model": object(),
+                "finance_share_capital": 7.7,
+            }
+        )
+
+        refreshed = self.app._refresh_runtime_session_state()
+
+        self.assertTrue(refreshed)
+        self.assertEqual(
+            self.stub.session_state["input_payload"]["financing"]["share_capital"], 9.9
+        )
+        self.assertNotIn("last_model", self.stub.session_state)
+        self.assertNotIn("finance_share_capital", self.stub.session_state)
 
     def test_editor_row_label_combines_name_and_year(self):
         label = self.app._editor_row_label(
