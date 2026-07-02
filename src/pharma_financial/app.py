@@ -7794,14 +7794,14 @@ def _payload_to_core_rows(payload: Mapping) -> list[dict]:
         selling_price = float(values.get("price", 0.0))
         freight_cost = float(values.get("freight", 0.0))
         markup_value = float(markup.get(name, 0.0))
-        total_units = float(totals.get(name, 0.0))
-        if total_units == 0.0 and isinstance(estimates, Mapping):
-            estimate = estimates.get(name, [])
-            if isinstance(estimate, Sequence) and estimate:
-                total_units = float(estimate[0])
         max_capacity = float(capacities.get(name, 0.0))
-        if max_capacity > 0.0 and total_units > max_capacity:
-            total_units = max_capacity
+        total_units = _resolved_total_production_units(
+            name,
+            float(totals.get(name, 0.0)),
+            max_capacity,
+            years,
+            estimates,
+        )
         scaled_series = _scaled_production_series(name, total_units, years, estimates)
         first_year_units = scaled_series[0] if scaled_series else 0.0
         inflation_factor = inflation_factors[0] if inflation_factors else 1.0
@@ -9416,15 +9416,72 @@ def _scaled_production_series(
     years: Sequence[Any],
     existing_estimate: Mapping[str, Sequence[Any]] | Sequence[Any] | None,
 ) -> list[float]:
+    series = _normalised_production_series(product, years, existing_estimate)
     target_length = len(years)
     if target_length == 0:
         return []
 
-    # Core assumption semantics: "Total Production Units" is annual capacity.
-    # Each year should therefore carry the same units rather than redistributing
-    # a horizon-level total into a profile based on legacy production estimates.
-    per_year = float(total_units)
+    desired_total = max(float(total_units), 0.0)
+    current_total = sum(series)
+    if current_total > 0.0:
+        factor = desired_total / current_total if desired_total > 0.0 else 0.0
+        return [value * factor for value in series]
+
+    per_year = desired_total / target_length if target_length else 0.0
     return [per_year for _ in range(target_length)]
+
+
+_PRODUCTION_TOTAL_PLACEHOLDER_RATIO = 100.0
+
+
+def _normalised_production_series(
+    product: str,
+    years: Sequence[Any],
+    existing_estimate: Mapping[str, Sequence[Any]] | Sequence[Any] | None,
+) -> list[float]:
+    if isinstance(existing_estimate, Mapping) and product in existing_estimate:
+        series = [float(value) for value in existing_estimate.get(product, [])]
+    elif isinstance(existing_estimate, Sequence) and not isinstance(
+        existing_estimate, (str, bytes)
+    ):
+        # Legacy payloads may store a simple list when only one product exists.
+        series = [float(value) for value in existing_estimate]
+    else:
+        series = []
+
+    target_length = len(years)
+    if len(series) < target_length:
+        series = series + [0.0] * (target_length - len(series))
+    elif len(series) > target_length:
+        series = series[:target_length]
+    return series
+
+
+def _resolved_total_production_units(
+    product: str,
+    configured_total: float,
+    max_capacity: float,
+    years: Sequence[Any],
+    existing_estimate: Mapping[str, Sequence[Any]] | Sequence[Any] | None,
+) -> float:
+    estimate_series = _normalised_production_series(product, years, existing_estimate)
+    estimate_total = sum(estimate_series)
+    resolved_total = max(float(configured_total), 0.0)
+
+    if estimate_total <= 0.0:
+        return resolved_total
+    if resolved_total <= 0.0:
+        return estimate_total
+
+    matches_capacity = max_capacity > 0.0 and math.isclose(
+        resolved_total,
+        max_capacity,
+        rel_tol=1e-9,
+        abs_tol=1e-9,
+    )
+    if matches_capacity and resolved_total >= estimate_total * _PRODUCTION_TOTAL_PLACEHOLDER_RATIO:
+        return estimate_total
+    return resolved_total
 
 
 def _payload_to_fixed_variable_rows(payload: Mapping) -> list[dict]:
