@@ -88,6 +88,39 @@ class RerunHelperTest(unittest.TestCase):
         self.app._rerun()
         self.assertEqual(self.stub.calls, ["rerun", "experimental_rerun"])
 
+    def test_summary_metric_returns_none_for_non_finite_values(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        inputs = self.app.parse_inputs(payload)
+        model = self.app.FinancialModel(inputs)
+        outputs = model.run_core()
+
+        self.assertIsNone(self.app._summary_metric(outputs, "IRR"))
+        self.assertIsNone(self.app._summary_metric(outputs, "Payback Period"))
+
+    def test_format_number_returns_na_for_nan(self):
+        self.assertEqual(self.app._format_number(float("nan")), "N/A")
+
+    def test_irr_diagnostic_message_explains_missing_sign_change(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        inputs = self.app.parse_inputs(payload)
+        model = self.app.FinancialModel(inputs)
+        model.run_core()
+
+        message = self.app._irr_diagnostic_message(model)
+
+        self.assertIsNotNone(message)
+        assert message is not None
+        self.assertIn("Cash flows do not change sign", message)
+        self.assertIn("All projected net cash flow periods are non-positive", message)
+
     def test_projection_horizon_dropdown_updates_years(self):
         payload = json.loads(
             Path("src/pharma_financial/data/default_inputs.json").read_text(

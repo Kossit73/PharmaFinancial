@@ -1480,6 +1480,9 @@ def _render_dashboard_tab(
             with col:
                 formatted = _format_number(value)
                 st.metric(label=name, value=formatted)
+    irr_warning = _irr_diagnostic_message(model)
+    if irr_warning:
+        st.warning(irr_warning)
 
     st.markdown("### Goal Seek Metric")
     goal_data = _ensure_dataframe(merged_outputs.goal_seek)
@@ -1728,6 +1731,9 @@ def _render_executive_summary(
         for idx, (name, value) in enumerate(metrics):
             with metric_cols[idx % len(metric_cols)]:
                 st.metric(name, _format_number(value))
+    irr_warning = _irr_diagnostic_message(model)
+    if irr_warning:
+        st.warning(irr_warning)
 
     st.markdown("### Range & Scenario Delta")
     range_rows: list[dict[str, object]] = []
@@ -2817,12 +2823,41 @@ def _build_business_plan_bundle(
     return reports, bundle_buffer.getvalue()
 
 
+def _coerce_finite_float(value: object) -> Optional[float]:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric):
+        return None
+    return numeric
+
+
 def _summary_metric(outputs: FinancialOutputs, name: str) -> Optional[float]:
     table = outputs.summary_metrics
     if name in table.index:
         position = table.index.index(name)
-        return float(table.data["Value"][position])
+        return _coerce_finite_float(table.data["Value"][position])
     return None
+
+
+def _irr_diagnostic_message(model: FinancialModel) -> Optional[str]:
+    irr_info = model.irr_diagnostics()
+    if irr_info is None:
+        return None
+    if irr_info.converged and _coerce_finite_float(irr_info.value) is not None:
+        return None
+
+    message = str(
+        irr_info.message or "IRR could not be computed for the current cash flows."
+    ).strip()
+    if irr_info.method == "no_sign_change":
+        cash_flow = model.cash_flow_statement().column(CASH_FLOW_NET_COLUMN)
+        if cash_flow and all(float(value) <= 0.0 for value in cash_flow):
+            message = f"{message} All projected net cash flow periods are non-positive."
+        elif cash_flow and all(float(value) >= 0.0 for value in cash_flow):
+            message = f"{message} All projected net cash flow periods are non-negative."
+    return f"IRR unavailable: {message}"
 
 
 def _percentile(values: Sequence[float], percentile: float) -> Optional[float]:
@@ -3176,23 +3211,28 @@ def _render_rag_tab(
 
 
 def _format_number(value: float) -> str:
-    if abs(value) >= 1_000_000:
-        return f"{value/1_000_000:,.2f}M"
-    if abs(value) >= 1_000:
-        return f"{value/1_000:,.2f}K"
-    return f"{value:,.2f}"
+    numeric = _coerce_finite_float(value)
+    if numeric is None:
+        return "N/A"
+    if abs(numeric) >= 1_000_000:
+        return f"{numeric/1_000_000:,.2f}M"
+    if abs(numeric) >= 1_000:
+        return f"{numeric/1_000:,.2f}K"
+    return f"{numeric:,.2f}"
 
 
 def _format_display(value: float, decimals: int = 2) -> str:
-    if value is None or value != value:
+    numeric = _coerce_finite_float(value)
+    if numeric is None:
         return "N/A"
-    return f"{value:,.{decimals}f}"
+    return f"{numeric:,.{decimals}f}"
 
 
 def _format_percentage(value: float, decimals: int = 2) -> str:
-    if value is None or value != value:
+    numeric = _coerce_finite_float(value)
+    if numeric is None:
         return "N/A"
-    return f"{value * 100:,.{decimals}f}%"
+    return f"{numeric * 100:,.{decimals}f}%"
 
 
 def _mapping_to_rows(mapping: Mapping[str, float], key_label: str, value_label: str) -> list[dict]:
