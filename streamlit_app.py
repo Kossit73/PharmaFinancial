@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 import sys
 from pathlib import Path
 
@@ -19,6 +21,25 @@ if SRC.exists() and str(SRC) not in sys.path:  # pragma: no cover - import path 
     sys.path.insert(0, str(SRC))
 if FALLBACK_SRC.exists() and str(FALLBACK_SRC) not in sys.path:  # pragma: no cover
     sys.path.insert(0, str(FALLBACK_SRC))
+
+
+def _runtime_fingerprint() -> str:
+    hasher = hashlib.sha256()
+    for path in (
+        ROOT / "streamlit_app.py",
+        SRC / "pharma_financial" / "app.py",
+        SRC / "pharma_financial" / "ui" / "state.py",
+        SRC / "pharma_financial" / "data" / "default_inputs.json",
+    ):
+        hasher.update(path.name.encode("utf-8"))
+        try:
+            hasher.update(path.read_bytes())
+        except OSError:
+            hasher.update(str(path).encode("utf-8"))
+    return hasher.hexdigest()
+
+
+os.environ["PHARMA_RUNTIME_STATE_FINGERPRINT"] = _runtime_fingerprint()
 
 def _load_app_main():
     try:
