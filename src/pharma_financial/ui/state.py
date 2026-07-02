@@ -114,6 +114,17 @@ def get_state() -> dict:
 def set_state(state: dict) -> None:
     from .. import app as legacy
 
+    payload = state.get("input_payload")
+    if isinstance(payload, Mapping):
+        replacement = legacy._replacement_payload_for_legacy_defaults(payload)
+        if replacement is not None:
+            legacy.st.session_state["input_payload"] = replacement
+            legacy._clear_payload_derived_state()
+            legacy.st.session_state.pop("labor_mode", None)
+            for key in legacy._PHARMA_ROW_KEYS:
+                legacy.st.session_state.pop(key, None)
+            return
+
     for key, value in state.items():
         if key == "break_even_overrides" and isinstance(value, list):
             legacy.st.session_state[key] = set(value)

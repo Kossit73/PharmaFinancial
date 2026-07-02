@@ -405,6 +405,88 @@ class RerunHelperTest(unittest.TestCase):
         self.assertNotIn("last_model", self.stub.session_state)
         self.assertNotIn("finance_share_capital", self.stub.session_state)
 
+    def test_set_state_replaces_legacy_default_payload_and_skips_stale_rows(self):
+        default_payload = json.loads(self.app.DEFAULT_INPUT_JSON)
+        placeholder_payload = json.loads(self.app.DEFAULT_INPUT_JSON)
+        placeholder_payload["capital_expenditure"]["initial"] = 1.0
+        placeholder_payload["capital_expenditure"]["contingency"] = 1.0
+        placeholder_payload["capital_expenditure"]["project_reserve"] = 1.0
+        placeholder_payload["financing"]["initial_investment"] = 1.0
+        placeholder_payload["financing"]["discount_rate"] = 1.0
+        placeholder_payload["financing"]["senior_debt_interest"] = 1.0
+        placeholder_payload["financing"]["revolver_interest"] = 1.0
+        placeholder_payload["financing"]["cash_interest"] = 1.0
+        placeholder_payload["financing"]["dividend_payout"] = 1.0
+        placeholder_payload["financing"]["share_capital"] = 1.0
+        placeholder_payload["financing"]["senior_debt"][0]["amount"] = 1.0
+        placeholder_payload["financing"]["senior_debt"][0]["outstanding"] = 1.0
+
+        self.app.set_state(
+            {
+                "input_payload": placeholder_payload,
+                "labor_mode": "Rows",
+                "core_assumption_rows": [{"Metric": "stale"}],
+            }
+        )
+
+        self.assertEqual(
+            self.stub.session_state["input_payload"]["capital_expenditure"]["initial"],
+            default_payload["capital_expenditure"]["initial"],
+        )
+        self.assertEqual(
+            self.stub.session_state["input_payload"]["financing"]["share_capital"],
+            default_payload["financing"]["share_capital"],
+        )
+        self.assertNotIn("labor_mode", self.stub.session_state)
+        self.assertNotIn("core_assumption_rows", self.stub.session_state)
+
+    def test_resolve_inputs_replaces_legacy_payload_without_runtime_change(self):
+        class _Container:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        default_payload = json.loads(self.app.DEFAULT_INPUT_JSON)
+        placeholder_payload = json.loads(self.app.DEFAULT_INPUT_JSON)
+        placeholder_payload["capital_expenditure"]["initial"] = 1.0
+        placeholder_payload["capital_expenditure"]["contingency"] = 1.0
+        placeholder_payload["capital_expenditure"]["project_reserve"] = 1.0
+        placeholder_payload["financing"]["initial_investment"] = 1.0
+        placeholder_payload["financing"]["discount_rate"] = 1.0
+        placeholder_payload["financing"]["senior_debt_interest"] = 1.0
+        placeholder_payload["financing"]["revolver_interest"] = 1.0
+        placeholder_payload["financing"]["cash_interest"] = 1.0
+        placeholder_payload["financing"]["dividend_payout"] = 1.0
+        placeholder_payload["financing"]["share_capital"] = 1.0
+        placeholder_payload["financing"]["senior_debt"][0]["amount"] = 1.0
+        placeholder_payload["financing"]["senior_debt"][0]["outstanding"] = 1.0
+
+        os.environ["PHARMA_RUNTIME_STATE_FINGERPRINT"] = "runtime-v4"
+        self.stub.session_state.update(
+            {
+                self.app.RUNTIME_STATE_FINGERPRINT_KEY: "runtime-v4",
+                "input_payload": placeholder_payload,
+                "core_assumption_rows": [{"Metric": "stale"}],
+            }
+        )
+
+        self.app._resolve_inputs(_Container())
+
+        self.assertEqual(
+            self.stub.session_state["input_payload"]["capital_expenditure"]["initial"],
+            default_payload["capital_expenditure"]["initial"],
+        )
+        self.assertEqual(
+            self.stub.session_state["input_payload"]["financing"]["share_capital"],
+            default_payload["financing"]["share_capital"],
+        )
+        self.assertNotEqual(
+            self.stub.session_state["core_assumption_rows"],
+            [{"Metric": "stale"}],
+        )
+
     def test_editor_row_label_combines_name_and_year(self):
         label = self.app._editor_row_label(
             {"Product": "Tablets", "Year": 2027},
