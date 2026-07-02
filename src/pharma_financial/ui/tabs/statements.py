@@ -42,13 +42,13 @@ def render_financial_statements(
         try:
             working_capital = model.working_capital_schedule()
             legacy.st.markdown("### Working Capital Schedule")
-            legacy.st.dataframe(legacy._with_year(working_capital), use_container_width=True)
+            legacy.st.dataframe(legacy._with_year(working_capital), width="stretch")
         except Exception as exc:  # pragma: no cover - defensive UI feedback
             legacy.st.warning(f"Unable to compute working capital schedule: {exc}")
         try:
             inventory_table = model.inventory_schedule()
             legacy.st.markdown("### Inventory Schedule")
-            legacy.st.dataframe(legacy._with_year(inventory_table), use_container_width=True)
+            legacy.st.dataframe(legacy._with_year(inventory_table), width="stretch")
         except Exception as exc:  # pragma: no cover - defensive UI feedback
             legacy.st.warning(f"Unable to compute inventory schedule: {exc}")
 
