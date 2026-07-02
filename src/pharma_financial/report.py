@@ -116,6 +116,16 @@ def collect_report_sections(model: FinancialModel, outputs: FinancialOutputs) ->
             return float(table.data["Value"][position])
         return None
 
+    range_metric_map: Mapping[str, tuple[str, str, str]] = {
+        "NPV": ("NPV P10", "NPV P50", "NPV P90"),
+        "IRR": ("IRR P10", "IRR P50", "IRR P90"),
+        "Investor Viability Score": (
+            "Investor Viability Score P10",
+            "Investor Viability Score P50",
+            "Investor Viability Score P90",
+        ),
+    }
+
     summary_metrics = outputs.summary_metrics
     executive_metrics = [
         "NPV",
@@ -136,13 +146,17 @@ def collect_report_sections(model: FinancialModel, outputs: FinancialOutputs) ->
             summary_values.append(summary_metrics.data["Value"][position])
     executive_table = build_table(summary_labels, {"Value": summary_values}, index_name="Metric")
     range_rows: List[Mapping[str, float]] = []
-    for metric in ["NPV", "IRR", "Investor Viability Score"]:
-        if metric not in outputs.monte_carlo.data:
-            continue
-        values = outputs.monte_carlo.column(metric)
-        p10 = _percentile(values, 10)
-        p50 = _percentile(values, 50)
-        p90 = _percentile(values, 90)
+    for metric, percentile_metrics in range_metric_map.items():
+        p10 = p50 = p90 = None
+        if metric in outputs.monte_carlo.data:
+            values = outputs.monte_carlo.column(metric)
+            p10 = _percentile(values, 10)
+            p50 = _percentile(values, 50)
+            p90 = _percentile(values, 90)
+        if p10 is None or p50 is None or p90 is None:
+            p10 = _summary_metric_from(summary_metrics, percentile_metrics[0])
+            p50 = _summary_metric_from(summary_metrics, percentile_metrics[1])
+            p90 = _summary_metric_from(summary_metrics, percentile_metrics[2])
         if p10 is None or p50 is None or p90 is None:
             continue
         range_rows.append({"Metric": metric, "P10": p10, "P50": p50, "P90": p90})

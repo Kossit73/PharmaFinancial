@@ -976,6 +976,24 @@ class FinancialModelTest(unittest.TestCase):
         self.assertIn("Evidence Coverage Ratio", summary.index)
         self.assertIn("Assumption Data Quality Score", summary.index)
         self.assertIn("Probability NPV < 0", summary.index)
+        self.assertIn("Probability IRR < Hurdle", summary.index)
+        self.assertIn("IRR P10", summary.index)
+        self.assertIn("IRR P50", summary.index)
+        self.assertIn("IRR P90", summary.index)
+        self.assertIn("Investor Viability Score P10", summary.index)
+        self.assertIn("Investor Viability Score P50", summary.index)
+        self.assertIn("Investor Viability Score P90", summary.index)
+
+    def test_monte_carlo_tracks_required_range_metrics_by_default(self):
+        payload = json.loads(Path("src/pharma_financial/data/default_inputs.json").read_text())
+        payload["monte_carlo"]["iterations"] = 10
+
+        model = FinancialModel(parse_inputs(payload))
+        monte = model.monte_carlo_simulation()
+
+        self.assertIn("NPV", monte.data)
+        self.assertIn("IRR", monte.data)
+        self.assertIn("Investor Viability Score", monte.data)
 
     def test_bankability_outputs_are_available(self):
         outputs = self.model.run_core()

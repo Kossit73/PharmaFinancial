@@ -220,6 +220,16 @@ class RerunHelperTest(unittest.TestCase):
     def test_format_number_returns_na_for_nan(self):
         self.assertEqual(self.app._format_number(float("nan")), "N/A")
 
+    def test_format_metric_display_uses_percentage_for_rate_metrics(self):
+        self.assertEqual(
+            self.app._format_metric_display("IRR", 0.1234),
+            "12.34%",
+        )
+        self.assertEqual(
+            self.app._format_metric_display("NPV", 1234.0),
+            "1.23K",
+        )
+
     def test_irr_diagnostic_message_explains_missing_sign_change(self):
         cash_flow = self.app.Table(
             [2024, 2025, 2026],
@@ -287,6 +297,28 @@ class RerunHelperTest(unittest.TestCase):
 
         self.assertIsNotNone(self.app._summary_metric(outputs, "IRR"))
         self.assertIsNone(self.app._irr_diagnostic_message(model))
+
+    def test_default_case_smoke_includes_complete_monte_carlo_ranges(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        payload["monte_carlo"]["iterations"] = 20
+
+        inputs = self.app.parse_inputs(payload)
+        model = self.app.FinancialModel(inputs)
+        outputs = model.run_core()
+
+        range_rows = self.app._executive_summary_range_rows(outputs)
+        metrics = {str(row["Metric"]) for row in range_rows}
+
+        self.assertIsNotNone(self.app._summary_metric(outputs, "IRR"))
+        self.assertIsNone(self.app._irr_diagnostic_message(model))
+        self.assertSetEqual(
+            metrics,
+            {"NPV", "IRR", "Investor Viability Score"},
+        )
 
     def test_refresh_runtime_session_state_replaces_legacy_placeholder_payload(self):
         default_payload = json.loads(self.app.DEFAULT_INPUT_JSON)
@@ -542,15 +574,15 @@ class RerunHelperTest(unittest.TestCase):
         risk_factor = risk[0] if risk else 1.0
 
         for row in rows:
-            units = float(row["Total Production Units"])
-            selling = float(row["Selling Price"])
-            production = float(row["Production Cost"])
-            freight = float(row["Freight Cost"])
-            markup = float(row.get("Markup", 0.0))
-            capacity = float(row.get("Max Capacity", 0.0))
+            units = float(row[self.app.CORE_TOTAL_UNITS_FIELD])
+            selling = float(row[self.app.CORE_SELLING_PRICE_FIELD])
+            production = float(row[self.app.CORE_PRODUCTION_COST_FIELD])
+            freight = float(row[self.app.CORE_FREIGHT_COST_FIELD])
+            markup = float(row.get(self.app.CORE_MARKUP_FIELD, 0.0))
+            capacity = float(row.get(self.app.CORE_CAPACITY_FIELD, 0.0))
 
             scaled = self.app._scaled_production_series(
-                str(row["Product"]), units, years, estimates
+                str(row[self.app.CORE_PRODUCT_FIELD]), units, years, estimates
             )
             first_year_units = scaled[0] if scaled else 0.0
 
@@ -559,8 +591,9 @@ class RerunHelperTest(unittest.TestCase):
                 first_year_units * (production + freight + markup) * inflation_factor * risk_factor
             )
 
-            self.assertAlmostEqual(row["Total Revenue"], expected_revenue, places=8)
-            self.assertAlmostEqual(row["Total Cost"], expected_cost, places=8)
+            self.assertAlmostEqual(row[self.app.CORE_YEAR1_UNITS_FIELD], first_year_units, places=8)
+            self.assertAlmostEqual(row[self.app.CORE_YEAR1_REVENUE_FIELD], expected_revenue, places=8)
+            self.assertAlmostEqual(row[self.app.CORE_YEAR1_COST_FIELD], expected_cost, places=8)
             if capacity > 0:
                 self.assertLessEqual(units, capacity + 1e-9)
 
@@ -572,9 +605,9 @@ class RerunHelperTest(unittest.TestCase):
         self.assertTrue(rows)
 
         original = rows[0]
-        product_name = str(original["Product"])
-        new_price = float(original["Selling Price"]) + 0.25
-        new_units = float(original["Total Production Units"]) + 10.0
+        product_name = str(original[self.app.CORE_PRODUCT_FIELD])
+        new_price = float(original[self.app.CORE_SELLING_PRICE_FIELD]) + 0.25
+        new_units = float(original[self.app.CORE_TOTAL_UNITS_FIELD]) + 10.0
 
         self.app.st.session_state[f"core_desc_0"] = product_name
         self.app.st.session_state[f"core_sell_0"] = new_price
@@ -592,7 +625,7 @@ class RerunHelperTest(unittest.TestCase):
         )
 
         total_units = sum(parsed.production_estimate[product_name])
-        expected_total = float(synced[0]["Total Production Units"])
+        expected_total = float(synced[0][self.app.CORE_TOTAL_UNITS_FIELD])
         self.assertAlmostEqual(total_units, expected_total, places=6)
 
     def test_scaled_production_series_preserves_existing_profile_shape(self):

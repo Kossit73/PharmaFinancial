@@ -796,6 +796,8 @@
     },
     "metrics": [
       "NPV",
+      "IRR",
+      "Investor Viability Score",
       "Average Net Income",
       "Average EBITDA"
     ],
