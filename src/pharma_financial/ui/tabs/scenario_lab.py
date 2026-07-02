@@ -9,7 +9,7 @@ from .. import shell
 
 def _render_table_like(legacy, value: object) -> None:
     frame = legacy._ensure_dataframe(value)
-    legacy.st.dataframe(frame, use_container_width=True)
+    legacy.st.dataframe(frame, width="stretch")
 
 
 def render_scenario_lab(

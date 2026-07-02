@@ -1585,15 +1585,15 @@ def _render_dashboard_tab(
         st.warning(
             "Plotly visualisations unavailable. Displaying financial metrics as tables instead."
         )
-        st.dataframe(income, use_container_width=True)
+        st.dataframe(income, width="stretch")
     else:
         col1, col2 = st.columns(2)
         with col1:
             fig_revenue = px.line(income, x="Year", y="Net Revenue", title="Net Revenue")
-            st.plotly_chart(fig_revenue, use_container_width=True)
+            st.plotly_chart(fig_revenue, width="stretch")
         with col2:
             fig_ebitda = px.line(income, x="Year", y="EBITDA", title="EBITDA")
-            st.plotly_chart(fig_ebitda, use_container_width=True)
+            st.plotly_chart(fig_ebitda, width="stretch")
 
     st.markdown("### Investment Metrics")
     metric_pairs = _extract_metric_pairs(merged_outputs.summary_metrics)
@@ -1630,7 +1630,7 @@ def _render_dashboard_tab(
         if not goal_data:
             st.caption("No goal seek configuration provided in the assumptions.")
         else:
-            st.dataframe(goal_data, use_container_width=True)
+            st.dataframe(goal_data, width="stretch")
     else:
         if hasattr(goal_data, "empty") and getattr(goal_data, "empty"):
             st.caption("No goal seek configuration provided in the assumptions.")
@@ -1650,9 +1650,9 @@ def _render_dashboard_tab(
                         value=_format_number(actual_value),
                         delta=_format_number(delta_value),
                     )
-            st.dataframe(display, use_container_width=True)
+            st.dataframe(display, width="stretch")
         else:
-            st.dataframe(goal_data, use_container_width=True)
+            st.dataframe(goal_data, width="stretch")
 
     payload = st.session_state.get("input_payload")
     if isinstance(payload, dict):
@@ -1661,7 +1661,7 @@ def _render_dashboard_tab(
     st.markdown("### Working Capital Schedule")
     try:
         working_capital = model.working_capital_schedule()
-        st.dataframe(_with_year(working_capital), use_container_width=True)
+        st.dataframe(_with_year(working_capital), width="stretch")
         st.caption(
             "Working capital balances reconcile receivables, inventory, and payables "
             "with the statement of financial position while showing year-over-year "
@@ -1673,7 +1673,7 @@ def _render_dashboard_tab(
     st.markdown("### Inventory Schedule")
     try:
         inventory_table = model.inventory_schedule()
-        st.dataframe(_with_year(inventory_table), use_container_width=True)
+        st.dataframe(_with_year(inventory_table), width="stretch")
         st.caption(
             "Inventory is derived as cost of sales divided by calendar days and "
             "multiplied by the configured inventory days, matching the balance "
@@ -1692,7 +1692,7 @@ def _render_dashboard_tab(
         if merged_outputs.sensitivity_results:
             for variable, table in merged_outputs.sensitivity_results.items():
                 st.markdown(f"- **{variable}**")
-                st.dataframe(_ensure_dataframe(table), use_container_width=True)
+                st.dataframe(_ensure_dataframe(table), width="stretch")
         elif model.inputs.sensitivity.variables:
             st.caption("Sensitivity results not generated yet. Run Sensitivity Analysis to compute.")
         else:
@@ -1702,18 +1702,18 @@ def _render_dashboard_tab(
         if merged_outputs.scenario_results:
             for name, table in merged_outputs.scenario_results.items():
                 st.markdown(f"- **{name}**")
-                st.dataframe(_with_year(table), use_container_width=True)
+                st.dataframe(_with_year(table), width="stretch")
         else:
             st.caption("No scenarios configured in the assumptions.")
 
         st.markdown("#### Break-even Analysis")
-        st.dataframe(_ensure_dataframe(merged_outputs.break_even), use_container_width=True)
+        st.dataframe(_ensure_dataframe(merged_outputs.break_even), width="stretch")
 
         st.markdown("#### Payback Schedule")
-        st.dataframe(_with_year(merged_outputs.payback), use_container_width=True)
+        st.dataframe(_with_year(merged_outputs.payback), width="stretch")
 
         st.markdown("#### Discounted Payback Schedule")
-        st.dataframe(_with_year(merged_outputs.discounted_payback), use_container_width=True)
+        st.dataframe(_with_year(merged_outputs.discounted_payback), width="stretch")
 
         st.markdown("#### AI & Machine Learning Insights")
         _render_ai_dashboard(
@@ -1748,7 +1748,7 @@ def _render_dashboard_tab(
                 markers=True,
                 title=title,
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
     elif model.inputs.sensitivity.variables:
         st.caption("Sensitivity results not generated yet. Run Sensitivity Analysis to compute.")
     else:
@@ -1779,7 +1779,7 @@ def _render_dashboard_tab(
                     color="Scenario",
                     title="Scenario Net Revenue",
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
             if "Net Income" in combined.columns:
                 fig_income = px.line(
                     combined,
@@ -1788,7 +1788,7 @@ def _render_dashboard_tab(
                     color="Scenario",
                     title="Scenario Net Income",
                 )
-                st.plotly_chart(fig_income, use_container_width=True)
+                st.plotly_chart(fig_income, width="stretch")
         else:
             st.caption("No scenarios configured in the assumptions.")
     else:
@@ -1808,7 +1808,7 @@ def _render_dashboard_tab(
         y=y_column,
         title="Break-even Units by Product",
     )
-    st.plotly_chart(fig_break_even, use_container_width=True)
+    st.plotly_chart(fig_break_even, width="stretch")
 
     # Payback charts
     st.markdown("#### Payback Schedule")
@@ -1824,7 +1824,7 @@ def _render_dashboard_tab(
         title="Cumulative Payback",
         markers=True,
     )
-    st.plotly_chart(fig_payback, use_container_width=True)
+    st.plotly_chart(fig_payback, width="stretch")
 
     discounted_df = _with_year(merged_outputs.discounted_payback)
     if isinstance(discounted_df, pd.DataFrame):
@@ -1838,7 +1838,7 @@ def _render_dashboard_tab(
         title="Discounted Cumulative Payback",
         markers=True,
     )
-    st.plotly_chart(fig_discounted, use_container_width=True)
+    st.plotly_chart(fig_discounted, width="stretch")
 
     st.markdown("#### AI & Machine Learning Insights")
     _render_ai_dashboard(
@@ -1889,7 +1889,7 @@ def _render_executive_summary(
             }
             for row in range_rows
         ]
-        st.dataframe(_ensure_dataframe(display_rows), use_container_width=True)
+        st.dataframe(_ensure_dataframe(display_rows), width="stretch")
     else:
         st.caption("Monte Carlo ranges unavailable for NPV/IRR/viability score.")
 
@@ -1974,7 +1974,7 @@ def _render_executive_summary(
                 }
                 for row in compact_rows
             ]
-            st.dataframe(_ensure_dataframe(display_rows), use_container_width=True)
+            st.dataframe(_ensure_dataframe(display_rows), width="stretch")
         else:
             st.caption("Scenario delta unavailable without a base NPV.")
     else:
@@ -1990,7 +1990,7 @@ def _render_executive_summary(
                 _format_metric_display(str(metric), value, compact=False)
                 for metric, value in zip(display_table[metric_column], display_table["Value"])
             ]
-            st.dataframe(display_table, use_container_width=True)
+            st.dataframe(display_table, width="stretch")
         else:
             st.table(summary_table)
 
@@ -2024,7 +2024,7 @@ def _render_statement_tab(title: str, table) -> None:
         display = table
 
     display_with_year = _with_year(display)
-    st.dataframe(display_with_year, use_container_width=True)
+    st.dataframe(display_with_year, width="stretch")
 
     if px is None or pd is None:
         st.caption("Install pandas and plotly to unlock interactive analytics for this statement.")
@@ -2056,7 +2056,7 @@ def _render_statement_tab(title: str, table) -> None:
                     markers=True,
                     title=f"{column} Trend",
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
     if len(numeric_columns) > len(headline_columns):
         remaining = numeric_columns[len(headline_columns) :]
@@ -2069,7 +2069,7 @@ def _render_statement_tab(title: str, table) -> None:
             markers=True,
             title="Additional Statement Metrics",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 
 def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -> None:
@@ -2085,7 +2085,7 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
         ]
     else:
         display_frame = income_frame
-    st.dataframe(display_frame, use_container_width=True)
+    st.dataframe(display_frame, width="stretch")
 
     if px is not None and pd is not None:
         if isinstance(display_frame, pd.DataFrame):
@@ -2110,7 +2110,7 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
                     markers=True,
                     title="Income Statement Highlights",
                 )
-                st.plotly_chart(fig_income, use_container_width=True)
+                st.plotly_chart(fig_income, width="stretch")
 
             if "EBITDA Margin" in frame.columns:
                 fig_margin = px.line(
@@ -2120,7 +2120,7 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
                     markers=True,
                     title="EBITDA Margin",
                 )
-                st.plotly_chart(fig_margin, use_container_width=True)
+                st.plotly_chart(fig_margin, width="stretch")
 
     st.markdown("#### Gross Revenue Schedule")
     try:
@@ -2129,7 +2129,7 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
         st.warning(f"Unable to calculate gross revenue schedule: {exc}")
     else:
         revenue_frame = _with_year(revenue_schedule)
-        st.dataframe(revenue_frame, use_container_width=True)
+        st.dataframe(revenue_frame, width="stretch")
         st.caption(
             "Gross Revenue is decomposed into product-level sales, distributor commissions, "
             "and resulting net revenue."
@@ -2161,7 +2161,7 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
                     barmode="stack",
                     title="Revenue Composition",
                 )
-                st.plotly_chart(fig_product, use_container_width=True)
+                st.plotly_chart(fig_product, width="stretch")
             elif numeric_columns:
                 st.markdown("##### Revenue Drivers")
                 melt_frame = frame.melt(id_vars=["Year"], value_vars=numeric_columns, var_name="Metric", value_name="Value")
@@ -2173,7 +2173,7 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
                     markers=True,
                     title="Revenue Schedule",
                 )
-                st.plotly_chart(fig_revenue, use_container_width=True)
+                st.plotly_chart(fig_revenue, width="stretch")
 
     st.markdown("#### Total Expenses Schedule")
     try:
@@ -2183,7 +2183,7 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
         return
 
     expense_frame = _with_year(expense_schedule)
-    st.dataframe(expense_frame, use_container_width=True)
+    st.dataframe(expense_frame, width="stretch")
     st.caption(
         "Total Expenses comprise raw materials, utilities, direct labour, cost of sales, "
         "and general & administrative costs."
@@ -2208,7 +2208,7 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
                 groupnorm="fraction",
                 title="Expense Mix Over Time",
             )
-            st.plotly_chart(fig_expense, use_container_width=True)
+            st.plotly_chart(fig_expense, width="stretch")
 
 
 def _render_ai_dashboard(ai_insights: Optional[AIInsights], *, ai_configured: bool) -> None:
@@ -2223,7 +2223,7 @@ def _render_ai_dashboard(ai_insights: Optional[AIInsights], *, ai_configured: bo
         return
 
     if ai_insights.ml_forecast is not None:
-        st.dataframe(_with_year(ai_insights.ml_forecast), use_container_width=True)
+        st.dataframe(_with_year(ai_insights.ml_forecast), width="stretch")
     else:
         st.caption(
             "Machine-learning forecasts are unavailable. Adjust the forecast horizon or ensure "
@@ -2275,7 +2275,7 @@ def _render_sensitivity(
     for variable, df in cached_results.items():
         st.markdown(f"#### {variable}")
         frame = _with_year(df)
-        st.dataframe(frame, use_container_width=True)
+        st.dataframe(frame, width="stretch")
 
         if supports_plotly:
             if isinstance(frame, pd.DataFrame):
@@ -2306,7 +2306,7 @@ def _render_sensitivity(
                         y="Value",
                         title=f"{variable} Sensitivity Comparison",
                     )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
 
 def _render_scenarios(outputs: FinancialOutputs) -> None:
@@ -2331,7 +2331,7 @@ def _render_scenarios(outputs: FinancialOutputs) -> None:
         for name, df in outputs.scenario_results.items():
             st.markdown(f"#### {name}")
             frame = _with_year(df)
-            st.dataframe(frame, use_container_width=True)
+            st.dataframe(frame, width="stretch")
 
             if supports_plotly:
                 if isinstance(frame, pd.DataFrame):
@@ -2362,7 +2362,7 @@ def _render_scenarios(outputs: FinancialOutputs) -> None:
                             y="Value",
                             title=f"{name} Scenario Comparison",
                         )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
         st.markdown("### Scenario Comparisons")
         base_name = "base" if "base" in outputs.scenario_results else next(iter(outputs.scenario_results))
@@ -2388,7 +2388,7 @@ def _render_scenarios(outputs: FinancialOutputs) -> None:
                 )
 
         if comparison_rows:
-            st.dataframe(_ensure_dataframe(comparison_rows), use_container_width=True)
+            st.dataframe(_ensure_dataframe(comparison_rows), width="stretch")
 
             if go is not None:
                 for name, table in outputs.scenario_results.items():
@@ -2409,14 +2409,14 @@ def _render_scenarios(outputs: FinancialOutputs) -> None:
                         )
                     )
                     fig.update_layout(title=f"Net Income Waterfall: {base_name} to {name}")
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
     st.markdown("### Scenario Tool Insights")
     if outputs.scenario_tool_results:
         for key, result in outputs.scenario_tool_results.items():
             label = SCENARIO_TOOL_LABELS.get(key, key.replace("_", " ").title())
             st.markdown(f"#### {label}")
-            st.dataframe(_ensure_dataframe(result.rows), use_container_width=True)
+            st.dataframe(_ensure_dataframe(result.rows), width="stretch")
             st.caption(result.interpretation)
     else:
         st.caption("No scenario tools have been configured.")
@@ -2454,11 +2454,11 @@ def _render_monte_carlo(
     monte_carlo_df = _ensure_dataframe(monte_carlo_results)
     if px is None or pd is None:
         st.warning("Plotly unavailable. Displaying Monte Carlo results in tabular form.")
-        st.dataframe(monte_carlo_df, use_container_width=True)
+        st.dataframe(monte_carlo_df, width="stretch")
     else:
         fig = px.histogram(monte_carlo_df, x="NPV", nbins=40, title="NPV Distribution")
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(monte_carlo_df.describe().T, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
+        st.dataframe(monte_carlo_df.describe().T, width="stretch")
 
 
 def _render_break_even(outputs: FinancialOutputs) -> None:
@@ -2477,7 +2477,7 @@ def _render_break_even(outputs: FinancialOutputs) -> None:
         break_even_frame = break_even_df.reset_index().rename(columns={"index": "Product"})
     else:
         break_even_frame = pd.DataFrame(break_even_df)
-    st.dataframe(break_even_frame, use_container_width=True)
+    st.dataframe(break_even_frame, width="stretch")
 
     if px is not None and pd is not None and not break_even_frame.empty:
         y_column = (
@@ -2494,13 +2494,13 @@ def _render_break_even(outputs: FinancialOutputs) -> None:
             )
             st.plotly_chart(
                 fig_break_even,
-                use_container_width=True,
+                width="stretch",
                 key="break_even_units_chart",
             )
 
     st.markdown("### Payback Schedule")
     payback_df = _with_year(outputs.payback)
-    st.dataframe(payback_df, use_container_width=True)
+    st.dataframe(payback_df, width="stretch")
 
     if px is not None and pd is not None:
         if isinstance(payback_df, pd.DataFrame):
@@ -2517,13 +2517,13 @@ def _render_break_even(outputs: FinancialOutputs) -> None:
             )
             st.plotly_chart(
                 fig_payback,
-                use_container_width=True,
+                width="stretch",
                 key="cumulative_payback_chart",
             )
 
     st.markdown("### Discounted Payback Schedule")
     discounted_df = _with_year(outputs.discounted_payback)
-    st.dataframe(discounted_df, use_container_width=True)
+    st.dataframe(discounted_df, width="stretch")
 
     if px is not None and pd is not None:
         if isinstance(discounted_df, pd.DataFrame):
@@ -2540,7 +2540,7 @@ def _render_break_even(outputs: FinancialOutputs) -> None:
             )
             st.plotly_chart(
                 fig_discounted,
-                use_container_width=True,
+                width="stretch",
                 key="discounted_payback_chart",
             )
 
@@ -4239,6 +4239,7 @@ def _render_selectable_data_editor(
     saved_rows, draft_rows = _initialise_selectable_editor_state(key, rows)
     working_rows = draft_rows if draft_rows else saved_rows
     persisted_status = _editor_status_message(key)
+    editor_width = "stretch" if use_container_width else "content"
     visible_fields = _editor_visible_fields(
         working_rows,
         column_order=column_order,
@@ -4315,7 +4316,7 @@ def _render_selectable_data_editor(
     full_editor_key = f"{key}_full_editor_v{_editor_reset_version(key)}"
     edited = st.data_editor(
         working_rows,
-        use_container_width=use_container_width,
+        width=editor_width,
         hide_index=hide_index,
         num_rows=num_rows,
         key=full_editor_key,
@@ -5441,7 +5442,7 @@ def _render_distributor_commission(payload: Mapping) -> None:
 
         edited_rows = st.data_editor(
             editor_rows,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             num_rows="dynamic",
             key=f"commission_schedule_full_editor_v{_editor_reset_version(editor_key)}",
@@ -6478,7 +6479,7 @@ def _render_debt_section(
             st.markdown(f"**{title} Amortisation Schedule**")
             st.dataframe(
                 _ensure_dataframe(schedule_rows),
-                use_container_width=True,
+                width="stretch",
             )
 
     next_year = (
