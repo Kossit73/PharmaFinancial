@@ -492,6 +492,84 @@ class RerunHelperTest(unittest.TestCase):
         self.assertEqual(model_v1["roles"][0]["planned_headcount"][1], 6.0)
         self.assertEqual(model_v1["settings"]["shifts"][0], 2.0)
 
+    def test_build_monte_correlation_matrix_rows_uses_upper_triangle(self):
+        variable_map = {
+            "revenue_growth": "Revenue Growth",
+            "raw_material_cost": "Cost of Materials",
+            "labor_cost": "Labour",
+        }
+        rows = self.app._build_monte_correlation_matrix_rows(
+            ["revenue_growth", "raw_material_cost", "labor_cost"],
+            variable_map,
+            {
+                "revenue_growth": {
+                    "raw_material_cost": -0.2,
+                    "labor_cost": -0.1,
+                },
+                "labor_cost": {
+                    "raw_material_cost": 0.25,
+                },
+            },
+        )
+
+        self.assertEqual(rows[0]["Revenue Growth"], 1.0)
+        self.assertEqual(rows[0]["Cost of Materials"], -0.2)
+        self.assertEqual(rows[0]["Labour"], -0.1)
+        self.assertIsNone(rows[1]["Revenue Growth"])
+        self.assertEqual(rows[1]["Labour"], 0.25)
+        self.assertIsNone(rows[2]["Revenue Growth"])
+        self.assertIsNone(rows[2]["Cost of Materials"])
+        self.assertEqual(rows[2]["Labour"], 1.0)
+
+    def test_merge_monte_correlation_matrix_rows_preserves_non_table_entries(self):
+        variable_map = {
+            "revenue_growth": "Revenue Growth",
+            "raw_material_cost": "Cost of Materials",
+            "labor_cost": "Labour",
+        }
+        merged = self.app._merge_monte_correlation_matrix_rows(
+            [
+                {
+                    "Variable": "Revenue Growth",
+                    "Revenue Growth": 1.0,
+                    "Cost of Materials": -0.35,
+                    "Labour": -0.1,
+                },
+                {
+                    "Variable": "Cost of Materials",
+                    "Revenue Growth": None,
+                    "Cost of Materials": 1.0,
+                    "Labour": 0.2,
+                },
+                {
+                    "Variable": "Labour",
+                    "Revenue Growth": None,
+                    "Cost of Materials": None,
+                    "Labour": 1.0,
+                },
+            ],
+            ["revenue_growth", "raw_material_cost", "labor_cost"],
+            variable_map,
+            {
+                "revenue_growth": {
+                    "selling_price": 0.15,
+                    "raw_material_cost": -0.2,
+                },
+                "other": {
+                    "revenue_growth": 0.05,
+                },
+            },
+        )
+
+        self.assertEqual(merged["revenue_growth"]["selling_price"], 0.15)
+        self.assertEqual(merged["other"]["revenue_growth"], 0.05)
+        self.assertEqual(merged["revenue_growth"]["raw_material_cost"], -0.35)
+        self.assertEqual(merged["raw_material_cost"]["revenue_growth"], -0.35)
+        self.assertEqual(merged["revenue_growth"]["labor_cost"], -0.1)
+        self.assertEqual(merged["labor_cost"]["revenue_growth"], -0.1)
+        self.assertEqual(merged["raw_material_cost"]["labor_cost"], 0.2)
+        self.assertEqual(merged["labor_cost"]["raw_material_cost"], 0.2)
+
 
 class UploadLoaderTests(unittest.TestCase):
     def setUp(self):

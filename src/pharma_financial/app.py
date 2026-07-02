@@ -3472,6 +3472,113 @@ def _coerce_editor_rows(value: object) -> list[dict]:
     return []
 
 
+def _monte_variable_labels(
+    selected_codes: Sequence[str],
+    variable_map: Mapping[str, str],
+) -> dict[str, str]:
+    """Return stable display labels for Monte Carlo variable codes."""
+
+    labels: dict[str, str] = {}
+    used: set[str] = set()
+    for code in selected_codes:
+        base_label = str(variable_map.get(code, code) or code).strip() or code
+        label = base_label
+        if label in used:
+            label = f"{base_label} ({code})"
+        labels[code] = label
+        used.add(label)
+    return labels
+
+
+def _build_monte_correlation_matrix_rows(
+    selected_codes: Sequence[str],
+    variable_map: Mapping[str, str],
+    correlations: Mapping[str, Mapping[str, object]] | None,
+) -> list[dict[str, object]]:
+    """Build an upper-triangular correlation editor table."""
+
+    display_labels = _monte_variable_labels(selected_codes, variable_map)
+    rows: list[dict[str, object]] = []
+    correlations = correlations or {}
+
+    for row_index, row_code in enumerate(selected_codes):
+        row: dict[str, object] = {"Variable": display_labels[row_code]}
+        for column_index, column_code in enumerate(selected_codes):
+            column_label = display_labels[column_code]
+            if row_index == column_index:
+                row[column_label] = 1.0
+                continue
+            if column_index < row_index:
+                row[column_label] = None
+                continue
+
+            value: object = None
+            current_targets = correlations.get(row_code, {})
+            if isinstance(current_targets, Mapping):
+                value = current_targets.get(column_code)
+            if value is None:
+                mirrored_targets = correlations.get(column_code, {})
+                if isinstance(mirrored_targets, Mapping):
+                    value = mirrored_targets.get(row_code)
+
+            parsed = _parse_float(value)
+            row[column_label] = (
+                max(min(parsed, 1.0), -1.0)
+                if parsed is not None
+                else 0.0
+            )
+        rows.append(row)
+    return rows
+
+
+def _merge_monte_correlation_matrix_rows(
+    rows: Sequence[Mapping[str, object]],
+    selected_codes: Sequence[str],
+    variable_map: Mapping[str, str],
+    existing: Mapping[str, Mapping[str, object]] | None,
+) -> dict[str, dict[str, object]]:
+    """Merge edited matrix rows back into the nested correlation mapping."""
+
+    selected_set = set(selected_codes)
+    display_labels = _monte_variable_labels(selected_codes, variable_map)
+    editable_rows = {
+        str(row.get("Variable", "")).strip(): row
+        for row in rows
+        if isinstance(row, Mapping) and str(row.get("Variable", "")).strip()
+    }
+
+    merged: dict[str, dict[str, object]] = {}
+    if isinstance(existing, Mapping):
+        for source, targets in existing.items():
+            source_key = str(source)
+            if not isinstance(targets, Mapping):
+                continue
+            preserved_targets: dict[str, object] = {}
+            for target, value in targets.items():
+                target_key = str(target)
+                if source_key in selected_set and target_key in selected_set:
+                    continue
+                preserved_targets[target_key] = value
+            if preserved_targets:
+                merged[source_key] = preserved_targets
+
+    for row_index, row_code in enumerate(selected_codes):
+        row_label = display_labels[row_code]
+        row = editable_rows.get(row_label, {})
+        for column_code in selected_codes[row_index + 1 :]:
+            column_label = display_labels[column_code]
+            parsed = _parse_float(row.get(column_label))
+            if parsed is None:
+                continue
+            value = max(min(parsed, 1.0), -1.0)
+            if abs(value) < 1e-12:
+                continue
+            merged.setdefault(row_code, {})[column_code] = value
+            merged.setdefault(column_code, {})[row_code] = value
+
+    return merged
+
+
 def _render_labor_mode_section(payload: dict) -> None:
     labor_mode = st.radio(
         "Labor Modeling Mode",
@@ -6121,20 +6228,46 @@ def _render_monte_carlo_inputs(payload: dict) -> None:
                 }
     monte["distributions"] = distributions
 
-    correlation_payload = json.dumps(monte.get("correlations", {}), indent=2)
-    correlation_text = st.text_area(
-        "Correlation matrix (JSON)",
-        value=correlation_payload,
-        height=140,
-        key="monte_correlations",
+    existing_correlations = copy.deepcopy(monte.get("correlations", {}) or {})
+    correlation_rows = _build_monte_correlation_matrix_rows(
+        selected_codes,
+        variable_map,
+        existing_correlations,
     )
-    try:
-        parsed_correlations = json.loads(correlation_text) if correlation_text.strip() else {}
-    except json.JSONDecodeError:
-        st.warning("Correlations must be valid JSON. Keeping previous values.")
-    else:
-        if isinstance(parsed_correlations, dict):
-            monte["correlations"] = parsed_correlations
+    correlation_labels = [row["Variable"] for row in correlation_rows if "Variable" in row]
+    with st.expander("Correlation matrix", expanded=False):
+        st.caption(
+            "Edit the upper triangle only. The matrix mirrors automatically, the diagonal stays 1.00, "
+            "and correlated draws apply to variables using normal or lognormal distributions."
+        )
+        edited_correlations = st.data_editor(
+            correlation_rows,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="fixed",
+            key="monte_correlation_matrix_editor",
+            column_order=["Variable", *correlation_labels],
+            column_config={
+                "Variable": st.column_config.TextColumn("Variable", disabled=True),
+                **{
+                    label: st.column_config.NumberColumn(
+                        label,
+                        min_value=-1.0,
+                        max_value=1.0,
+                        step=0.05,
+                        format="%.2f",
+                    )
+                    for label in correlation_labels
+                },
+            },
+        )
+    edited_rows = _coerce_editor_rows(edited_correlations) or correlation_rows
+    monte["correlations"] = _merge_monte_correlation_matrix_rows(
+        edited_rows,
+        selected_codes,
+        variable_map,
+        existing_correlations,
+    )
 
     scenario_names = list((payload.get("scenarios") or {}).keys())
     scenario_weight_defaults = dict(monte.get("scenario_weights", {}) or {})
