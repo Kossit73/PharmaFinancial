@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 
 from .. import shell
-from ..editors import core_assumptions
+from ..editors import bankability, core_assumptions
 from ...inputs import ModelInputs
 from ...model import FinancialModel, FinancialOutputs
 
@@ -308,6 +308,74 @@ def _risk_summary(legacy, payload: dict) -> str:
     )
 
 
+def _bankability_summary(_legacy, payload: dict) -> str:
+    config = payload.get("bankability", {}) if isinstance(payload, Mapping) else {}
+    if not isinstance(config, Mapping):
+        config = {}
+    min_irr = float(config.get("min_irr", 0.18) or 0.18) * 100.0
+    min_dscr = float(config.get("min_dscr", 1.25) or 1.25)
+    min_cash = float(config.get("min_cash_buffer", 5.0) or 5.0)
+    return _format_summary(
+        [
+            f"{min_irr:.1f}% IRR hurdle",
+            f"{min_dscr:.2f}x DSCR minimum",
+            f"{min_cash:,.1f} cash buffer",
+        ],
+        "Bankability thresholds not configured yet.",
+    )
+
+
+def _evidence_summary(_legacy, payload: dict) -> str:
+    rows = payload.get("assumption_evidence", []) if isinstance(payload, Mapping) else []
+    if not isinstance(rows, list):
+        rows = []
+    complete = 0
+    required = 0
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        if bool(row.get("required", True)):
+            required += 1
+        fields = [
+            str(row.get("source", "") or "").strip(),
+            str(row.get("owner", "") or "").strip(),
+            str(row.get("benchmark_year", "") or "").strip(),
+            str(row.get("rationale", "") or "").strip(),
+        ]
+        if all(fields):
+            complete += 1
+    return _format_summary(
+        [
+            f"{len(rows)} evidence rows",
+            f"{complete}/{max(required, len(rows), 1)} complete",
+        ],
+        "No evidence register rows configured yet.",
+    )
+
+
+def _downside_summary(_legacy, payload: dict) -> str:
+    rows = payload.get("downside_cases", []) if isinstance(payload, Mapping) else []
+    if not isinstance(rows, list):
+        rows = []
+    names = [
+        str(row.get("name", "")).strip()
+        for row in rows
+        if isinstance(row, Mapping) and str(row.get("name", "")).strip()
+    ]
+    return _format_summary(
+        [
+            f"{len(names)} downside cases",
+            names[0] if names else "",
+        ],
+        "No downside cases configured yet.",
+    )
+
+
+def _render_table_like(legacy, value: object) -> None:
+    frame = legacy._ensure_dataframe(value)
+    legacy.st.dataframe(frame, use_container_width=True)
+
+
 def render_setup_and_validation(
     inputs: ModelInputs,
     model: FinancialModel | None,
@@ -373,9 +441,48 @@ def render_setup_and_validation(
             st.warning(label)
 
     if model is not None and outputs is not None:
+        st.markdown("### Bankability Gate")
+        _render_table_like(legacy, outputs.bankability_gate)
+        quality_col, evidence_col = st.columns(2)
+        with quality_col:
+            st.markdown("### Data Quality Exceptions")
+            _render_table_like(legacy, outputs.data_quality_exceptions or [])
+        with evidence_col:
+            st.markdown("### Evidence Register")
+            _render_table_like(legacy, outputs.evidence_register or [])
         st.caption(
             "The current workspace is live. Updates in the operations and funding tabs will refresh this run on the next rerender."
         )
+
+    _render_collapsible_section(
+        legacy,
+        title="Bankability Controls",
+        section_key="bankability_controls",
+        summary=_bankability_summary(legacy, payload),
+        description="Set the lender and investor hurdles that define a passable pharma investment case.",
+        payload=payload,
+        render_body=bankability.render_bankability_controls_section,
+    )
+    _render_collapsible_section(
+        legacy,
+        title="Evidence Register",
+        section_key="evidence_register",
+        summary=_evidence_summary(legacy, payload),
+        description="Track the source, owner, benchmark year, and rationale for each investor-critical assumption.",
+        payload=payload,
+        render_body=bankability.render_evidence_register_section,
+        add_hint="Use the blank row in the expanded editor to add new evidence items.",
+    )
+    _render_collapsible_section(
+        legacy,
+        title="Downside Case Library",
+        section_key="downside_cases",
+        summary=_downside_summary(legacy, payload),
+        description="Define named downside cases that the Scenario Lab can use for investor stress testing.",
+        payload=payload,
+        render_body=bankability.render_downside_case_section,
+        add_hint="Use the blank row in the expanded editor to add another downside case.",
+    )
 
 
 def render_commercial_operations(
@@ -386,12 +493,16 @@ def render_commercial_operations(
 ) -> None:
     from ... import app as legacy
 
-    del inputs, model, outputs, digest
+    del inputs, model, digest
     payload = legacy.st.session_state["input_payload"]
     shell.render_section_header(
         "Commercial & Operations",
         "Manage products, price build-up, labor structure, utilities, and operating cost drivers.",
     )
+
+    if outputs is not None and outputs.commercial_diagnostics is not None:
+        legacy.st.markdown("### Commercial Diagnostics")
+        _render_table_like(legacy, outputs.commercial_diagnostics)
 
     _render_collapsible_section(
         legacy,
@@ -456,12 +567,18 @@ def render_funding_working_capital(
 ) -> None:
     from ... import app as legacy
 
-    del inputs, model, outputs, digest
+    del inputs, model, digest
     payload = legacy.st.session_state["input_payload"]
     shell.render_section_header(
         "Funding & Working Capital",
         "Manage collections, inventory, fixed assets, financing, tax, inflation, and risk assumptions.",
     )
+
+    if outputs is not None:
+        legacy.st.markdown("### Sources & Uses")
+        _render_table_like(legacy, outputs.sources_and_uses)
+        legacy.st.markdown("### Covenant Headroom")
+        _render_table_like(legacy, outputs.covenant_headroom)
 
     _render_collapsible_section(
         legacy,

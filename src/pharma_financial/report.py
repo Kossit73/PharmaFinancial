@@ -208,6 +208,21 @@ def collect_report_sections(model: FinancialModel, outputs: FinancialOutputs) ->
 
     sections.append(ReportSection("Executive Summary", executive_tables))
 
+    bankability_tables: List[ReportTable] = [
+        ReportTable("Bankability Gate", outputs.bankability_gate),
+        ReportTable("Sources & Uses", outputs.sources_and_uses),
+        ReportTable("Liquidity Bridge", outputs.liquidity_bridge),
+        ReportTable("Covenant Headroom", outputs.covenant_headroom),
+    ]
+    sections.append(ReportSection("Bankability & Funding", bankability_tables))
+
+    evidence_tables: List[ReportTable] = [
+        ReportTable("Evidence Register", outputs.evidence_register or []),
+        ReportTable("Data Quality Exceptions", outputs.data_quality_exceptions or []),
+        ReportTable("Downside Case Summary", outputs.downside_case_summary),
+    ]
+    sections.append(ReportSection("Evidence & Downside Cases", evidence_tables))
+
     key_tables: List[ReportTable] = [
         ReportTable("Summary Metrics", outputs.summary_metrics),
         ReportTable("Goal Seek", outputs.goal_seek),
@@ -249,6 +264,7 @@ def collect_report_sections(model: FinancialModel, outputs: FinancialOutputs) ->
             "Statement of Financial Performance",
             outputs.income_statement.rounded(0, exclude_keywords=("Margin", "Return")),
         ),
+        ReportTable("Commercial Diagnostics", outputs.commercial_diagnostics),
     ]
     try:
         perf_tables.append(ReportTable("Gross Revenue Schedule", model.revenue_schedule()))

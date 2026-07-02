@@ -88,6 +88,97 @@ class RerunHelperTest(unittest.TestCase):
         self.app._rerun()
         self.assertEqual(self.stub.calls, ["rerun", "experimental_rerun"])
 
+    def test_summary_metric_returns_none_for_non_finite_values(self):
+        outputs = types.SimpleNamespace(
+            summary_metrics=self.app.Table(
+                ["IRR", "Payback Period"],
+                {"Value": [float("nan"), float("inf")]},
+                index_name="Metric",
+            )
+        )
+
+        self.assertIsNone(self.app._summary_metric(outputs, "IRR"))
+        self.assertIsNone(self.app._summary_metric(outputs, "Payback Period"))
+
+    def test_summary_metric_returns_default_case_values(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        inputs = self.app.parse_inputs(payload)
+        model = self.app.FinancialModel(inputs)
+        outputs = model.run_core()
+
+        irr = self.app._summary_metric(outputs, "IRR")
+        payback = self.app._summary_metric(outputs, "Payback Period")
+
+        self.assertIsNotNone(irr)
+        self.assertIsNotNone(payback)
+        assert irr is not None
+        assert payback is not None
+        self.assertGreater(irr, 0.0)
+        self.assertGreaterEqual(payback, 0.0)
+
+    def test_format_number_returns_na_for_nan(self):
+        self.assertEqual(self.app._format_number(float("nan")), "N/A")
+
+    def test_irr_diagnostic_message_explains_missing_sign_change(self):
+        cash_flow = self.app.Table(
+            [2024, 2025, 2026],
+            {self.app.CASH_FLOW_NET_COLUMN: [-3.0, -2.0, -1.0]},
+        )
+        irr_info = types.SimpleNamespace(
+            converged=False,
+            value=float("nan"),
+            message="Cash flows do not change sign, so IRR is undefined.",
+            method="no_sign_change",
+        )
+        model = types.SimpleNamespace(
+            irr_diagnostics=lambda: irr_info,
+            cash_flow_statement=lambda: cash_flow,
+        )
+
+        message = self.app._irr_diagnostic_message(model)
+
+        self.assertIsNotNone(message)
+        assert message is not None
+        self.assertIn("Cash flows do not change sign", message)
+        self.assertIn("All projected net cash flow periods are non-positive", message)
+
+    def test_irr_diagnostic_message_returns_none_when_irr_available(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        inputs = self.app.parse_inputs(payload)
+        model = self.app.FinancialModel(inputs)
+        model.run_core()
+
+        self.assertIsNone(self.app._irr_diagnostic_message(model))
+
+    def test_editor_row_label_combines_name_and_year(self):
+        label = self.app._editor_row_label(
+            {"Product": "Tablets", "Year": 2027},
+            0,
+            name_fields=("Product",),
+            year_fields=("Year",),
+            fallback_prefix="Row",
+        )
+
+        self.assertEqual(label, "Tablets | 2027")
+
+    def test_merge_editor_row_updates_preserves_hidden_fields(self):
+        merged = self.app._merge_editor_row_updates(
+            [{"Product": "Tablets", "__has_fixed__": True, "Fixed Cost": 10.0}],
+            [{"Product": "Tablets", "Fixed Cost": 12.0}],
+        )
+
+        self.assertEqual(len(merged), 1)
+        self.assertTrue(merged[0]["__has_fixed__"])
+        self.assertEqual(merged[0]["Fixed Cost"], 12.0)
+
     def test_projection_horizon_dropdown_updates_years(self):
         payload = json.loads(
             Path("src/pharma_financial/data/default_inputs.json").read_text(
@@ -492,6 +583,84 @@ class RerunHelperTest(unittest.TestCase):
         self.assertEqual(model_v1["roles"][0]["planned_headcount"][1], 6.0)
         self.assertEqual(model_v1["settings"]["shifts"][0], 2.0)
 
+    def test_build_monte_correlation_matrix_rows_uses_upper_triangle(self):
+        variable_map = {
+            "revenue_growth": "Revenue Growth",
+            "raw_material_cost": "Cost of Materials",
+            "labor_cost": "Labour",
+        }
+        rows = self.app._build_monte_correlation_matrix_rows(
+            ["revenue_growth", "raw_material_cost", "labor_cost"],
+            variable_map,
+            {
+                "revenue_growth": {
+                    "raw_material_cost": -0.2,
+                    "labor_cost": -0.1,
+                },
+                "labor_cost": {
+                    "raw_material_cost": 0.25,
+                },
+            },
+        )
+
+        self.assertEqual(rows[0]["Revenue Growth"], 1.0)
+        self.assertEqual(rows[0]["Cost of Materials"], -0.2)
+        self.assertEqual(rows[0]["Labour"], -0.1)
+        self.assertIsNone(rows[1]["Revenue Growth"])
+        self.assertEqual(rows[1]["Labour"], 0.25)
+        self.assertIsNone(rows[2]["Revenue Growth"])
+        self.assertIsNone(rows[2]["Cost of Materials"])
+        self.assertEqual(rows[2]["Labour"], 1.0)
+
+    def test_merge_monte_correlation_matrix_rows_preserves_non_table_entries(self):
+        variable_map = {
+            "revenue_growth": "Revenue Growth",
+            "raw_material_cost": "Cost of Materials",
+            "labor_cost": "Labour",
+        }
+        merged = self.app._merge_monte_correlation_matrix_rows(
+            [
+                {
+                    "Variable": "Revenue Growth",
+                    "Revenue Growth": 1.0,
+                    "Cost of Materials": -0.35,
+                    "Labour": -0.1,
+                },
+                {
+                    "Variable": "Cost of Materials",
+                    "Revenue Growth": None,
+                    "Cost of Materials": 1.0,
+                    "Labour": 0.2,
+                },
+                {
+                    "Variable": "Labour",
+                    "Revenue Growth": None,
+                    "Cost of Materials": None,
+                    "Labour": 1.0,
+                },
+            ],
+            ["revenue_growth", "raw_material_cost", "labor_cost"],
+            variable_map,
+            {
+                "revenue_growth": {
+                    "selling_price": 0.15,
+                    "raw_material_cost": -0.2,
+                },
+                "other": {
+                    "revenue_growth": 0.05,
+                },
+            },
+        )
+
+        self.assertEqual(merged["revenue_growth"]["selling_price"], 0.15)
+        self.assertEqual(merged["other"]["revenue_growth"], 0.05)
+        self.assertEqual(merged["revenue_growth"]["raw_material_cost"], -0.35)
+        self.assertEqual(merged["raw_material_cost"]["revenue_growth"], -0.35)
+        self.assertEqual(merged["revenue_growth"]["labor_cost"], -0.1)
+        self.assertEqual(merged["labor_cost"]["revenue_growth"], -0.1)
+        self.assertEqual(merged["raw_material_cost"]["labor_cost"], 0.2)
+        self.assertEqual(merged["labor_cost"]["raw_material_cost"], 0.2)
+
 
 class UploadLoaderTests(unittest.TestCase):
     def setUp(self):
@@ -546,6 +715,52 @@ class UploadLoaderTests(unittest.TestCase):
         pdf_bytes = pdf.output(dest="S").encode("latin-1")
         loaded = self.app._load_payload_from_bytes(pdf_bytes, ".pdf")
         self.assertTrue(loaded["example"])
+
+
+class SetupTabRenderTests(unittest.TestCase):
+    def setUp(self):
+        self.setup_tab = importlib.import_module("pharma_financial.ui.tabs.setup")
+        self.app = importlib.import_module("pharma_financial.app")
+        self.original_streamlit = self.app.st
+        self.original_header = self.setup_tab.shell.render_section_header
+        self.original_collapsible = self.setup_tab._render_collapsible_section
+        self.original_table = self.setup_tab._render_table_like
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        fake_streamlit = types.SimpleNamespace(
+            session_state={"input_payload": payload},
+            markdown=lambda *args, **kwargs: None,
+        )
+        self.app.st = fake_streamlit
+
+        self.setup_tab.shell.render_section_header = lambda *args, **kwargs: None
+        self.setup_tab._render_collapsible_section = lambda *args, **kwargs: None
+        self.setup_tab._render_table_like = lambda *args, **kwargs: None
+
+    def tearDown(self):
+        self.app.st = self.original_streamlit
+        self.setup_tab.shell.render_section_header = self.original_header
+        self.setup_tab._render_collapsible_section = self.original_collapsible
+        self.setup_tab._render_table_like = self.original_table
+
+    def test_render_commercial_operations_keeps_outputs_available(self):
+        outputs = types.SimpleNamespace(
+            commercial_diagnostics=[{"metric": "Gross Margin", "value": "68%"}]
+        )
+
+        self.setup_tab.render_commercial_operations(None, None, outputs, "digest")
+
+    def test_render_funding_working_capital_keeps_outputs_available(self):
+        outputs = types.SimpleNamespace(
+            sources_and_uses=[{"source": "Equity", "amount": 100.0}],
+            covenant_headroom=[{"year": 2026, "headroom": 1.4}],
+        )
+
+        self.setup_tab.render_funding_working_capital(None, None, outputs, "digest")
 
 
 if __name__ == "__main__":  # pragma: no cover

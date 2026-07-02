@@ -7,6 +7,11 @@ from ...model import FinancialModel, FinancialOutputs
 from .. import shell
 
 
+def _render_table_like(legacy, value: object) -> None:
+    frame = legacy._ensure_dataframe(value)
+    legacy.st.dataframe(frame, use_container_width=True)
+
+
 def render_scenario_lab(
     inputs: ModelInputs,
     model: FinancialModel | None,
@@ -24,20 +29,29 @@ def render_scenario_lab(
         "Scenario Lab",
         "Stress the base case, compare outcomes, and review probabilistic downside before finalising recommendations.",
     )
-    sensitivity_tab, scenarios_tab, monte_tab, break_even_tab = legacy.st.tabs(
+    sensitivity_tab, downside_tab, monte_tab, breach_tab = legacy.st.tabs(
         [
-            "Sensitivity",
-            "Scenario Compare",
+            "Key Sensitivities",
+            "Pharma Downside Cases",
             "Monte Carlo",
-            "Break-even & Payback",
+            "Breach Monitor",
         ]
     )
     with sensitivity_tab:
         legacy._render_sensitivity(model, outputs, digest)
-    with scenarios_tab:
+    with downside_tab:
+        legacy.st.markdown("### Downside Case Summary")
+        _render_table_like(legacy, outputs.downside_case_summary)
+        legacy.st.markdown("### Scenario Compare")
         legacy._render_scenarios(outputs)
+        legacy.st.markdown("### Break-even & Payback")
+        legacy._render_break_even(outputs)
     with monte_tab:
         legacy._render_monte_carlo(model, outputs, digest)
-    with break_even_tab:
-        legacy._render_break_even(outputs)
-
+    with breach_tab:
+        legacy.st.markdown("### Bankability Gate")
+        _render_table_like(legacy, outputs.bankability_gate)
+        legacy.st.markdown("### Covenant Headroom")
+        _render_table_like(legacy, outputs.covenant_headroom)
+        legacy.st.markdown("### Data Quality Exceptions")
+        _render_table_like(legacy, outputs.data_quality_exceptions or [])

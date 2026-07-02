@@ -9,27 +9,27 @@
           "rows": [
             {
               "Metric": "NPV",
-              "Value": -70.3921342450854
+              "Value": 33.927397837574745
             },
             {
               "Metric": "IRR",
-              "Value": NaN
+              "Value": 0.9938009250834087
             },
             {
               "Metric": "Payback Period",
-              "Value": NaN
+              "Value": 1.621313015990228
             },
             {
               "Metric": "Discounted Payback",
-              "Value": NaN
+              "Value": 1.9454199055657972
             },
             {
               "Metric": "Profitability Index",
-              "Value": -6.0392134245085405
+              "Value": 8.280557475874408
             },
             {
               "Metric": "Revenue CAGR",
-              "Value": 0.3870067101279189
+              "Value": 0.3870067101279191
             },
             {
               "Metric": "Mid-period Revenue CAGR",
@@ -37,63 +37,71 @@
             },
             {
               "Metric": "Rolling Revenue CAGR (3Y Avg)",
-              "Value": 0.37539780357192554
+              "Value": 0.3753978035719256
             },
             {
               "Metric": "Weighted Average Gross Margin",
-              "Value": -4.619456326226541
+              "Value": 0.2961501431505096
             },
             {
               "Metric": "Weighted Average EBITDA Margin",
-              "Value": -6.015683279767449
+              "Value": 0.2968691251676103
             },
             {
               "Metric": "Weighted Average Net Margin",
-              "Value": -6.089913605902795
+              "Value": 0.22346370369241664
             },
             {
               "Metric": "Weighted Average Operating Cash Flow Margin",
-              "Value": -6.131192552277875
+              "Value": 0.21619332430955004
             },
             {
               "Metric": "Average Debt Service Coverage",
-              "Value": -9.572340538530485
+              "Value": 24.290790791926636
             },
             {
               "Metric": "Investor Viability Score",
-              "Value": 23.076923076923077
+              "Value": 96.01518438757078
             },
             {
               "Metric": "Investor Gate Pass Count",
-              "Value": 0.0
+              "Value": 7.0
             },
             {
               "Metric": "Investor Gate Pass Ratio",
-              "Value": 0.0
+              "Value": 0.875
             },
             {
               "Metric": "Investor Gate Status",
               "Value": 0.0
             },
             {
-              "Metric": "Assumption Data Quality Score",
-              "Value": 34.0
+              "Metric": "Minimum Ending Cash",
+              "Value": -2.7778205193059757
             },
             {
-              "Metric": "Probability NPV < 0",
+              "Metric": "Evidence Coverage Ratio",
               "Value": 1.0
             },
             {
+              "Metric": "Assumption Data Quality Score",
+              "Value": 100.0
+            },
+            {
+              "Metric": "Probability NPV < 0",
+              "Value": 0.266
+            },
+            {
               "Metric": "NPV P10",
-              "Value": -430.7503560989485
+              "Value": -6.833557784160791
             },
             {
               "Metric": "NPV P50",
-              "Value": -392.5936212324347
+              "Value": 12.217141815377007
             },
             {
               "Metric": "NPV P90",
-              "Value": -390.3344388731093
+              "Value": 66.87533024919713
             }
           ]
         }

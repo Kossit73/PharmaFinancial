@@ -1480,6 +1480,9 @@ def _render_dashboard_tab(
             with col:
                 formatted = _format_number(value)
                 st.metric(label=name, value=formatted)
+    irr_warning = _irr_diagnostic_message(model)
+    if irr_warning:
+        st.warning(irr_warning)
 
     st.markdown("### Goal Seek Metric")
     goal_data = _ensure_dataframe(merged_outputs.goal_seek)
@@ -1728,6 +1731,9 @@ def _render_executive_summary(
         for idx, (name, value) in enumerate(metrics):
             with metric_cols[idx % len(metric_cols)]:
                 st.metric(name, _format_number(value))
+    irr_warning = _irr_diagnostic_message(model)
+    if irr_warning:
+        st.warning(irr_warning)
 
     st.markdown("### Range & Scenario Delta")
     range_rows: list[dict[str, object]] = []
@@ -2817,12 +2823,41 @@ def _build_business_plan_bundle(
     return reports, bundle_buffer.getvalue()
 
 
+def _coerce_finite_float(value: object) -> Optional[float]:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric):
+        return None
+    return numeric
+
+
 def _summary_metric(outputs: FinancialOutputs, name: str) -> Optional[float]:
     table = outputs.summary_metrics
     if name in table.index:
         position = table.index.index(name)
-        return float(table.data["Value"][position])
+        return _coerce_finite_float(table.data["Value"][position])
     return None
+
+
+def _irr_diagnostic_message(model: FinancialModel) -> Optional[str]:
+    irr_info = model.irr_diagnostics()
+    if irr_info is None:
+        return None
+    if irr_info.converged and _coerce_finite_float(irr_info.value) is not None:
+        return None
+
+    message = str(
+        irr_info.message or "IRR could not be computed for the current cash flows."
+    ).strip()
+    if irr_info.method == "no_sign_change":
+        cash_flow = model.cash_flow_statement().column(CASH_FLOW_NET_COLUMN)
+        if cash_flow and all(float(value) <= 0.0 for value in cash_flow):
+            message = f"{message} All projected net cash flow periods are non-positive."
+        elif cash_flow and all(float(value) >= 0.0 for value in cash_flow):
+            message = f"{message} All projected net cash flow periods are non-negative."
+    return f"IRR unavailable: {message}"
 
 
 def _percentile(values: Sequence[float], percentile: float) -> Optional[float]:
@@ -3176,23 +3211,28 @@ def _render_rag_tab(
 
 
 def _format_number(value: float) -> str:
-    if abs(value) >= 1_000_000:
-        return f"{value/1_000_000:,.2f}M"
-    if abs(value) >= 1_000:
-        return f"{value/1_000:,.2f}K"
-    return f"{value:,.2f}"
+    numeric = _coerce_finite_float(value)
+    if numeric is None:
+        return "N/A"
+    if abs(numeric) >= 1_000_000:
+        return f"{numeric/1_000_000:,.2f}M"
+    if abs(numeric) >= 1_000:
+        return f"{numeric/1_000:,.2f}K"
+    return f"{numeric:,.2f}"
 
 
 def _format_display(value: float, decimals: int = 2) -> str:
-    if value is None or value != value:
+    numeric = _coerce_finite_float(value)
+    if numeric is None:
         return "N/A"
-    return f"{value:,.{decimals}f}"
+    return f"{numeric:,.{decimals}f}"
 
 
 def _format_percentage(value: float, decimals: int = 2) -> str:
-    if value is None or value != value:
+    numeric = _coerce_finite_float(value)
+    if numeric is None:
         return "N/A"
-    return f"{value * 100:,.{decimals}f}%"
+    return f"{numeric * 100:,.{decimals}f}%"
 
 
 def _mapping_to_rows(mapping: Mapping[str, float], key_label: str, value_label: str) -> list[dict]:
@@ -3242,50 +3282,42 @@ def _format_float_list(values: Iterable[float]) -> str:
 
 def _render_labor_section(section: str, state_key: str, payload: dict) -> None:
     rows: list[dict] = st.session_state.get(state_key, [])
-    updated: list[dict] = []
-    for index, row in enumerate(rows):
-        cols = st.columns([3, 2, 1])
-        role = cols[0].text_input(
-            "Role",
-            value=row.get("Role", ""),
-            key=f"{state_key}_role_{index}",
-        )
-        cost = cols[1].number_input(
-            "Annual Cost",
-            value=float(row.get("Annual Cost", 0.0)),
-            key=f"{state_key}_cost_{index}",
-            step=0.001,
-            format="%.4f",
-        )
-        if cols[2].button("Remove", key=f"{state_key}_remove_{index}"):
-            del rows[index]
-            st.session_state[state_key] = rows
-            _rerun()
-        updated.append({"Role": role.strip(), "Annual Cost": cost})
+    if not rows:
+        st.info("No labour rows configured yet. Use Edit full table to add roles.")
 
-    if updated != rows:
-        st.session_state[state_key] = updated
+    edited_rows = _render_selectable_data_editor(
+        rows,
+        key=f"{state_key}_editor",
+        label_builder=lambda row, index: _editor_row_label(
+            row,
+            index,
+            name_fields=("Role",),
+            fallback_prefix="Role",
+        ),
+        column_order=["Role", "Annual Cost"],
+        column_config={
+            "Annual Cost": st.column_config.NumberColumn(
+                "Annual Cost",
+                min_value=0.0,
+                step=0.001,
+                format="%.4f",
+            )
+        },
+        num_rows="dynamic",
+    )
 
-    with st.form(f"add_{state_key}"):
-        new_role = st.text_input("Role", key=f"{state_key}_new_role")
-        new_cost = st.number_input(
-            "Annual Cost",
-            value=0.0,
-            step=0.001,
-            format="%.4f",
-            key=f"{state_key}_new_cost",
-        )
-        submitted = st.form_submit_button("Add")
+    cleaned_rows = []
+    for row in edited_rows:
+        role = str(row.get("Role", "") or "").strip()
+        if not role:
+            continue
+        try:
+            cost = float(row.get("Annual Cost", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            cost = 0.0
+        cleaned_rows.append({"Role": role, "Annual Cost": max(cost, 0.0)})
 
-    if submitted:
-        if not new_role.strip():
-            st.warning("Role is required to add a labour cost entry.")
-        else:
-            rows.append({"Role": new_role.strip(), "Annual Cost": new_cost})
-            st.session_state[state_key] = rows
-            for key in (f"{state_key}_new_role", f"{state_key}_new_cost"):
-                st.session_state.pop(key, None)
-            _rerun()
+    st.session_state[state_key] = cleaned_rows
 
     labor = payload.setdefault("labor", {})
     labor[section] = {
@@ -3472,6 +3504,300 @@ def _coerce_editor_rows(value: object) -> list[dict]:
     return []
 
 
+def _editor_label_piece(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return ""
+        if float(value).is_integer():
+            return str(int(value))
+        return f"{float(value):g}"
+    text = str(value).strip()
+    if text.lower() in {"", "nan", "none"}:
+        return ""
+    return text
+
+
+def _editor_row_label(
+    row: Mapping[str, object],
+    index: int,
+    *,
+    name_fields: Sequence[str] = (),
+    year_fields: Sequence[str] = (),
+    fallback_prefix: str = "Row",
+) -> str:
+    name_value = ""
+    for field in name_fields:
+        name_value = _editor_label_piece(row.get(field))
+        if name_value:
+            break
+
+    year_value = ""
+    for field in year_fields:
+        year_value = _editor_label_piece(row.get(field))
+        if year_value:
+            break
+
+    if name_value and year_value and year_value not in name_value:
+        return f"{name_value} | {year_value}"
+    if name_value:
+        return name_value
+    if year_value:
+        return year_value
+    return f"{fallback_prefix} {index + 1}"
+
+
+def _editor_row_options(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    label_builder: Callable[[Mapping[str, object], int], str],
+) -> list[tuple[int, str]]:
+    options: list[tuple[int, str]] = []
+    seen: dict[str, int] = {}
+    for index, row in enumerate(rows):
+        base_label = str(label_builder(row, index) or f"Row {index + 1}").strip()
+        count = seen.get(base_label, 0) + 1
+        seen[base_label] = count
+        label = base_label if count == 1 else f"{base_label} ({count})"
+        options.append((index, label))
+    return options
+
+
+def _merge_editor_row_updates(
+    original_rows: Sequence[Mapping[str, object]],
+    edited_rows: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    merged: list[dict[str, object]] = []
+    for index, row in enumerate(edited_rows):
+        base = (
+            dict(original_rows[index])
+            if index < len(original_rows) and isinstance(original_rows[index], Mapping)
+            else {}
+        )
+        base.update(dict(row))
+        merged.append(base)
+    return merged
+
+
+def _editor_mode_selection(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    key: str,
+    label_builder: Callable[[Mapping[str, object], int], str],
+) -> tuple[str, int | None]:
+    normalised_rows = [dict(row) for row in rows if isinstance(row, Mapping)]
+    if not normalised_rows:
+        return "full", None
+
+    mode = st.radio(
+        "Editing mode",
+        options=["row", "full"],
+        format_func=lambda value: (
+            "Select row to edit" if value == "row" else "Edit full table"
+        ),
+        horizontal=True,
+        key=f"{key}_mode",
+    )
+    if mode != "row":
+        return mode, None
+
+    row_options = _editor_row_options(normalised_rows, label_builder=label_builder)
+    labels = [label for _, label in row_options]
+    selected_label = st.selectbox(
+        "Select row to edit",
+        options=labels,
+        key=f"{key}_row_selector",
+    )
+    selected_index = next(
+        (index for index, label in row_options if label == selected_label),
+        row_options[0][0],
+    )
+    return mode, selected_index
+
+
+def _render_selectable_data_editor(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    key: str,
+    label_builder: Callable[[Mapping[str, object], int], str],
+    column_config: Mapping[str, object] | None = None,
+    column_order: Sequence[str] | None = None,
+    num_rows: str = "fixed",
+    hide_index: bool = True,
+    use_container_width: bool = True,
+    row_caption: str | None = None,
+    full_caption: str | None = None,
+) -> list[dict[str, object]]:
+    normalised_rows = [dict(row) for row in rows if isinstance(row, Mapping)]
+
+    if not normalised_rows:
+        edited = st.data_editor(
+            normalised_rows,
+            use_container_width=use_container_width,
+            hide_index=hide_index,
+            num_rows=num_rows,
+            key=f"{key}_full_editor",
+            column_config=column_config,
+            column_order=column_order,
+        )
+        return _coerce_editor_rows(edited)
+
+    mode, selected_index = _editor_mode_selection(
+        normalised_rows,
+        key=key,
+        label_builder=label_builder,
+    )
+
+    if mode == "row" and selected_index is not None:
+        st.caption(
+            row_caption
+            or "Editing one row at a time. Switch to Edit full table for batch updates."
+        )
+        edited = st.data_editor(
+            [copy.deepcopy(normalised_rows[selected_index])],
+            use_container_width=use_container_width,
+            hide_index=hide_index,
+            num_rows="fixed",
+            key=f"{key}_row_editor",
+            column_config=column_config,
+            column_order=column_order,
+        )
+        edited_rows = _coerce_editor_rows(edited)
+        if not edited_rows:
+            return normalised_rows
+        updated_rows = [dict(row) for row in normalised_rows]
+        merged_row = dict(updated_rows[selected_index])
+        merged_row.update(edited_rows[0])
+        updated_rows[selected_index] = merged_row
+        return updated_rows
+
+    st.caption(
+        full_caption
+        or "Editing the full table. Switch to Select row to edit for focused changes."
+    )
+    edited = st.data_editor(
+        normalised_rows,
+        use_container_width=use_container_width,
+        hide_index=hide_index,
+        num_rows=num_rows,
+        key=f"{key}_full_editor",
+        column_config=column_config,
+        column_order=column_order,
+    )
+    edited_rows = _coerce_editor_rows(edited)
+    if not edited_rows:
+        return normalised_rows
+    return _merge_editor_row_updates(normalised_rows, edited_rows)
+
+
+def _monte_variable_labels(
+    selected_codes: Sequence[str],
+    variable_map: Mapping[str, str],
+) -> dict[str, str]:
+    """Return stable display labels for Monte Carlo variable codes."""
+
+    labels: dict[str, str] = {}
+    used: set[str] = set()
+    for code in selected_codes:
+        base_label = str(variable_map.get(code, code) or code).strip() or code
+        label = base_label
+        if label in used:
+            label = f"{base_label} ({code})"
+        labels[code] = label
+        used.add(label)
+    return labels
+
+
+def _build_monte_correlation_matrix_rows(
+    selected_codes: Sequence[str],
+    variable_map: Mapping[str, str],
+    correlations: Mapping[str, Mapping[str, object]] | None,
+) -> list[dict[str, object]]:
+    """Build an upper-triangular correlation editor table."""
+
+    display_labels = _monte_variable_labels(selected_codes, variable_map)
+    rows: list[dict[str, object]] = []
+    correlations = correlations or {}
+
+    for row_index, row_code in enumerate(selected_codes):
+        row: dict[str, object] = {"Variable": display_labels[row_code]}
+        for column_index, column_code in enumerate(selected_codes):
+            column_label = display_labels[column_code]
+            if row_index == column_index:
+                row[column_label] = 1.0
+                continue
+            if column_index < row_index:
+                row[column_label] = None
+                continue
+
+            value: object = None
+            current_targets = correlations.get(row_code, {})
+            if isinstance(current_targets, Mapping):
+                value = current_targets.get(column_code)
+            if value is None:
+                mirrored_targets = correlations.get(column_code, {})
+                if isinstance(mirrored_targets, Mapping):
+                    value = mirrored_targets.get(row_code)
+
+            parsed = _parse_float(value)
+            row[column_label] = (
+                max(min(parsed, 1.0), -1.0)
+                if parsed is not None
+                else 0.0
+            )
+        rows.append(row)
+    return rows
+
+
+def _merge_monte_correlation_matrix_rows(
+    rows: Sequence[Mapping[str, object]],
+    selected_codes: Sequence[str],
+    variable_map: Mapping[str, str],
+    existing: Mapping[str, Mapping[str, object]] | None,
+) -> dict[str, dict[str, object]]:
+    """Merge edited matrix rows back into the nested correlation mapping."""
+
+    selected_set = set(selected_codes)
+    display_labels = _monte_variable_labels(selected_codes, variable_map)
+    editable_rows = {
+        str(row.get("Variable", "")).strip(): row
+        for row in rows
+        if isinstance(row, Mapping) and str(row.get("Variable", "")).strip()
+    }
+
+    merged: dict[str, dict[str, object]] = {}
+    if isinstance(existing, Mapping):
+        for source, targets in existing.items():
+            source_key = str(source)
+            if not isinstance(targets, Mapping):
+                continue
+            preserved_targets: dict[str, object] = {}
+            for target, value in targets.items():
+                target_key = str(target)
+                if source_key in selected_set and target_key in selected_set:
+                    continue
+                preserved_targets[target_key] = value
+            if preserved_targets:
+                merged[source_key] = preserved_targets
+
+    for row_index, row_code in enumerate(selected_codes):
+        row_label = display_labels[row_code]
+        row = editable_rows.get(row_label, {})
+        for column_code in selected_codes[row_index + 1 :]:
+            column_label = display_labels[column_code]
+            parsed = _parse_float(row.get(column_label))
+            if parsed is None:
+                continue
+            value = max(min(parsed, 1.0), -1.0)
+            if abs(value) < 1e-12:
+                continue
+            merged.setdefault(row_code, {})[column_code] = value
+            merged.setdefault(column_code, {})[row_code] = value
+
+    return merged
+
+
 def _render_labor_mode_section(payload: dict) -> None:
     labor_mode = st.radio(
         "Labor Modeling Mode",
@@ -3525,11 +3851,16 @@ def _render_labor_mode_section(payload: dict) -> None:
         }]
         st.session_state["labor_model_rows"] = role_rows
 
-    edited_roles = st.data_editor(
+    edited_roles = _render_selectable_data_editor(
         role_rows,
-        num_rows="dynamic",
-        use_container_width=True,
         key="labor_model_roles_editor",
+        label_builder=lambda row, index: _editor_row_label(
+            row,
+            index,
+            name_fields=("Name",),
+            fallback_prefix="Role",
+        ),
+        num_rows="dynamic",
     )
     normalised_roles = _coerce_editor_rows(edited_roles)
     if normalised_roles:
@@ -3602,11 +3933,16 @@ def _render_labor_mode_section(payload: dict) -> None:
     if not settings_rows:
         st.warning("No yearly settings rows available. Add projection years in assumptions to edit year-by-year labour settings.")
 
-    edited_settings = st.data_editor(
+    edited_settings = _render_selectable_data_editor(
         active_settings_rows,
-        num_rows="fixed",
-        use_container_width=True,
         key="labor_model_settings_editor",
+        label_builder=lambda row, index: _editor_row_label(
+            row,
+            index,
+            year_fields=("Year",),
+            fallback_prefix="Year",
+        ),
+        num_rows="fixed",
     )
     normalised_settings = _coerce_editor_rows(edited_settings)
     if normalised_settings:
@@ -3652,7 +3988,7 @@ def _render_fixed_variable_costs(payload: dict) -> None:
 
     if not rows:
         st.info(
-            "No fixed or variable cost assumptions configured. Use the form below to add entries."
+            "No fixed or variable cost assumptions configured. Use Edit full table or the form below to add entries."
         )
 
     product_catalog = sorted(
@@ -3663,61 +3999,49 @@ def _render_fixed_variable_costs(payload: dict) -> None:
         }
         if value
     )
-
-    visible_rows = rows[:MAX_VISIBLE_COST_ROWS] if rows else []
-    if rows and len(rows) > MAX_VISIBLE_COST_ROWS:
-        st.caption(
-            "Showing the first few fixed and variable cost entries. Use the add form to access other products."
-        )
-
-    updated_rows: list[dict] = []
-    for index, row in enumerate(visible_rows):
-        container = st.container()
-        with container:
-            cols = st.columns([2.0, 1.4, 1.4, 0.8])
-            product_value = _select_or_create_option(
-                cols[0],
-                "Product",
-                product_catalog,
-                f"fixed_variable_product_{index}",
-                current_value=str(row.get("Product", "")),
-            )
-            previous_fixed = float(row.get("Fixed Cost", 0.0))
-            previous_flag = bool(row.get("__has_fixed__", False))
-            fixed_cost = cols[1].number_input(
+    edited_rows = _render_selectable_data_editor(
+        rows,
+        key="fixed_variable_cost_editor",
+        label_builder=lambda row, index: _editor_row_label(
+            row,
+            index,
+            name_fields=("Product",),
+            fallback_prefix="Product",
+        ),
+        column_order=["Product", "Fixed Cost", "Variable Cost"],
+        column_config={
+            "Fixed Cost": st.column_config.NumberColumn(
                 "Fixed Cost",
-                value=previous_fixed,
-                key=f"fixed_variable_fixed_{index}",
+                min_value=0.0,
                 step=1000.0,
                 format="%.2f",
-                min_value=0.0,
-            )
-            variable_cost = cols[2].number_input(
+            ),
+            "Variable Cost": st.column_config.NumberColumn(
                 "Variable Cost",
-                value=float(row.get("Variable Cost", 0.0)),
-                key=f"fixed_variable_variable_{index}",
+                min_value=0.0,
                 step=0.001,
                 format="%.4f",
-                min_value=0.0,
-            )
-            remove = cols[3].button("Remove", key=f"fixed_variable_remove_{index}")
+            ),
+        },
+        num_rows="dynamic",
+    )
 
-            if remove:
-                continue
-
-            has_fixed = previous_flag or abs(float(fixed_cost) - previous_fixed) > 1e-9
-
-            updated_rows.append(
-                {
-                    "Product": product_value.strip(),
-                    "Fixed Cost": float(fixed_cost),
-                    "Variable Cost": float(variable_cost),
-                    "__has_fixed__": has_fixed,
-                }
-            )
-
-    for hidden_row in rows[MAX_VISIBLE_COST_ROWS:]:
-        updated_rows.append(dict(hidden_row))
+    updated_rows: list[dict] = []
+    for row in edited_rows:
+        product_value = str(row.get("Product", "") or "").strip()
+        if not product_value:
+            continue
+        fixed_cost = max(float(row.get("Fixed Cost", 0.0) or 0.0), 0.0)
+        variable_cost = max(float(row.get("Variable Cost", 0.0) or 0.0), 0.0)
+        has_fixed = bool(row.get("__has_fixed__", False)) or abs(fixed_cost) > 1e-9
+        updated_rows.append(
+            {
+                "Product": product_value,
+                "Fixed Cost": fixed_cost,
+                "Variable Cost": variable_cost,
+                "__has_fixed__": has_fixed,
+            }
+        )
 
     st.session_state["fixed_variable_rows"] = updated_rows
     _fixed_variable_rows_to_payload(updated_rows, payload)
@@ -3908,11 +4232,15 @@ def _render_utility_schedule(payload: dict) -> None:
 
     st.markdown("#### Utility Settings by Year")
     editor_rows = _utility_entries_to_editor(active_rows)
-    updated_editor = st.data_editor(
+    updated_editor = _render_selectable_data_editor(
         editor_rows,
-        use_container_width=True,
-        hide_index=True,
         key="utility_schedule_editor",
+        label_builder=lambda row, index: _editor_row_label(
+            row,
+            index,
+            year_fields=("Year",),
+            fallback_prefix="Year",
+        ),
         column_config=_utility_column_config(),
         num_rows="fixed",
     )
@@ -4000,7 +4328,17 @@ def _render_receivable_inputs(payload: dict) -> None:
         }
         for i, row in enumerate(active_rows)
     ]
-    edited = st.data_editor(editor_seed, use_container_width=True, hide_index=True, key="receivable_schedule_editor", num_rows="fixed")
+    edited = _render_selectable_data_editor(
+        editor_seed,
+        key="receivable_schedule_editor",
+        label_builder=lambda row, index: _editor_row_label(
+            row,
+            index,
+            year_fields=("Year",),
+            fallback_prefix="Year",
+        ),
+        num_rows="fixed",
+    )
     normalised = _coerce_editor_rows(edited)
     if normalised:
         rebuilt: list[dict] = []
@@ -4093,7 +4431,17 @@ def _render_inventory_inputs(payload: dict) -> None:
         }
         for i, row in enumerate(active_rows)
     ]
-    edited = st.data_editor(editor_seed, use_container_width=True, hide_index=True, key="inventory_schedule_editor", num_rows="fixed")
+    edited = _render_selectable_data_editor(
+        editor_seed,
+        key="inventory_schedule_editor",
+        label_builder=lambda row, index: _editor_row_label(
+            row,
+            index,
+            year_fields=("Year",),
+            fallback_prefix="Year",
+        ),
+        num_rows="fixed",
+    )
     normalised = _coerce_editor_rows(edited)
     if normalised:
         rebuilt: list[dict] = []
@@ -4235,119 +4583,97 @@ def _render_distributor_commission(payload: Mapping) -> None:
             "No distributor commission assumptions configured. Use the form below to add entries."
         )
 
-    st.markdown("#### Focused row editor")
-    selected_product = st.selectbox(
-        "Product filter",
-        options=product_options if product_options else [""],
-        index=0,
-        key="commission_filter_product",
-    )
-    selected_year = st.selectbox(
-        "Year filter",
-        options=year_options,
-        index=0,
-        key="commission_filter_year",
-    )
-    if selected_product:
-        st.caption(
-            "Editing a single product/year entry. Change the filters to view another row."
-        )
-
-    filtered_rows: list[tuple[int, dict]] = []
-    for idx, row in enumerate(rows):
-        if selected_product and str(row.get("Product", "")).strip() != selected_product:
-            continue
-        if selected_year and str(row.get("Year", "")) != selected_year:
-            continue
-        filtered_rows.append((idx, row))
-
-    if not filtered_rows:
-        st.caption(
-            "No matching commission row found for the selected filters. "
-            "Use the form below to add a new entry."
-        )
-    visible_count = min(len(filtered_rows), 1)
-
-    updated_rows: list[dict] = []
-
     base_rates = _commission_base_rates(payload)
+    edit_mode, selected_row_index = _editor_mode_selection(
+        rows,
+        key="commission_schedule_editor",
+        label_builder=lambda row, index: _editor_row_label(
+            row,
+            index,
+            name_fields=("Product",),
+            year_fields=("Year",),
+            fallback_prefix="Commission row",
+        ),
+    )
 
-    for view_index in range(visible_count):
-        row_index, row = filtered_rows[view_index]
-        container = st.container()
-        with container:
-            cols = st.columns([1.0, 1.8, 1.3, 1.4, 1.4, 1.6, 0.7])
-            year_default = int(row.get("Year", years[row_index] if row_index < len(years) else 0))
-            year_label = str(year_default) if str(year_default) in year_options else year_options[0]
-            year_value = int(
-                cols[0].selectbox(
-                    "Year",
-                    options=year_options,
-                    index=year_options.index(year_label),
-                    key=f"commission_year_{row_index}",
-                )
+    if edit_mode == "row" and selected_row_index is not None:
+        st.caption(
+            "Editing one distributor commission row at a time. Switch to Edit full table for batch updates."
+        )
+        row_index = selected_row_index
+        row = rows[row_index]
+        cols = st.columns([1.0, 1.8, 1.3, 1.4, 1.4, 1.6, 0.9])
+        year_default = int(row.get("Year", years[row_index] if row_index < len(years) else 0))
+        year_label = str(year_default) if str(year_default) in year_options else year_options[0]
+        year_value = int(
+            cols[0].selectbox(
+                "Year",
+                options=year_options,
+                index=year_options.index(year_label),
+                key=f"commission_year_{row_index}",
             )
-            product_value = _select_or_create_option(
-                cols[1],
-                "Product",
-                product_options,
-                f"commission_product_{row_index}",
-                current_value=str(row.get("Product", "")),
-            )
-            base_rate = base_rates.get(product_value, 0.05)
-            cols[2].number_input(
-                "Base Rate (%)",
-                value=float(base_rate * 100.0),
-                step=0.1,
-                min_value=0.0,
-                format="%.2f",
-                disabled=True,
-                key=f"commission_base_{row_index}",
-            )
-            rate_value = cols[3].number_input(
-                "Yearly Commission % (Increment)",
-                value=float(row.get("Yearly Commission %", 0.0)),
-                step=0.05,
-                min_value=0.0,
-                format="%.4f",
-                key=f"commission_increment_{row_index}",
-            )
-            revenue_estimate = _commission_revenue_estimate(payload, year_value, product_value)
-            revenue_default = float(row.get("Revenue", revenue_estimate))
-            preview_row = {
-                "Year": int(year_value),
-                "Product": product_value.strip(),
-                "Yearly Commission %": float(rate_value),
-            }
-            preview_rows = [dict(item) for item in rows]
-            if row_index < len(preview_rows):
-                preview_rows[row_index] = preview_row
-            effective_rate = _commission_effective_rate(
-                preview_rows, payload, product_value, year_value
-            )
-            cols[4].number_input(
-                "Effective Rate (%)",
-                value=float(effective_rate * 100.0),
-                step=0.1,
-                min_value=0.0,
-                format="%.2f",
-                disabled=True,
-                key=f"commission_effective_{row_index}",
-            )
-            revenue_value = cols[5].number_input(
-                "Revenue",
-                value=float(revenue_default),
-                step=1000.0,
-                min_value=0.0,
-                format="%.2f",
-                key=f"commission_revenue_{row_index}",
-            )
-            cols[6].markdown("&nbsp;")
-            if cols[6].button("Remove", key=f"commission_remove_{row_index}"):
-                rows.pop(row_index)
-                st.session_state["commission_rows"] = rows
-                _commission_rows_to_payload(rows, payload)
-                _rerun()
+        )
+        product_value = _select_or_create_option(
+            cols[1],
+            "Product",
+            product_options,
+            f"commission_product_{row_index}",
+            current_value=str(row.get("Product", "")),
+        )
+        base_rate = base_rates.get(product_value, 0.05)
+        cols[2].number_input(
+            "Base Rate (%)",
+            value=float(base_rate * 100.0),
+            step=0.1,
+            min_value=0.0,
+            format="%.2f",
+            disabled=True,
+            key=f"commission_base_{row_index}",
+        )
+        rate_value = cols[3].number_input(
+            "Yearly Commission % (Increment)",
+            value=float(row.get("Yearly Commission %", 0.0)),
+            step=0.05,
+            min_value=0.0,
+            format="%.4f",
+            key=f"commission_increment_{row_index}",
+        )
+        revenue_estimate = _commission_revenue_estimate(payload, year_value, product_value)
+        revenue_default = float(row.get("Revenue", revenue_estimate))
+        preview_row = {
+            "Year": int(year_value),
+            "Product": product_value.strip(),
+            "Yearly Commission %": float(rate_value),
+        }
+        preview_rows = [dict(item) for item in rows]
+        if row_index < len(preview_rows):
+            preview_rows[row_index] = preview_row
+        effective_rate = _commission_effective_rate(
+            preview_rows, payload, product_value, year_value
+        )
+        cols[4].number_input(
+            "Effective Rate (%)",
+            value=float(effective_rate * 100.0),
+            step=0.1,
+            min_value=0.0,
+            format="%.2f",
+            disabled=True,
+            key=f"commission_effective_{row_index}",
+        )
+        revenue_value = cols[5].number_input(
+            "Revenue",
+            value=float(revenue_default),
+            step=1000.0,
+            min_value=0.0,
+            format="%.2f",
+            key=f"commission_revenue_{row_index}",
+        )
+        remove_selected = cols[6].button("Remove", key=f"commission_remove_{row_index}")
+        if remove_selected:
+            rows.pop(row_index)
+            st.session_state["commission_rows"] = rows
+            _commission_rows_to_payload(rows, payload)
+            _rerun()
 
         commission_estimate = revenue_value * effective_rate
         st.caption(
@@ -4356,23 +4682,106 @@ def _render_distributor_commission(payload: Mapping) -> None:
             f"Commission impact: {commission_estimate:,.2f}."
         )
 
-        updated_rows.append(
-            (
-                row_index,
-                {
-                    "Year": int(year_value),
-                    "Product": product_value.strip(),
-                    "Yearly Commission %": float(rate_value),
-                    "Revenue": float(revenue_value),
-                    "Payment Days": int(row.get("Payment Days", 30)),
-                },
-            )
+        merged_rows = [dict(item) for item in rows]
+        if row_index < len(merged_rows):
+            merged_rows[row_index] = {
+                "Year": int(year_value),
+                "Product": product_value.strip(),
+                "Yearly Commission %": float(rate_value),
+                "Revenue": float(revenue_value),
+                "Payment Days": int(row.get("Payment Days", 30)),
+            }
+    else:
+        st.caption(
+            "Editing the full commission table. Switch to Select row to edit for a narrower workflow."
         )
+        editor_rows: list[dict[str, object]] = []
+        for row in rows:
+            product_value = str(row.get("Product", "") or "").strip()
+            year_value = int(row.get("Year", 0) or 0)
+            increment_value = float(row.get("Yearly Commission %", 0.0) or 0.0)
+            revenue_value = float(
+                row.get(
+                    "Revenue",
+                    _commission_revenue_estimate(payload, year_value, product_value),
+                )
+                or 0.0
+            )
+            effective_rate = _commission_effective_rate(
+                rows, payload, product_value, year_value
+            )
+            editor_rows.append(
+                {
+                    "Year": year_value,
+                    "Product": product_value,
+                    "Base Rate (%)": float(base_rates.get(product_value, 0.05) * 100.0),
+                    "Yearly Commission %": increment_value,
+                    "Effective Rate (%)": float(effective_rate * 100.0),
+                    "Revenue": revenue_value,
+                    "Commission Impact": float(revenue_value * effective_rate),
+                    "Payment Days": int(row.get("Payment Days", 30) or 30),
+                }
+            )
 
-    updated_map = {idx: data for idx, data in updated_rows}
-    merged_rows: list[dict] = []
-    for idx, row in enumerate(rows):
-        merged_rows.append(updated_map.get(idx, dict(row)))
+        edited_rows = st.data_editor(
+            editor_rows,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="dynamic",
+            key="commission_schedule_full_editor",
+            column_config={
+                "Base Rate (%)": st.column_config.NumberColumn(
+                    "Base Rate (%)",
+                    disabled=True,
+                    format="%.2f",
+                ),
+                "Yearly Commission %": st.column_config.NumberColumn(
+                    "Yearly Commission % (Increment)",
+                    min_value=0.0,
+                    step=0.05,
+                    format="%.4f",
+                ),
+                "Effective Rate (%)": st.column_config.NumberColumn(
+                    "Effective Rate (%)",
+                    disabled=True,
+                    format="%.2f",
+                ),
+                "Revenue": st.column_config.NumberColumn(
+                    "Revenue",
+                    min_value=0.0,
+                    step=1000.0,
+                    format="%.2f",
+                ),
+                "Commission Impact": st.column_config.NumberColumn(
+                    "Commission Impact",
+                    disabled=True,
+                    format="%.2f",
+                ),
+                "Payment Days": st.column_config.NumberColumn(
+                    "Payment Days",
+                    min_value=0,
+                    step=1,
+                ),
+            },
+        )
+        normalised_editor = _coerce_editor_rows(edited_rows)
+        merged_rows = []
+        for row in normalised_editor:
+            product_value = str(row.get("Product", "") or "").strip()
+            if not product_value:
+                continue
+            merged_rows.append(
+                {
+                    "Year": int(float(row.get("Year", 0) or 0)),
+                    "Product": product_value,
+                    "Yearly Commission %": max(
+                        float(row.get("Yearly Commission %", 0.0) or 0.0),
+                        0.0,
+                    ),
+                    "Revenue": max(float(row.get("Revenue", 0.0) or 0.0), 0.0),
+                    "Payment Days": max(int(float(row.get("Payment Days", 30) or 30)), 0),
+                }
+            )
 
     if merged_rows != rows:
         st.session_state["commission_rows"] = merged_rows
@@ -4617,8 +5026,31 @@ def _render_depreciation_schedule(payload: dict) -> None:
 
     if not rows:
         st.info("No fixed asset schedule configured. Use the form below to add entries.")
+        row_indices: list[int] = []
+    else:
+        edit_mode, selected_index = _editor_mode_selection(
+            rows,
+            key="depreciation_schedule_editor",
+            label_builder=lambda row, index: _editor_row_label(
+                row,
+                index,
+                name_fields=("asset_type",),
+                year_fields=("year",),
+                fallback_prefix="Asset",
+            ),
+        )
+        if edit_mode == "row" and selected_index is not None:
+            st.caption(
+                "Editing one depreciation row at a time. Switch to Edit full table for a full schedule review."
+            )
+            row_indices = [selected_index]
+        else:
+            st.caption(
+                "Editing the full depreciation schedule. Switch to Select row to edit for focused changes."
+            )
+            row_indices = list(range(len(rows)))
 
-    for index in range(len(rows)):
+    for index in row_indices:
         derived = _calculate_depreciation_preview(rows)
         row = rows[index]
         data = derived[index] if index < len(derived) else {}
@@ -4915,11 +5347,15 @@ def _render_cost_and_financing(payload: dict) -> None:
                     "Effective Variable Cost / Unit": float(raw.get("per_unit", 0.0) or 0.0) * factor,
                 }
             )
-        edited_factors = st.data_editor(
+        edited_factors = _render_selectable_data_editor(
             factor_rows,
-            use_container_width=True,
-            hide_index=True,
             key="raw_material_factor_table",
+            label_builder=lambda row, index: _editor_row_label(
+                row,
+                index,
+                name_fields=("Product",),
+                fallback_prefix="Product",
+            ),
             column_config={
                 "Product": st.column_config.TextColumn(disabled=True),
                 "Material Factor": st.column_config.NumberColumn(min_value=0.0, step=0.01, format="%.4f"),
@@ -4945,11 +5381,15 @@ def _render_cost_and_financing(payload: dict) -> None:
     if raw_rows:
         st.markdown("#### Annual raw material spend (optional)")
         if hasattr(st, "data_editor"):
-            updated = st.data_editor(
+            updated = _render_selectable_data_editor(
                 raw_rows,
-                use_container_width=True,
-                hide_index=True,
                 key="raw_material_annual_table",
+                label_builder=lambda row, index: _editor_row_label(
+                    row,
+                    index,
+                    year_fields=("Year",),
+                    fallback_prefix="Year",
+                ),
                 column_config={
                     "Year": st.column_config.NumberColumn(disabled=True),
                     "Annual Spend": st.column_config.NumberColumn(format="%.2f"),
@@ -5077,6 +5517,28 @@ def _render_debt_section(
 
     if not rows:
         st.info("No entries configured. Use the form below to add debt details.")
+        row_indices: list[int] = []
+    else:
+        edit_mode, selected_index = _editor_mode_selection(
+            rows,
+            key=f"{session_key}_editor",
+            label_builder=lambda row, index: _editor_row_label(
+                row,
+                index,
+                year_fields=("Year",),
+                fallback_prefix=title,
+            ),
+        )
+        if edit_mode == "row" and selected_index is not None:
+            st.caption(
+                f"Editing one {title.lower()} row at a time. Switch to Edit full table for the full schedule."
+            )
+            row_indices = [selected_index]
+        else:
+            st.caption(
+                f"Editing the full {title.lower()} schedule. Switch to Select row to edit for focused changes."
+            )
+            row_indices = list(range(len(rows)))
 
     if include_duration:
         if show_amortisation:
@@ -5102,6 +5564,9 @@ def _render_debt_section(
 
     updated_rows: List[dict] = []
     for index, row in enumerate(rows):
+        if row_indices and index not in row_indices:
+            updated_rows.append(dict(row))
+            continue
         cols = st.columns(column_widths)
         default_year = int(
             row.get(
@@ -5422,11 +5887,15 @@ def _render_tax_schedule(payload: dict) -> None:
         _rerun()
 
     st.markdown("#### Tax Settings by Year")
-    edited = st.data_editor(
+    edited = _render_selectable_data_editor(
         active_rows,
-        use_container_width=True,
-        hide_index=True,
         key="tax_schedule_editor",
+        label_builder=lambda row, index: _editor_row_label(
+            row,
+            index,
+            year_fields=("Year",),
+            fallback_prefix="Year",
+        ),
         num_rows="fixed",
     )
     normalised = _coerce_editor_rows(edited)
@@ -5507,7 +5976,17 @@ def _render_inflation_schedule(payload: dict) -> None:
         _rerun()
 
     st.markdown("#### Inflation Settings by Year")
-    edited = st.data_editor(active_rows, use_container_width=True, hide_index=True, key="inflation_schedule_editor", num_rows="fixed")
+    edited = _render_selectable_data_editor(
+        active_rows,
+        key="inflation_schedule_editor",
+        label_builder=lambda row, index: _editor_row_label(
+            row,
+            index,
+            year_fields=("Year",),
+            fallback_prefix="Year",
+        ),
+        num_rows="fixed",
+    )
     normalised = _coerce_editor_rows(edited)
     if normalised:
         rebuilt = []
@@ -5588,7 +6067,17 @@ def _render_risk_schedule(payload: dict) -> None:
         _rerun()
 
     st.markdown("#### Risk Settings by Year")
-    edited = st.data_editor(active_rows, use_container_width=True, hide_index=True, key="risk_schedule_editor", num_rows="fixed")
+    edited = _render_selectable_data_editor(
+        active_rows,
+        key="risk_schedule_editor",
+        label_builder=lambda row, index: _editor_row_label(
+            row,
+            index,
+            year_fields=("Year",),
+            fallback_prefix="Year",
+        ),
+        num_rows="fixed",
+    )
     normalised = _coerce_editor_rows(edited)
     if normalised:
         rebuilt = []
@@ -6121,20 +6610,50 @@ def _render_monte_carlo_inputs(payload: dict) -> None:
                 }
     monte["distributions"] = distributions
 
-    correlation_payload = json.dumps(monte.get("correlations", {}), indent=2)
-    correlation_text = st.text_area(
-        "Correlation matrix (JSON)",
-        value=correlation_payload,
-        height=140,
-        key="monte_correlations",
+    existing_correlations = copy.deepcopy(monte.get("correlations", {}) or {})
+    correlation_rows = _build_monte_correlation_matrix_rows(
+        selected_codes,
+        variable_map,
+        existing_correlations,
     )
-    try:
-        parsed_correlations = json.loads(correlation_text) if correlation_text.strip() else {}
-    except json.JSONDecodeError:
-        st.warning("Correlations must be valid JSON. Keeping previous values.")
-    else:
-        if isinstance(parsed_correlations, dict):
-            monte["correlations"] = parsed_correlations
+    correlation_labels = [row["Variable"] for row in correlation_rows if "Variable" in row]
+    with st.expander("Correlation matrix", expanded=False):
+        st.caption(
+            "Edit the upper triangle only. The matrix mirrors automatically, the diagonal stays 1.00, "
+            "and correlated draws apply to variables using normal or lognormal distributions."
+        )
+        edited_correlations = _render_selectable_data_editor(
+            correlation_rows,
+            key="monte_correlation_matrix_editor",
+            label_builder=lambda row, index: _editor_row_label(
+                row,
+                index,
+                name_fields=("Variable",),
+                fallback_prefix="Variable",
+            ),
+            column_order=["Variable", *correlation_labels],
+            column_config={
+                "Variable": st.column_config.TextColumn("Variable", disabled=True),
+                **{
+                    label: st.column_config.NumberColumn(
+                        label,
+                        min_value=-1.0,
+                        max_value=1.0,
+                        step=0.05,
+                        format="%.2f",
+                    )
+                    for label in correlation_labels
+                },
+            },
+            num_rows="fixed",
+        )
+    edited_rows = _coerce_editor_rows(edited_correlations) or correlation_rows
+    monte["correlations"] = _merge_monte_correlation_matrix_rows(
+        edited_rows,
+        selected_codes,
+        variable_map,
+        existing_correlations,
+    )
 
     scenario_names = list((payload.get("scenarios") or {}).keys())
     scenario_weight_defaults = dict(monte.get("scenario_weights", {}) or {})
