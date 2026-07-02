@@ -173,8 +173,20 @@ def _hydrate_risk(legacy, payload: dict) -> None:
 
 def _core_assumptions_summary(legacy, payload: dict) -> str:
     rows = legacy._payload_to_core_rows(payload)
+    total_units = sum(
+        legacy._core_row_number(
+            row,
+            legacy.CORE_TOTAL_UNITS_FIELD,
+            legacy._LEGACY_CORE_TOTAL_UNITS_FIELD,
+        )
+        for row in rows
+        if isinstance(row, Mapping)
+    )
     return _format_summary(
-        [f"{_count_rows(rows)} product rows configured"],
+        [
+            f"{_count_rows(rows)} product rows configured",
+            f"{total_units:,.0f} planned units across the projection" if total_units > 0 else "",
+        ],
         "No core assumptions configured yet.",
     )
 
@@ -509,7 +521,10 @@ def render_commercial_operations(
         title="Core Assumptions",
         section_key="core_assumptions",
         summary=_core_assumptions_summary(legacy, payload),
-        description="Review or update the product-level production, pricing, and capacity assumptions.",
+        description=(
+            "Review or update product-level production, pricing, and capacity assumptions. "
+            "Planned Total Units rescales the saved production curve across the full projection horizon."
+        ),
         payload=payload,
         render_body=core_assumptions.render_core_assumptions_section,
         hydrate_state=lambda current_payload: _hydrate_core_assumptions(legacy, current_payload),

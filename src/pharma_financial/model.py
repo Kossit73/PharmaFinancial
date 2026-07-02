@@ -2500,6 +2500,7 @@ class FinancialModel:
             indirect_labor = np.array(costs.column("General & Admin"), dtype=float)
             depreciation = np.array(model.depreciation_schedule(), dtype=float)
             interest = np.array(model._interest_schedule(), dtype=float)
+            debt_service = np.array(model._debt_service_schedule(), dtype=float)
             tax_schedule = np.array(model._tax_schedule(), dtype=float)
             discount_rate = model.inputs.financing.discount_rate
             capex = np.array(model._capex_series(), dtype=float)
@@ -2520,6 +2521,7 @@ class FinancialModel:
                 "indirect_labor": indirect_labor,
                 "depreciation": depreciation,
                 "interest": interest,
+                "debt_service": debt_service,
                 "tax_schedule": tax_schedule,
                 "discount_rate": discount_rate,
                 "capex": capex,
@@ -2667,16 +2669,42 @@ class FinancialModel:
             ]
             return dict(zip(variable_order, correlated))
 
+        viability_config = self.inputs.viability
+
+        def _config_for(
+            name: str,
+            default_low: float,
+            default_high: float,
+            inverse: bool = False,
+        ) -> tuple[float, float, bool]:
+            config = viability_config.metrics.get(name)
+            if config is None:
+                return default_low, default_high, inverse
+            return config.low, config.high, config.inverse
+
+        irr_low, irr_high, irr_inverse = _config_for("IRR", 0.12, 0.25)
+        pi_low, pi_high, pi_inverse = _config_for("Profitability Index", 1.1, 1.6)
+        pay_low, pay_high, pay_inverse = _config_for("Payback", 3.0, 8.0, True)
+        ebitda_low, ebitda_high, ebitda_inverse = _config_for("EBITDA Margin", 0.15, 0.35)
+        cagr_low, cagr_high, cagr_inverse = _config_for("Revenue CAGR", 0.05, 0.2)
+        dscr_low, dscr_high, dscr_inverse = _config_for("DSCR", 1.2, 2.0)
+
         metric_names = [metric.strip() for metric in params.metrics]
         allowed_metrics = {
             "NPV",
+            "IRR",
+            "Investor Viability Score",
             "Average Net Income",
             "Average EBITDA",
             "Average Cash Flow",
         }
-        metrics_to_track = [metric for metric in metric_names if metric in allowed_metrics]
-        if "NPV" not in metrics_to_track:
-            metrics_to_track.insert(0, "NPV")
+        metrics_to_track: List[str] = []
+        for metric in ("NPV", "IRR", "Investor Viability Score"):
+            if metric not in metrics_to_track:
+                metrics_to_track.append(metric)
+        for metric in metric_names:
+            if metric in allowed_metrics and metric not in metrics_to_track:
+                metrics_to_track.append(metric)
 
         variable_codes = [
             value
@@ -2716,6 +2744,7 @@ class FinancialModel:
             indirect_labor = baseline["indirect_labor"]
             depreciation = baseline["depreciation"]
             interest = baseline["interest"]
+            debt_service = baseline["debt_service"]
             tax_schedule = baseline["tax_schedule"]
             discount_rate = baseline["discount_rate"]
             capex = baseline["capex"]
@@ -2959,8 +2988,75 @@ class FinancialModel:
                 for idx, cf in enumerate(net_cash_flow)
             ]
             npv = sum(discounted)
+            irr_value = npf_irr(net_cash_flow).value
+            payback_years = self._payback_period(net_cash_flow)
+
+            ebitda_margin_values = [
+                _safe_ratio(value, revenue)
+                for value, revenue in zip(ebitda, simulated_revenue)
+            ]
+            weighted_ebitda_margin = _weighted_average(
+                ebitda_margin_values,
+                simulated_revenue,
+            )
+            if not _is_finite(weighted_ebitda_margin):
+                weighted_ebitda_margin = _average(ebitda_margin_values)
+
+            revenue_cagr = float("nan")
+            if (
+                len(simulated_revenue) > 1
+                and float(simulated_revenue[0]) > 0.0
+                and float(simulated_revenue[-1]) > 0.0
+            ):
+                revenue_cagr = (
+                    (float(simulated_revenue[-1]) / float(simulated_revenue[0]))
+                    ** (1 / (len(simulated_revenue) - 1))
+                ) - 1
+
+            dscr_values = [
+                _safe_ratio(operating_cash_value, service)
+                for operating_cash_value, service in zip(
+                    cash_flow_from_operations,
+                    debt_service,
+                )
+            ]
+            average_dscr = _average(dscr_values)
+
+            total_investment = abs(float(self.inputs.financing.initial_investment or 0.0)) + sum(
+                abs(float(value)) for value in capital_expenditure
+            )
+            profitability_index = float("nan")
+            if total_investment > 0.0:
+                profitability_index = (npv + total_investment) / total_investment
+
+            viability_scores = {
+                "IRR": _score_range(irr_value, irr_low, irr_high, inverse=irr_inverse),
+                "Profitability Index": _score_range(
+                    profitability_index,
+                    pi_low,
+                    pi_high,
+                    inverse=pi_inverse,
+                ),
+                "Payback": _score_range(payback_years, pay_low, pay_high, inverse=pay_inverse),
+                "EBITDA Margin": _score_range(
+                    weighted_ebitda_margin,
+                    ebitda_low,
+                    ebitda_high,
+                    inverse=ebitda_inverse,
+                ),
+                "Revenue CAGR": _score_range(
+                    revenue_cagr,
+                    cagr_low,
+                    cagr_high,
+                    inverse=cagr_inverse,
+                ),
+                "DSCR": _score_range(average_dscr, dscr_low, dscr_high, inverse=dscr_inverse),
+            }
+            viability_score = _weighted_score(viability_scores, viability_config.weights) * 100
 
             averages = {
+                "IRR": irr_value,
+                "Investor Viability Score": viability_score,
                 "Average Net Income": sum(net_income) / len(net_income),
                 "Average EBITDA": sum(ebitda) / len(ebitda),
                 "Average Cash Flow": sum(net_cash_flow) / len(net_cash_flow),
@@ -3203,6 +3299,13 @@ class FinancialModel:
                 result["IRR P10"] = float(np.percentile(irr_array, 10))
                 result["IRR P50"] = float(np.percentile(irr_array, 50))
                 result["IRR P90"] = float(np.percentile(irr_array, 90))
+        if "Investor Viability Score" in monte.data:
+            viability_values = _clean(monte.column("Investor Viability Score"))
+            if viability_values:
+                viability_array = np.array(viability_values, dtype=float)
+                result["Investor Viability Score P10"] = float(np.percentile(viability_array, 10))
+                result["Investor Viability Score P50"] = float(np.percentile(viability_array, 50))
+                result["Investor Viability Score P90"] = float(np.percentile(viability_array, 90))
         return result
 
     def bankability_gate(self) -> Table:
@@ -3412,6 +3515,9 @@ class FinancialModel:
             "IRR P10",
             "IRR P50",
             "IRR P90",
+            "Investor Viability Score P10",
+            "Investor Viability Score P50",
+            "Investor Viability Score P90",
         ):
             if label in risk_metrics:
                 metric_names.append(label)

@@ -1870,30 +1870,26 @@ def _render_executive_summary(
         metric_cols = st.columns(min(len(metrics), 4))
         for idx, (name, value) in enumerate(metrics):
             with metric_cols[idx % len(metric_cols)]:
-                st.metric(name, _format_number(value))
+                st.metric(name, _format_metric_display(name, value))
     irr_warning = _irr_diagnostic_message(model)
     if irr_warning:
         st.warning(irr_warning)
 
     st.markdown("### Range & Scenario Delta")
-    range_rows: list[dict[str, object]] = []
-    monte_table = merged_outputs.monte_carlo
-    for metric in ["NPV", "IRR", "Investor Viability Score"]:
-        if metric not in monte_table.data:
-            continue
-        values = monte_table.column(metric)
-        p10 = _percentile(values, 10)
-        p50 = _percentile(values, 50)
-        p90 = _percentile(values, 90)
-        if p10 is None or p50 is None or p90 is None:
-            continue
-        range_rows.append(
-            {"Metric": metric, "P10": p10, "P50": p50, "P90": p90}
-        )
+    range_rows = _executive_summary_range_rows(merged_outputs)
 
     if range_rows:
         st.markdown("#### Monte Carlo Range (P10/P50/P90)")
-        st.dataframe(_ensure_dataframe(range_rows), use_container_width=True)
+        display_rows = [
+            {
+                "Metric": str(row["Metric"]),
+                "P10": _format_metric_display(str(row["Metric"]), row["P10"], compact=False),
+                "P50": _format_metric_display(str(row["Metric"]), row["P50"], compact=False),
+                "P90": _format_metric_display(str(row["Metric"]), row["P90"], compact=False),
+            }
+            for row in range_rows
+        ]
+        st.dataframe(_ensure_dataframe(display_rows), use_container_width=True)
     else:
         st.caption("Monte Carlo ranges unavailable for NPV/IRR/viability score.")
 
@@ -1960,7 +1956,25 @@ def _render_executive_summary(
                     }
                 )
             st.markdown("#### Scenario Delta (Base / Downside / Upside)")
-            st.dataframe(_ensure_dataframe(compact_rows), use_container_width=True)
+            display_rows = [
+                {
+                    "Scenario": str(row.get("Scenario", "")),
+                    "NPV": _format_metric_display("NPV", row.get("NPV"), compact=False),
+                    "IRR": _format_metric_display("IRR", row.get("IRR"), compact=False),
+                    "Investor Viability Score": _format_metric_display(
+                        "Investor Viability Score",
+                        row.get("Investor Viability Score"),
+                        compact=False,
+                    ),
+                    "NPV Delta vs Base": _format_metric_display(
+                        "NPV",
+                        row.get("NPV Delta vs Base", row.get("NPV Î” vs Base")),
+                        compact=False,
+                    ),
+                }
+                for row in compact_rows
+            ]
+            st.dataframe(_ensure_dataframe(display_rows), use_container_width=True)
         else:
             st.caption("Scenario delta unavailable without a base NPV.")
     else:
@@ -1970,7 +1984,13 @@ def _render_executive_summary(
     if summary_table is not None:
         st.markdown("#### Summary Metrics")
         if pd is not None and hasattr(summary_table, "reset_index"):
-            st.dataframe(summary_table, use_container_width=True)
+            display_table = summary_table.reset_index()
+            metric_column = display_table.columns[0]
+            display_table["Value"] = [
+                _format_metric_display(str(metric), value, compact=False)
+                for metric, value in zip(display_table[metric_column], display_table["Value"])
+            ]
+            st.dataframe(display_table, use_container_width=True)
         else:
             st.table(summary_table)
 
@@ -2973,12 +2993,16 @@ def _coerce_finite_float(value: object) -> Optional[float]:
     return numeric
 
 
-def _summary_metric(outputs: FinancialOutputs, name: str) -> Optional[float]:
-    table = outputs.summary_metrics
+def _summary_metric_from_table(table: Table, name: str) -> Optional[float]:
     if name in table.index:
         position = table.index.index(name)
         return _coerce_finite_float(table.data["Value"][position])
     return None
+
+
+def _summary_metric(outputs: FinancialOutputs, name: str) -> Optional[float]:
+    table = outputs.summary_metrics
+    return _summary_metric_from_table(table, name)
 
 
 def _irr_diagnostic_message(model: FinancialModel) -> Optional[str]:
@@ -3018,6 +3042,35 @@ def _percentile(values: Sequence[float], percentile: float) -> Optional[float]:
     upper_value = cleaned[upper_index]
     weight = position - lower_index
     return lower_value + (upper_value - lower_value) * weight
+
+
+def _executive_summary_range_rows(outputs: FinancialOutputs) -> list[dict[str, float | str]]:
+    rows: list[dict[str, float | str]] = []
+    monte_table = outputs.monte_carlo
+    summary_table = outputs.summary_metrics
+
+    for metric, percentile_metrics in _EXECUTIVE_RANGE_SUMMARY_METRICS.items():
+        p10: Optional[float] = None
+        p50: Optional[float] = None
+        p90: Optional[float] = None
+
+        if metric in monte_table.data:
+            values = monte_table.column(metric)
+            p10 = _percentile(values, 10)
+            p50 = _percentile(values, 50)
+            p90 = _percentile(values, 90)
+
+        if p10 is None or p50 is None or p90 is None:
+            p10 = _summary_metric_from_table(summary_table, percentile_metrics[0])
+            p50 = _summary_metric_from_table(summary_table, percentile_metrics[1])
+            p90 = _summary_metric_from_table(summary_table, percentile_metrics[2])
+
+        if p10 is None or p50 is None or p90 is None:
+            continue
+
+        rows.append({"Metric": metric, "P10": p10, "P50": p50, "P90": p90})
+
+    return rows
 
 
 def _final_value(table: Table, column: str) -> Optional[float]:
@@ -3373,6 +3426,55 @@ def _format_percentage(value: float, decimals: int = 2) -> str:
     if numeric is None:
         return "N/A"
     return f"{numeric * 100:,.{decimals}f}%"
+
+
+_PERCENTAGE_METRICS = frozenset(
+    {
+        "IRR",
+        "Revenue CAGR",
+        "Mid-period Revenue CAGR",
+        "Rolling Revenue CAGR (3Y Avg)",
+        "Weighted Average Gross Margin",
+        "Weighted Average EBITDA Margin",
+        "Weighted Average Net Margin",
+        "Weighted Average Operating Cash Flow Margin",
+        "Evidence Coverage Ratio",
+        "Probability NPV < 0",
+        "Probability IRR < Hurdle",
+        "Average Fixed Labor Share",
+        "IRR P10",
+        "IRR P50",
+        "IRR P90",
+    }
+)
+
+_EXECUTIVE_RANGE_SUMMARY_METRICS: dict[str, tuple[str, str, str]] = {
+    "NPV": ("NPV P10", "NPV P50", "NPV P90"),
+    "IRR": ("IRR P10", "IRR P50", "IRR P90"),
+    "Investor Viability Score": (
+        "Investor Viability Score P10",
+        "Investor Viability Score P50",
+        "Investor Viability Score P90",
+    ),
+}
+
+
+def _metric_uses_percentage(metric_name: str) -> bool:
+    return str(metric_name or "").strip() in _PERCENTAGE_METRICS
+
+
+def _format_metric_display(
+    metric_name: str,
+    value: object,
+    *,
+    compact: bool = True,
+) -> str:
+    numeric = _coerce_finite_float(value)
+    if numeric is None:
+        return "N/A"
+    if _metric_uses_percentage(metric_name):
+        return _format_percentage(numeric)
+    return _format_number(numeric) if compact else _format_display(numeric)
 
 
 def _mapping_to_rows(mapping: Mapping[str, float], key_label: str, value_label: str) -> list[dict]:
@@ -7081,6 +7183,8 @@ def _render_monte_carlo_inputs(payload: dict) -> None:
 
     metric_options = [
         "NPV",
+        "IRR",
+        "Investor Viability Score",
         "Average Net Income",
         "Average EBITDA",
         "Average Cash Flow",
@@ -7779,6 +7883,97 @@ def _initialise_session_payload(payload: dict) -> None:
     st.session_state["ai_api_key"] = st.session_state["ai_settings"].get("api_key", "")
 
 
+CORE_PRODUCT_FIELD = "Product"
+CORE_PRODUCTION_COST_FIELD = "Production Cost"
+CORE_SELLING_PRICE_FIELD = "Selling Price"
+CORE_FREIGHT_COST_FIELD = "Freight Cost"
+CORE_MARKUP_FIELD = "Markup"
+CORE_TOTAL_UNITS_FIELD = "Planned Total Units"
+CORE_CAPACITY_FIELD = "Capacity Limit"
+CORE_YEAR1_UNITS_FIELD = "Year 1 Units"
+CORE_YEAR1_REVENUE_FIELD = "Year 1 Revenue"
+CORE_YEAR1_COST_FIELD = "Year 1 Cost"
+
+_LEGACY_CORE_TOTAL_UNITS_FIELD = "Total Production Units"
+_LEGACY_CORE_CAPACITY_FIELD = "Max Capacity"
+_LEGACY_CORE_TOTAL_REVENUE_FIELD = "Total Revenue"
+_LEGACY_CORE_TOTAL_COST_FIELD = "Total Cost"
+
+
+def _core_row_number(
+    row: Mapping[str, object],
+    primary_field: str,
+    legacy_field: str | None = None,
+) -> float:
+    raw_value = row.get(primary_field)
+    if raw_value in (None, "") and legacy_field:
+        raw_value = row.get(legacy_field)
+    try:
+        return float(raw_value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _build_core_assumption_row(
+    *,
+    product_name: str,
+    production_cost: float,
+    selling_price: float,
+    freight_cost: float,
+    markup_value: float,
+    total_units: float,
+    max_capacity: float,
+    years: Sequence[object],
+    production_estimate: Mapping[str, Sequence[float]] | None,
+    inflation_factor: float = 1.0,
+    risk_factor: float = 1.0,
+) -> dict[str, object]:
+    clamped_units = max(float(total_units), 0.0)
+    capacity_value = max(float(max_capacity), 0.0)
+    if capacity_value > 0.0 and clamped_units > capacity_value + 1e-9:
+        clamped_units = capacity_value
+
+    scaled_series = _scaled_production_series(
+        product_name,
+        clamped_units,
+        years,
+        production_estimate or {},
+    )
+    first_year_units = scaled_series[0] if scaled_series else 0.0
+    year1_revenue = first_year_units * selling_price * inflation_factor * risk_factor
+    year1_cost = (
+        first_year_units
+        * (production_cost + freight_cost + markup_value)
+        * inflation_factor
+        * risk_factor
+    )
+
+    return {
+        CORE_PRODUCT_FIELD: str(product_name),
+        CORE_PRODUCTION_COST_FIELD: float(production_cost),
+        CORE_SELLING_PRICE_FIELD: float(selling_price),
+        CORE_FREIGHT_COST_FIELD: float(freight_cost),
+        CORE_MARKUP_FIELD: float(markup_value),
+        CORE_TOTAL_UNITS_FIELD: clamped_units,
+        CORE_CAPACITY_FIELD: capacity_value,
+        CORE_YEAR1_UNITS_FIELD: float(first_year_units),
+        CORE_YEAR1_REVENUE_FIELD: float(year1_revenue),
+        CORE_YEAR1_COST_FIELD: float(year1_cost),
+    }
+
+
+def _estimate_core_first_year_units(row: Mapping[str, object], total_units: float) -> float:
+    existing_total = _core_row_number(
+        row,
+        CORE_TOTAL_UNITS_FIELD,
+        _LEGACY_CORE_TOTAL_UNITS_FIELD,
+    )
+    existing_year1 = _core_row_number(row, CORE_YEAR1_UNITS_FIELD)
+    if existing_total > 0.0 and existing_year1 > 0.0:
+        return existing_year1 * (float(total_units) / existing_total)
+    return float(total_units)
+
+
 def _payload_to_core_rows(payload: Mapping) -> list[dict]:
     unit_costs = payload.get("unit_costs", {})
     markup = payload.get("markup", {})
@@ -7802,29 +7997,22 @@ def _payload_to_core_rows(payload: Mapping) -> list[dict]:
             years,
             estimates,
         )
-        scaled_series = _scaled_production_series(name, total_units, years, estimates)
-        first_year_units = scaled_series[0] if scaled_series else 0.0
         inflation_factor = inflation_factors[0] if inflation_factors else 1.0
         risk_factor = risk_factors[0] if risk_factors else 1.0
-        total_revenue = first_year_units * selling_price * inflation_factor * risk_factor
-        total_cost = (
-            first_year_units
-            * (production_cost + freight_cost + markup_value)
-            * inflation_factor
-            * risk_factor
-        )
         rows.append(
-            {
-                "Product": str(name),
-                "Production Cost": production_cost,
-                "Selling Price": selling_price,
-                "Freight Cost": freight_cost,
-                "Markup": markup_value,
-                "Total Production Units": total_units,
-                "Max Capacity": max_capacity,
-                "Total Revenue": total_revenue,
-                "Total Cost": total_cost,
-            }
+            _build_core_assumption_row(
+                product_name=str(name),
+                production_cost=production_cost,
+                selling_price=selling_price,
+                freight_cost=freight_cost,
+                markup_value=markup_value,
+                total_units=total_units,
+                max_capacity=max_capacity,
+                years=years,
+                production_estimate=estimates if isinstance(estimates, Mapping) else {},
+                inflation_factor=inflation_factor,
+                risk_factor=risk_factor,
+            )
         )
     return rows
 
@@ -8374,24 +8562,26 @@ def _prime_core_widget_state(rows: Sequence[Mapping]) -> None:
 
     try:
         for index, row in enumerate(rows):
-            _set_widget_value(f"core_desc_{index}", str(row.get("Product", "")))
+            _set_widget_value(f"core_desc_{index}", str(row.get(CORE_PRODUCT_FIELD, "")))
             _set_widget_value(
-                f"core_prod_{index}", float(row.get("Production Cost", 0.0))
+                f"core_prod_{index}", float(row.get(CORE_PRODUCTION_COST_FIELD, 0.0))
             )
             _set_widget_value(
-                f"core_sell_{index}", float(row.get("Selling Price", 0.0))
+                f"core_sell_{index}", float(row.get(CORE_SELLING_PRICE_FIELD, 0.0))
             )
             _set_widget_value(
-                f"core_freight_{index}", float(row.get("Freight Cost", 0.0))
+                f"core_freight_{index}", float(row.get(CORE_FREIGHT_COST_FIELD, 0.0))
             )
             _set_widget_value(
-                f"core_markup_{index}", float(row.get("Markup", 0.0))
+                f"core_markup_{index}", float(row.get(CORE_MARKUP_FIELD, 0.0))
             )
             _set_widget_value(
-                f"core_units_{index}", float(row.get("Total Production Units", 0.0))
+                f"core_units_{index}",
+                _core_row_number(row, CORE_TOTAL_UNITS_FIELD, _LEGACY_CORE_TOTAL_UNITS_FIELD),
             )
             _set_widget_value(
-                f"core_capacity_{index}", float(row.get("Max Capacity", 0.0))
+                f"core_capacity_{index}",
+                _core_row_number(row, CORE_CAPACITY_FIELD, _LEGACY_CORE_CAPACITY_FIELD),
             )
     except Exception:  # pragma: no cover - depends on Streamlit runtime
         pass
@@ -8413,45 +8603,49 @@ def _sync_core_rows_from_widgets(rows: Sequence[Mapping]) -> list[dict]:
 
         description = st.session_state.get(f"core_desc_{index}")
         if description is not None:
-            current["Product"] = str(description).strip()
+            current[CORE_PRODUCT_FIELD] = str(description).strip()
 
         production = st.session_state.get(f"core_prod_{index}")
         if production is not None:
-            current["Production Cost"] = float(production)
+            current[CORE_PRODUCTION_COST_FIELD] = float(production)
 
         selling = st.session_state.get(f"core_sell_{index}")
         if selling is not None:
-            current["Selling Price"] = float(selling)
+            current[CORE_SELLING_PRICE_FIELD] = float(selling)
 
         freight = st.session_state.get(f"core_freight_{index}")
         if freight is not None:
-            current["Freight Cost"] = float(freight)
+            current[CORE_FREIGHT_COST_FIELD] = float(freight)
 
         markup = st.session_state.get(f"core_markup_{index}")
         if markup is not None:
-            current["Markup"] = float(markup)
+            current[CORE_MARKUP_FIELD] = float(markup)
 
         units = st.session_state.get(f"core_units_{index}")
         if units is not None:
-            current["Total Production Units"] = float(units)
+            current[CORE_TOTAL_UNITS_FIELD] = float(units)
 
         capacity = st.session_state.get(f"core_capacity_{index}")
         if capacity is not None:
-            current["Max Capacity"] = float(capacity)
+            current[CORE_CAPACITY_FIELD] = float(capacity)
 
-        total_units = float(current.get("Total Production Units", 0.0))
-        max_capacity = float(current.get("Max Capacity", 0.0))
+        total_units = _core_row_number(current, CORE_TOTAL_UNITS_FIELD, _LEGACY_CORE_TOTAL_UNITS_FIELD)
+        max_capacity = _core_row_number(current, CORE_CAPACITY_FIELD, _LEGACY_CORE_CAPACITY_FIELD)
         if max_capacity > 0.0 and total_units > max_capacity:
             total_units = max_capacity
-        current["Total Production Units"] = total_units
+        current[CORE_TOTAL_UNITS_FIELD] = total_units
 
-        production_cost = float(current.get("Production Cost", 0.0))
-        selling_price = float(current.get("Selling Price", 0.0))
-        freight_cost = float(current.get("Freight Cost", 0.0))
-        markup_value = float(current.get("Markup", 0.0))
+        production_cost = _core_row_number(current, CORE_PRODUCTION_COST_FIELD)
+        selling_price = _core_row_number(current, CORE_SELLING_PRICE_FIELD)
+        freight_cost = _core_row_number(current, CORE_FREIGHT_COST_FIELD)
+        markup_value = _core_row_number(current, CORE_MARKUP_FIELD)
+        first_year_units = _estimate_core_first_year_units(row, total_units)
 
-        current["Total Revenue"] = total_units * selling_price
-        current["Total Cost"] = total_units * (production_cost + freight_cost + markup_value)
+        current[CORE_YEAR1_UNITS_FIELD] = first_year_units
+        current[CORE_YEAR1_REVENUE_FIELD] = first_year_units * selling_price
+        current[CORE_YEAR1_COST_FIELD] = first_year_units * (
+            production_cost + freight_cost + markup_value
+        )
 
         updated_rows.append(current)
 
@@ -8468,17 +8662,17 @@ def _core_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
     capacity_map: dict[str, float] = {}
 
     for row in rows:
-        name = str(row.get("Product", "")).strip()
+        name = str(row.get(CORE_PRODUCT_FIELD, row.get("Product", ""))).strip()
         if not name:
             continue
         unit_costs[name] = {
-            "production": float(row.get("Production Cost", 0.0)),
-            "price": float(row.get("Selling Price", 0.0)),
-            "freight": float(row.get("Freight Cost", 0.0)),
+            "production": _core_row_number(row, CORE_PRODUCTION_COST_FIELD),
+            "price": _core_row_number(row, CORE_SELLING_PRICE_FIELD),
+            "freight": _core_row_number(row, CORE_FREIGHT_COST_FIELD),
         }
-        markup[name] = float(row.get("Markup", 0.0))
-        max_capacity = float(row.get("Max Capacity", 0.0))
-        total_units = float(row.get("Total Production Units", 0.0))
+        markup[name] = _core_row_number(row, CORE_MARKUP_FIELD)
+        max_capacity = _core_row_number(row, CORE_CAPACITY_FIELD, _LEGACY_CORE_CAPACITY_FIELD)
+        total_units = _core_row_number(row, CORE_TOTAL_UNITS_FIELD, _LEGACY_CORE_TOTAL_UNITS_FIELD)
         if max_capacity > 0.0 and total_units > max_capacity:
             total_units = max_capacity
         total_units_map[name] = total_units
