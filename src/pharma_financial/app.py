@@ -3580,6 +3580,371 @@ def _merge_editor_row_updates(
     return merged
 
 
+def _clone_editor_rows(rows: Sequence[Mapping[str, object]] | object) -> list[dict[str, object]]:
+    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes, bytearray)):
+        return []
+    cloned: list[dict[str, object]] = []
+    for row in rows:
+        if isinstance(row, Mapping):
+            cloned.append(copy.deepcopy(dict(row)))
+    return cloned
+
+
+def _editor_rows_signature(rows: Sequence[Mapping[str, object]] | object) -> str:
+    return json.dumps(
+        _clone_editor_rows(rows),
+        sort_keys=True,
+        ensure_ascii=True,
+        default=str,
+    )
+
+
+def _editor_rows_equal(
+    left: Sequence[Mapping[str, object]] | object,
+    right: Sequence[Mapping[str, object]] | object,
+) -> bool:
+    return _editor_rows_signature(left) == _editor_rows_signature(right)
+
+
+def _editor_state_key(key: str, suffix: str) -> str:
+    return f"{key}__{suffix}"
+
+
+def _editor_status_message(key: str) -> tuple[str, str] | None:
+    raw = st.session_state.get(_editor_state_key(key, "status"))
+    if not isinstance(raw, Mapping):
+        return None
+    kind = str(raw.get("kind", "info") or "info").strip() or "info"
+    message = str(raw.get("message", "") or "").strip()
+    if not message:
+        return None
+    return kind, message
+
+
+def _set_editor_status(key: str, kind: str, message: str) -> None:
+    st.session_state[_editor_state_key(key, "status")] = {
+        "kind": kind,
+        "message": message,
+    }
+
+
+def _clear_editor_status(key: str) -> None:
+    st.session_state.pop(_editor_state_key(key, "status"), None)
+
+
+def _render_editor_status(status: tuple[str, str] | None) -> None:
+    if status is None:
+        return
+    kind, message = status
+    if kind == "success":
+        st.success(message)
+        return
+    if kind == "warning":
+        st.warning(message)
+        return
+    st.info(message)
+
+
+def _editor_reset_version(key: str) -> int:
+    return int(st.session_state.get(_editor_state_key(key, "reset_version"), 0) or 0)
+
+
+def _bump_editor_reset_version(key: str) -> None:
+    version_key = _editor_state_key(key, "reset_version")
+    st.session_state[version_key] = _editor_reset_version(key) + 1
+
+
+def _initialise_selectable_editor_state(
+    key: str,
+    rows: Sequence[Mapping[str, object]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    source_rows = _clone_editor_rows(rows)
+    source_signature = _editor_rows_signature(source_rows)
+    saved_key = _editor_state_key(key, "saved_rows")
+    draft_key = _editor_state_key(key, "draft_rows")
+    source_key = _editor_state_key(key, "source_signature")
+
+    if saved_key not in st.session_state or draft_key not in st.session_state:
+        st.session_state[saved_key] = copy.deepcopy(source_rows)
+        st.session_state[draft_key] = copy.deepcopy(source_rows)
+        st.session_state[source_key] = source_signature
+        st.session_state.setdefault(_editor_state_key(key, "reset_version"), 0)
+        return _clone_editor_rows(source_rows), _clone_editor_rows(source_rows)
+
+    saved_rows = _clone_editor_rows(st.session_state.get(saved_key, []))
+    draft_rows = _clone_editor_rows(st.session_state.get(draft_key, []))
+    draft_dirty = not _editor_rows_equal(saved_rows, draft_rows)
+
+    if st.session_state.get(source_key) != source_signature:
+        st.session_state[source_key] = source_signature
+        if not _editor_rows_equal(saved_rows, source_rows):
+            st.session_state[saved_key] = copy.deepcopy(source_rows)
+            saved_rows = _clone_editor_rows(source_rows)
+            if not draft_dirty:
+                st.session_state[draft_key] = copy.deepcopy(source_rows)
+                draft_rows = _clone_editor_rows(source_rows)
+                _bump_editor_reset_version(key)
+                _clear_editor_status(key)
+
+    return saved_rows, draft_rows
+
+
+def _set_editor_draft_rows(
+    key: str,
+    rows: Sequence[Mapping[str, object]],
+    *,
+    refresh_widgets: bool = False,
+) -> list[dict[str, object]]:
+    draft_rows = _clone_editor_rows(rows)
+    st.session_state[_editor_state_key(key, "draft_rows")] = copy.deepcopy(draft_rows)
+    if refresh_widgets:
+        _bump_editor_reset_version(key)
+    _clear_editor_status(key)
+    return draft_rows
+
+
+def _commit_editor_rows(
+    key: str,
+    rows: Sequence[Mapping[str, object]],
+    *,
+    message: str,
+) -> list[dict[str, object]]:
+    committed_rows = _clone_editor_rows(rows)
+    st.session_state[_editor_state_key(key, "saved_rows")] = copy.deepcopy(committed_rows)
+    st.session_state[_editor_state_key(key, "draft_rows")] = copy.deepcopy(committed_rows)
+    _set_editor_status(key, "success", message)
+    return committed_rows
+
+
+def _discard_editor_draft(key: str, *, message: str) -> list[dict[str, object]]:
+    saved_rows = _clone_editor_rows(st.session_state.get(_editor_state_key(key, "saved_rows"), []))
+    st.session_state[_editor_state_key(key, "draft_rows")] = copy.deepcopy(saved_rows)
+    _bump_editor_reset_version(key)
+    _set_editor_status(key, "info", message)
+    return saved_rows
+
+
+def _discard_editor_row(
+    key: str,
+    row_index: int,
+    *,
+    message: str,
+) -> list[dict[str, object]]:
+    saved_rows = _clone_editor_rows(st.session_state.get(_editor_state_key(key, "saved_rows"), []))
+    draft_rows = _clone_editor_rows(st.session_state.get(_editor_state_key(key, "draft_rows"), []))
+    if row_index < len(draft_rows):
+        replacement = (
+            copy.deepcopy(saved_rows[row_index])
+            if row_index < len(saved_rows)
+            else {}
+        )
+        draft_rows[row_index] = replacement
+        st.session_state[_editor_state_key(key, "draft_rows")] = copy.deepcopy(draft_rows)
+        _bump_editor_reset_version(key)
+    _set_editor_status(key, "info", message)
+    return draft_rows
+
+
+def _editor_field_config(
+    column_config: Mapping[str, object] | None,
+    field: str,
+) -> Mapping[str, object]:
+    if not isinstance(column_config, Mapping):
+        return {}
+    raw = column_config.get(field)
+    return raw if isinstance(raw, Mapping) else {}
+
+
+def _editor_field_label(field: str, config: Mapping[str, object]) -> str:
+    label = config.get("label")
+    text = str(label or field).strip()
+    return text or field
+
+
+def _editor_field_type(
+    field: str,
+    value: object,
+    config: Mapping[str, object],
+) -> str:
+    type_config = config.get("type_config", {})
+    if isinstance(type_config, Mapping):
+        field_type = str(type_config.get("type", "") or "").strip()
+        if field_type:
+            return field_type
+    if isinstance(value, bool):
+        return "checkbox"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return "number"
+    return "text"
+
+
+def _editor_visible_fields(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    column_order: Sequence[str] | None = None,
+    column_config: Mapping[str, object] | None = None,
+) -> list[str]:
+    fields: list[str] = []
+
+    def add_field(value: object) -> None:
+        field_name = str(value or "").strip()
+        if not field_name or field_name.startswith("__") or field_name in fields:
+            return
+        fields.append(field_name)
+
+    for field_name in column_order or ():
+        add_field(field_name)
+    if isinstance(column_config, Mapping):
+        for field_name in column_config.keys():
+            add_field(field_name)
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        for field_name in row.keys():
+            add_field(field_name)
+    return fields
+
+
+def _row_editor_widget_key(key: str, field: str) -> str:
+    return _editor_state_key(key, f"row_field::{field}")
+
+
+def _row_editor_loaded_key(key: str) -> str:
+    return _editor_state_key(key, "row_loaded_state")
+
+
+def _sync_row_editor_widget_state(
+    key: str,
+    selected_index: int,
+    row: Mapping[str, object],
+    fields: Sequence[str],
+) -> None:
+    current_state = (selected_index, _editor_reset_version(key))
+    if st.session_state.get(_row_editor_loaded_key(key)) == current_state:
+        return
+    for field in fields:
+        st.session_state[_row_editor_widget_key(key, field)] = copy.deepcopy(row.get(field))
+    st.session_state[_row_editor_loaded_key(key)] = current_state
+
+
+def _editor_number_uses_integer_input(
+    value: object,
+    config: Mapping[str, object],
+) -> bool:
+    type_config = config.get("type_config", {})
+    if not isinstance(type_config, Mapping):
+        return isinstance(value, int) and not isinstance(value, bool)
+    step = type_config.get("step")
+    number_format = str(type_config.get("format", "") or "")
+    if isinstance(step, int):
+        return True
+    if isinstance(step, float) and float(step).is_integer():
+        if not number_format:
+            return True
+        return not any(token in number_format.lower() for token in ("f", "e", "g"))
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _render_row_editor_input(
+    container: DeltaGenerator,
+    *,
+    field: str,
+    value: object,
+    key: str,
+    config: Mapping[str, object],
+) -> object:
+    label = _editor_field_label(field, config)
+    help_text = str(config.get("help", "") or "").strip() or None
+    disabled = bool(config.get("disabled", False))
+    field_type = _editor_field_type(field, value, config)
+    widget_key = _row_editor_widget_key(key, field)
+
+    if field_type == "checkbox":
+        return container.checkbox(
+            label,
+            value=bool(value),
+            key=widget_key,
+            help=help_text,
+            disabled=disabled,
+        )
+
+    if field_type == "selectbox":
+        type_config = config.get("type_config", {})
+        options = list(type_config.get("options", [])) if isinstance(type_config, Mapping) else []
+        current_value = value
+        if current_value not in options:
+            if current_value in ("", None):
+                if "" not in options:
+                    options.insert(0, "")
+                current_value = ""
+            else:
+                options.insert(0, current_value)
+        if not options:
+            options = [current_value]
+        current_index = options.index(current_value) if current_value in options else 0
+        return container.selectbox(
+            label,
+            options=options,
+            index=current_index,
+            key=widget_key,
+            help=help_text,
+            disabled=disabled,
+        )
+
+    if field_type == "number":
+        type_config = config.get("type_config", {})
+        integer_input = _editor_number_uses_integer_input(value, config)
+        min_value = type_config.get("min_value") if isinstance(type_config, Mapping) else None
+        max_value = type_config.get("max_value") if isinstance(type_config, Mapping) else None
+        step = type_config.get("step") if isinstance(type_config, Mapping) else None
+        kwargs: dict[str, object] = {
+            "label": label,
+            "key": widget_key,
+            "help": help_text,
+            "disabled": disabled,
+        }
+        if integer_input:
+            kwargs["value"] = int(round(float(value or 0)))
+            kwargs["step"] = max(int(round(float(step or 1))), 1)
+            if min_value is not None:
+                kwargs["min_value"] = int(math.ceil(float(min_value)))
+            if max_value is not None:
+                kwargs["max_value"] = int(math.floor(float(max_value)))
+            return container.number_input(**kwargs)
+        kwargs["value"] = float(value or 0.0)
+        kwargs["step"] = float(step if step is not None else 0.01)
+        if min_value is not None:
+            kwargs["min_value"] = float(min_value)
+        if max_value is not None:
+            kwargs["max_value"] = float(max_value)
+        number_format = str(type_config.get("format", "") or "") if isinstance(type_config, Mapping) else ""
+        if number_format:
+            kwargs["format"] = number_format
+        return container.number_input(**kwargs)
+
+    text_value = "" if value is None else str(value)
+    lowered_label = label.lower()
+    multiline = "\n" in text_value or len(text_value) > 120 or any(
+        token in lowered_label
+        for token in ("rationale", "description", "comment", "notes")
+    )
+    if multiline:
+        return container.text_area(
+            label,
+            value=text_value,
+            key=widget_key,
+            help=help_text,
+            disabled=disabled,
+        )
+    return container.text_input(
+        label,
+        value=text_value,
+        key=widget_key,
+        help=help_text,
+        disabled=disabled,
+    )
+
+
 def _editor_mode_selection(
     rows: Sequence[Mapping[str, object]],
     *,
@@ -3629,66 +3994,130 @@ def _render_selectable_data_editor(
     row_caption: str | None = None,
     full_caption: str | None = None,
 ) -> list[dict[str, object]]:
-    normalised_rows = [dict(row) for row in rows if isinstance(row, Mapping)]
+    saved_rows, draft_rows = _initialise_selectable_editor_state(key, rows)
+    working_rows = draft_rows if draft_rows else saved_rows
+    persisted_status = _editor_status_message(key)
+    visible_fields = _editor_visible_fields(
+        working_rows,
+        column_order=column_order,
+        column_config=column_config,
+    )
 
-    if not normalised_rows:
-        edited = st.data_editor(
-            normalised_rows,
-            use_container_width=use_container_width,
-            hide_index=hide_index,
-            num_rows=num_rows,
-            key=f"{key}_full_editor",
-            column_config=column_config,
-            column_order=column_order,
-        )
-        return _coerce_editor_rows(edited)
+    _render_editor_status(persisted_status)
 
     mode, selected_index = _editor_mode_selection(
-        normalised_rows,
+        working_rows,
         key=key,
         label_builder=label_builder,
     )
 
-    if mode == "row" and selected_index is not None:
+    if mode == "row" and selected_index is not None and selected_index < len(working_rows):
         st.caption(
             row_caption
-            or "Editing one row at a time. Switch to Edit full table for batch updates."
+            or "Edit one row below, then click Save row to apply the draft."
         )
-        edited = st.data_editor(
-            [copy.deepcopy(normalised_rows[selected_index])],
-            use_container_width=use_container_width,
-            hide_index=hide_index,
-            num_rows="fixed",
-            key=f"{key}_row_editor",
-            column_config=column_config,
-            column_order=column_order,
-        )
-        edited_rows = _coerce_editor_rows(edited)
-        if not edited_rows:
-            return normalised_rows
-        updated_rows = [dict(row) for row in normalised_rows]
-        merged_row = dict(updated_rows[selected_index])
-        merged_row.update(edited_rows[0])
-        updated_rows[selected_index] = merged_row
-        return updated_rows
+        current_row = copy.deepcopy(working_rows[selected_index])
+        _sync_row_editor_widget_state(key, selected_index, current_row, visible_fields)
+        column_count = min(3, max(1, len(visible_fields)))
+        row_columns = st.columns(column_count) if visible_fields else [st]
+        updated_row = dict(current_row)
+        for index, field in enumerate(visible_fields):
+            container = row_columns[index % len(row_columns)]
+            updated_row[field] = _render_row_editor_input(
+                container,
+                field=field,
+                value=current_row.get(field),
+                key=key,
+                config=_editor_field_config(column_config, field),
+            )
+
+        if not _editor_rows_equal([updated_row], [current_row]):
+            draft_rows = _clone_editor_rows(working_rows)
+            draft_rows[selected_index] = updated_row
+            _set_editor_draft_rows(key, draft_rows)
+
+        dirty = not _editor_rows_equal(saved_rows, draft_rows)
+        if dirty:
+            st.warning(
+                "Unsaved changes detected. Click Save row to commit this draft or Reset row to discard it."
+            )
+
+        action_columns = st.columns(2)
+        save_row = action_columns[0].button("Save row", key=f"{key}_row_save")
+        reset_row = action_columns[1].button("Reset row", key=f"{key}_row_reset")
+
+        if save_row:
+            saved_rows = _commit_editor_rows(
+                key,
+                draft_rows,
+                message="Saved row changes.",
+            )
+            st.success("Saved row changes.")
+            return saved_rows
+        if reset_row and dirty:
+            _discard_editor_row(
+                key,
+                selected_index,
+                message="Discarded unsaved row changes.",
+            )
+            _rerun()
+            return _clone_editor_rows(
+                st.session_state.get(_editor_state_key(key, "saved_rows"), [])
+            )
+        return saved_rows
 
     st.caption(
         full_caption
-        or "Editing the full table. Switch to Select row to edit for focused changes."
+        or "Edit the table below, then click Apply table changes to commit the draft."
     )
+    full_editor_key = f"{key}_full_editor_v{_editor_reset_version(key)}"
     edited = st.data_editor(
-        normalised_rows,
+        working_rows,
         use_container_width=use_container_width,
         hide_index=hide_index,
         num_rows=num_rows,
-        key=f"{key}_full_editor",
+        key=full_editor_key,
         column_config=column_config,
         column_order=column_order,
     )
     edited_rows = _coerce_editor_rows(edited)
-    if not edited_rows:
-        return normalised_rows
-    return _merge_editor_row_updates(normalised_rows, edited_rows)
+    merged_draft = _merge_editor_row_updates(working_rows, edited_rows)
+    if not _editor_rows_equal(merged_draft, working_rows):
+        draft_rows = _set_editor_draft_rows(key, merged_draft)
+    else:
+        draft_rows = _clone_editor_rows(working_rows)
+
+    dirty = not _editor_rows_equal(saved_rows, draft_rows)
+    if dirty:
+        st.warning(
+            "Unsaved changes detected. Click Apply table changes to save the draft or Cancel to discard it."
+        )
+
+    action_columns = st.columns(2)
+    apply_changes = action_columns[0].button(
+        "Apply table changes",
+        key=f"{key}_full_apply",
+    )
+    cancel_changes = action_columns[1].button("Cancel", key=f"{key}_full_cancel")
+
+    if apply_changes:
+        saved_rows = _commit_editor_rows(
+            key,
+            draft_rows,
+            message="Applied table changes.",
+        )
+        st.success("Applied table changes.")
+        return saved_rows
+    if cancel_changes and dirty:
+        _discard_editor_draft(
+            key,
+            message="Discarded unsaved table changes.",
+        )
+        _rerun()
+        return _clone_editor_rows(
+            st.session_state.get(_editor_state_key(key, "saved_rows"), [])
+        )
+    return saved_rows
 
 
 def _monte_variable_labels(
@@ -4583,9 +5012,14 @@ def _render_distributor_commission(payload: Mapping) -> None:
             "No distributor commission assumptions configured. Use the form below to add entries."
         )
 
+    editor_key = "commission_schedule_editor"
+    saved_rows, draft_rows = _initialise_selectable_editor_state(editor_key, rows)
+    working_rows = draft_rows if draft_rows else saved_rows
+    _render_editor_status(_editor_status_message(editor_key))
+
     base_rates = _commission_base_rates(payload)
     edit_mode, selected_row_index = _editor_mode_selection(
-        rows,
+        working_rows,
         key="commission_schedule_editor",
         label_builder=lambda row, index: _editor_row_label(
             row,
@@ -4596,12 +5030,14 @@ def _render_distributor_commission(payload: Mapping) -> None:
         ),
     )
 
-    if edit_mode == "row" and selected_row_index is not None:
+    committed_rows = _clone_editor_rows(saved_rows)
+
+    if edit_mode == "row" and selected_row_index is not None and selected_row_index < len(working_rows):
         st.caption(
-            "Editing one distributor commission row at a time. Switch to Edit full table for batch updates."
+            "Edit one distributor commission row below, then click Save row to commit the draft."
         )
         row_index = selected_row_index
-        row = rows[row_index]
+        row = working_rows[row_index]
         cols = st.columns([1.0, 1.8, 1.3, 1.4, 1.4, 1.6, 0.9])
         year_default = int(row.get("Year", years[row_index] if row_index < len(years) else 0))
         year_label = str(year_default) if str(year_default) in year_options else year_options[0]
@@ -4645,7 +5081,7 @@ def _render_distributor_commission(payload: Mapping) -> None:
             "Product": product_value.strip(),
             "Yearly Commission %": float(rate_value),
         }
-        preview_rows = [dict(item) for item in rows]
+        preview_rows = [dict(item) for item in working_rows]
         if row_index < len(preview_rows):
             preview_rows[row_index] = preview_row
         effective_rate = _commission_effective_rate(
@@ -4668,12 +5104,7 @@ def _render_distributor_commission(payload: Mapping) -> None:
             format="%.2f",
             key=f"commission_revenue_{row_index}",
         )
-        remove_selected = cols[6].button("Remove", key=f"commission_remove_{row_index}")
-        if remove_selected:
-            rows.pop(row_index)
-            st.session_state["commission_rows"] = rows
-            _commission_rows_to_payload(rows, payload)
-            _rerun()
+        cols[6].markdown("&nbsp;")
 
         commission_estimate = revenue_value * effective_rate
         st.caption(
@@ -4682,21 +5113,64 @@ def _render_distributor_commission(payload: Mapping) -> None:
             f"Commission impact: {commission_estimate:,.2f}."
         )
 
-        merged_rows = [dict(item) for item in rows]
-        if row_index < len(merged_rows):
-            merged_rows[row_index] = {
-                "Year": int(year_value),
-                "Product": product_value.strip(),
-                "Yearly Commission %": float(rate_value),
-                "Revenue": float(revenue_value),
-                "Payment Days": int(row.get("Payment Days", 30)),
-            }
+        updated_row = {
+            "Year": int(year_value),
+            "Product": product_value.strip(),
+            "Yearly Commission %": max(float(rate_value), 0.0),
+            "Revenue": max(float(revenue_value), 0.0),
+            "Payment Days": max(int(float(row.get("Payment Days", 30) or 30)), 0),
+        }
+        if not _editor_rows_equal([updated_row], [row]):
+            updated_draft = _clone_editor_rows(working_rows)
+            updated_draft[row_index] = updated_row
+            draft_rows = _set_editor_draft_rows(editor_key, updated_draft)
+        else:
+            draft_rows = _clone_editor_rows(working_rows)
+
+        dirty = not _editor_rows_equal(saved_rows, draft_rows)
+        if dirty:
+            st.warning(
+                "Unsaved changes detected. Click Save row to commit this draft, Reset row to discard it, or Remove row to delete it."
+            )
+
+        action_cols = st.columns(3)
+        save_row = action_cols[0].button("Save row", key="commission_row_save")
+        reset_row = action_cols[1].button("Reset row", key="commission_row_reset")
+        remove_row = action_cols[2].button("Remove row", key="commission_row_remove")
+
+        if save_row:
+            committed_rows = _commit_editor_rows(
+                editor_key,
+                draft_rows,
+                message="Saved commission row changes.",
+            )
+            st.success("Saved commission row changes.")
+        elif reset_row and dirty:
+            _discard_editor_row(
+                editor_key,
+                row_index,
+                message="Discarded unsaved commission row changes.",
+            )
+            _rerun()
+            committed_rows = _clone_editor_rows(
+                st.session_state.get(_editor_state_key(editor_key, "saved_rows"), [])
+            )
+        elif remove_row:
+            updated_draft = _clone_editor_rows(draft_rows)
+            if row_index < len(updated_draft):
+                updated_draft.pop(row_index)
+            committed_rows = _commit_editor_rows(
+                editor_key,
+                updated_draft,
+                message="Removed commission row.",
+            )
+            st.success("Removed commission row.")
     else:
         st.caption(
-            "Editing the full commission table. Switch to Select row to edit for a narrower workflow."
+            "Edit the full commission table below, then click Apply table changes to commit the draft."
         )
         editor_rows: list[dict[str, object]] = []
-        for row in rows:
+        for row in working_rows:
             product_value = str(row.get("Product", "") or "").strip()
             year_value = int(row.get("Year", 0) or 0)
             increment_value = float(row.get("Yearly Commission %", 0.0) or 0.0)
@@ -4708,7 +5182,7 @@ def _render_distributor_commission(payload: Mapping) -> None:
                 or 0.0
             )
             effective_rate = _commission_effective_rate(
-                rows, payload, product_value, year_value
+                working_rows, payload, product_value, year_value
             )
             editor_rows.append(
                 {
@@ -4728,7 +5202,7 @@ def _render_distributor_commission(payload: Mapping) -> None:
             use_container_width=True,
             hide_index=True,
             num_rows="dynamic",
-            key="commission_schedule_full_editor",
+            key=f"commission_schedule_full_editor_v{_editor_reset_version(editor_key)}",
             column_config={
                 "Base Rate (%)": st.column_config.NumberColumn(
                     "Base Rate (%)",
@@ -4765,12 +5239,12 @@ def _render_distributor_commission(payload: Mapping) -> None:
             },
         )
         normalised_editor = _coerce_editor_rows(edited_rows)
-        merged_rows = []
+        merged_draft: list[dict[str, object]] = []
         for row in normalised_editor:
             product_value = str(row.get("Product", "") or "").strip()
             if not product_value:
                 continue
-            merged_rows.append(
+            merged_draft.append(
                 {
                     "Year": int(float(row.get("Year", 0) or 0)),
                     "Product": product_value,
@@ -4782,11 +5256,45 @@ def _render_distributor_commission(payload: Mapping) -> None:
                     "Payment Days": max(int(float(row.get("Payment Days", 30) or 30)), 0),
                 }
             )
+        if not _editor_rows_equal(merged_draft, working_rows):
+            draft_rows = _set_editor_draft_rows(editor_key, merged_draft)
+        else:
+            draft_rows = _clone_editor_rows(working_rows)
 
-    if merged_rows != rows:
-        st.session_state["commission_rows"] = merged_rows
-        _commission_rows_to_payload(merged_rows, payload)
-        rows = merged_rows
+        dirty = not _editor_rows_equal(saved_rows, draft_rows)
+        if dirty:
+            st.warning(
+                "Unsaved changes detected. Click Apply table changes to save the draft or Cancel to discard it."
+            )
+
+        action_cols = st.columns(2)
+        apply_changes = action_cols[0].button(
+            "Apply table changes",
+            key="commission_full_apply",
+        )
+        cancel_changes = action_cols[1].button("Cancel", key="commission_full_cancel")
+
+        if apply_changes:
+            committed_rows = _commit_editor_rows(
+                editor_key,
+                draft_rows,
+                message="Applied commission table changes.",
+            )
+            st.success("Applied commission table changes.")
+        elif cancel_changes and dirty:
+            _discard_editor_draft(
+                editor_key,
+                message="Discarded unsaved commission table changes.",
+            )
+            _rerun()
+            committed_rows = _clone_editor_rows(
+                st.session_state.get(_editor_state_key(editor_key, "saved_rows"), [])
+            )
+
+    if not _editor_rows_equal(committed_rows, rows):
+        st.session_state["commission_rows"] = committed_rows
+        _commission_rows_to_payload(committed_rows, payload)
+        rows = committed_rows
     else:
         rows = st.session_state.get("commission_rows", rows)
 
