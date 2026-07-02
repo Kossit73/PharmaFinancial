@@ -41,7 +41,9 @@ def render_knowledge_and_reports(
     with evidence_tab:
         legacy.st.markdown("### Evidence Register")
         _render_table_like(legacy, outputs.evidence_register or [])
-        legacy.st.markdown("### Data Quality Exceptions")
-        _render_table_like(legacy, outputs.data_quality_exceptions or [])
+        legacy._render_data_quality_exceptions_dashboard(
+            outputs.data_quality_exceptions or [],
+            caption="Resolve flagged input or financing issues before sharing the exported workbook with investors.",
+        )
     with assistant_tab:
         legacy._render_rag_tab(model, outputs, digest)

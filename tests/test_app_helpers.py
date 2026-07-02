@@ -1078,6 +1078,61 @@ class RerunHelperTest(unittest.TestCase):
         self.assertEqual(merged["raw_material_cost"]["labor_cost"], 0.2)
         self.assertEqual(merged["labor_cost"]["raw_material_cost"], 0.2)
 
+    def test_issue_summary_metrics_excludes_placeholder_info_row(self):
+        metrics = self.app._issue_summary_metrics(
+            [
+                {
+                    "Area": "Validation",
+                    "Severity": "Info",
+                    "Issue": "No structural data-quality exceptions were detected.",
+                    "Recommended Action": "Continue validating economics and investor downside cases.",
+                }
+            ]
+        )
+
+        self.assertEqual(metrics["active_issues"], 0)
+        self.assertEqual(metrics["critical_count"], 0)
+        self.assertEqual(metrics["areas_impacted"], 0)
+
+    def test_with_index_column_preserves_named_table_index(self):
+        if self.app.pd is None:
+            self.skipTest("pandas is required for dataframe helper assertions")
+
+        frame = self.app._with_index_column(
+            self.app.Table(
+                ["Share Capital", "Senior Debt"],
+                {"Amount": [1.1, 0.9]},
+                index_name="Line Item",
+            )
+        )
+
+        self.assertIn("Line Item", frame.columns)
+        self.assertEqual(frame.loc[0, "Line Item"], "Share Capital")
+        self.assertEqual(frame.loc[1, "Amount"], 0.9)
+
+    def test_schedule_preview_groups_include_core_excel_schedules(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        inputs = self.app.parse_inputs(payload)
+        model = self.app.FinancialModel(inputs)
+        outputs = model.run_core()
+
+        groups, notices = self.app._schedule_preview_groups(model, outputs)
+        titles = {
+            str(item["title"])
+            for group in groups
+            for item in group.get("items", [])
+        }
+
+        self.assertFalse(notices)
+        self.assertIn("Sources & Uses", titles)
+        self.assertIn("Working Capital Schedule", titles)
+        self.assertIn("Gross Revenue Schedule", titles)
+        self.assertIn("Payback Schedule", titles)
+
 
 class UploadLoaderTests(unittest.TestCase):
     def setUp(self):

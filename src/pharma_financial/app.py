@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+from collections import Counter
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -688,6 +689,411 @@ def _generate_excel_bytes(
     return data
 
 
+_ISSUE_SEVERITY_ORDER: tuple[str, ...] = ("Critical", "High", "Medium", "Low", "Info")
+
+
+def _with_index_column(table, default_name: str = "Label") -> "pd.DataFrame | list":
+    frame = _ensure_dataframe(table)
+    if pd is None or not isinstance(frame, pd.DataFrame):
+        return frame
+    result = frame.copy()
+    if not isinstance(result.index, pd.RangeIndex):
+        index_name = str(result.index.name or default_name)
+        if index_name not in result.columns:
+            result.insert(0, index_name, list(result.index))
+    return result.reset_index(drop=True)
+
+
+def _normalise_issue_rows(rows: object) -> list[dict[str, object]]:
+    frame = _ensure_dataframe(rows)
+    if pd is not None and isinstance(frame, pd.DataFrame):
+        return [
+            {str(key): value for key, value in record.items()}
+            for record in frame.to_dict(orient="records")
+        ]
+    if isinstance(frame, list):
+        normalised: list[dict[str, object]] = []
+        for row in frame:
+            if isinstance(row, Mapping):
+                normalised.append({str(key): value for key, value in row.items()})
+        return normalised
+    return []
+
+
+def _is_placeholder_issue_row(row: Mapping[str, object]) -> bool:
+    severity = str(row.get("Severity", "") or "").strip().lower()
+    issue = str(row.get("Issue", "") or "").strip().lower()
+    return severity == "info" and "no structural data-quality exceptions were detected" in issue
+
+
+def _issue_summary_metrics(rows: object) -> dict[str, object]:
+    normalised_rows = _normalise_issue_rows(rows)
+    active_rows = [row for row in normalised_rows if not _is_placeholder_issue_row(row)]
+    severity_counter: Counter[str] = Counter()
+    area_counter: Counter[str] = Counter()
+
+    for row in active_rows:
+        severity = str(row.get("Severity", "") or "").strip().title() or "Unspecified"
+        area = str(row.get("Area", "") or "").strip() or "Unspecified"
+        severity_counter[severity] += 1
+        area_counter[area] += 1
+
+    return {
+        "all_rows": normalised_rows,
+        "active_rows": active_rows,
+        "active_issues": len(active_rows),
+        "critical_count": severity_counter.get("Critical", 0),
+        "high_count": severity_counter.get("High", 0),
+        "areas_impacted": len(area_counter),
+        "severity_counter": severity_counter,
+        "area_counter": area_counter,
+    }
+
+
+def _issue_breakdown_frame(
+    counts: Mapping[str, int], label: str, preferred_order: Sequence[str] = ()
+) -> "pd.DataFrame | list[dict[str, object]]":
+    ordered_keys: list[str] = []
+    seen: set[str] = set()
+    for key in preferred_order:
+        if key in counts and key not in seen:
+            ordered_keys.append(key)
+            seen.add(key)
+    for key in counts:
+        if key not in seen:
+            ordered_keys.append(key)
+            seen.add(key)
+    rows = [{label: key, "Issues": int(counts[key])} for key in ordered_keys]
+    if pd is None:
+        return rows
+    return pd.DataFrame(rows)
+
+
+def _render_schedule_preview_chart(
+    title: str,
+    table: object,
+    *,
+    x_field: str,
+    y_fields: Sequence[str],
+    chart_type: str = "line",
+) -> None:
+    frame = _with_index_column(table, default_name=x_field)
+    if pd is None or not isinstance(frame, pd.DataFrame):
+        st.dataframe(frame, width="stretch")
+        return
+    if x_field not in frame.columns:
+        st.dataframe(frame, width="stretch")
+        return
+
+    numeric_fields = [
+        field
+        for field in y_fields
+        if field in frame.columns
+        and pd.api.types.is_numeric_dtype(frame[field])
+        and bool(frame[field].notna().any())
+    ]
+    if not numeric_fields:
+        st.dataframe(frame, width="stretch")
+        return
+
+    chart_frame = frame[[x_field, *numeric_fields]].copy()
+    if px is None:
+        st.dataframe(chart_frame, width="stretch")
+        return
+
+    long_frame = chart_frame.melt(
+        id_vars=[x_field],
+        value_vars=numeric_fields,
+        var_name="Series",
+        value_name="Value",
+    )
+
+    if chart_type == "area":
+        fig = px.area(long_frame, x=x_field, y="Value", color="Series", title=title)
+    elif chart_type == "bar":
+        fig = px.bar(long_frame, x=x_field, y="Value", color="Series", barmode="group", title=title)
+    elif chart_type == "barh":
+        fig = px.bar(
+            long_frame,
+            x="Value",
+            y=x_field,
+            color="Series",
+            orientation="h",
+            barmode="group",
+            title=title,
+        )
+    else:
+        fig = px.line(long_frame, x=x_field, y="Value", color="Series", markers=True, title=title)
+
+    fig.update_layout(
+        legend_title_text="",
+        margin=dict(l=24, r=24, t=56, b=24),
+        xaxis_title=x_field,
+        yaxis_title="Value",
+    )
+    st.plotly_chart(fig, width="stretch")
+
+
+def _schedule_preview_groups(
+    model: FinancialModel,
+    outputs: FinancialOutputs,
+) -> tuple[list[dict[str, object]], list[str]]:
+    notices: list[str] = []
+
+    def _safe_item(
+        *,
+        title: str,
+        caption: str,
+        table_factory: Callable[[], object],
+        x_field: str,
+        y_fields: Sequence[str],
+        chart_type: str = "line",
+    ) -> dict[str, object] | None:
+        try:
+            table = table_factory()
+        except Exception as exc:  # pragma: no cover - defensive UI fallback
+            notices.append(f"{title}: {exc}")
+            return None
+        return {
+            "title": title,
+            "caption": caption,
+            "table": table,
+            "x_field": x_field,
+            "y_fields": list(y_fields),
+            "chart_type": chart_type,
+        }
+
+    groups: list[dict[str, object]] = []
+
+    funding_items = [
+        _safe_item(
+            title="Bankability Gate",
+            caption="Compare actual outputs against investor and lender thresholds before exporting the workbook.",
+            table_factory=lambda: outputs.bankability_gate,
+            x_field="Gate",
+            y_fields=("Actual", "Threshold"),
+            chart_type="bar",
+        ),
+        _safe_item(
+            title="Sources & Uses",
+            caption="Review the capital stack and deployment plan that will flow into the Excel pack.",
+            table_factory=lambda: outputs.sources_and_uses,
+            x_field="Line Item",
+            y_fields=("Amount",),
+            chart_type="barh",
+        ),
+        _safe_item(
+            title="Liquidity Bridge",
+            caption="Track operating cash generation, funding drawdowns, and closing liquidity by year.",
+            table_factory=lambda: outputs.liquidity_bridge,
+            x_field="Year",
+            y_fields=(
+                "Net Cash Generated from Operating Activities",
+                "Net Cash Flow for the Period",
+                "Cash and Cash Equivalents at the End of the Period",
+                "Cash Buffer Headroom",
+            ),
+        ),
+        _safe_item(
+            title="Covenant Headroom",
+            caption="Monitor debt-service cover and cash buffer headroom across the forecast horizon.",
+            table_factory=lambda: outputs.covenant_headroom,
+            x_field="Year",
+            y_fields=("DSCR", "Minimum DSCR", "DSCR Headroom", "Cash Buffer Headroom"),
+        ),
+    ]
+    groups.append(
+        {
+            "label": "Funding & Controls",
+            "description": "Investor-readiness checks, capital structure, and covenant resilience.",
+            "items": [item for item in funding_items if item is not None],
+        }
+    )
+
+    operations_items = [
+        _safe_item(
+            title="Working Capital Schedule",
+            caption="Inspect receivables, inventory, payables, and the yearly cash absorption from working capital.",
+            table_factory=model.working_capital_schedule,
+            x_field="Year",
+            y_fields=(
+                "Accounts Receivable",
+                "Inventory",
+                "Accounts Payable",
+                "Net Working Capital",
+            ),
+        ),
+        _safe_item(
+            title="Inventory Schedule",
+            caption="Compare calculated inventory, balance-sheet inventory, and stock turns for each year.",
+            table_factory=model.inventory_schedule,
+            x_field="Year",
+            y_fields=(
+                "Calculated Inventory",
+                "Balance Sheet Inventory",
+                "Inventory Turnover",
+            ),
+        ),
+    ]
+    groups.append(
+        {
+            "label": "Operations",
+            "description": "Working-capital intensity and inventory dynamics behind the Excel schedules.",
+            "items": [item for item in operations_items if item is not None],
+        }
+    )
+
+    performance_items = [
+        _safe_item(
+            title="Gross Revenue Schedule",
+            caption="Visualise product-family sales and the gap between gross revenue and net revenue.",
+            table_factory=model.revenue_schedule,
+            x_field="Year",
+            y_fields=("Gross Revenue", "Net Revenue", "Distributors Commission"),
+        ),
+        _safe_item(
+            title="Total Expenses Schedule",
+            caption="See how the operating cost base compounds across raw materials, utilities, labour, and overheads.",
+            table_factory=model.cost_structure,
+            x_field="Year",
+            y_fields=("Raw Materials", "Utilities", "Direct Labor", "General & Admin", "Total Expenses"),
+            chart_type="area",
+        ),
+        _safe_item(
+            title="Income Statement",
+            caption="Summarise revenue conversion from net sales through EBITDA to net income.",
+            table_factory=lambda: outputs.income_statement,
+            x_field="Year",
+            y_fields=("Net Revenue", "EBITDA", "Net Income"),
+        ),
+        _safe_item(
+            title="Cash Flow Statement",
+            caption="Check how operating, investing, and financing cash flows shape the closing cash position.",
+            table_factory=lambda: outputs.cash_flow,
+            x_field="Year",
+            y_fields=(
+                "Net Cash Generated from Operating Activities",
+                "Net Cash Used in Investing Activities",
+                "Net Cash Used in Financing Activities",
+                "Cash and Cash Equivalents at the End of the Period",
+            ),
+        ),
+    ]
+    groups.append(
+        {
+            "label": "Performance",
+            "description": "Commercial and financial schedules that feed the exported workbook narrative.",
+            "items": [item for item in performance_items if item is not None],
+        }
+    )
+
+    returns_items = [
+        _safe_item(
+            title="Break-even Analysis",
+            caption="Compare expected volume against break-even demand and margin-of-safety levels by product.",
+            table_factory=lambda: outputs.break_even,
+            x_field="Product",
+            y_fields=("Break-even Units", "Expected Volume", "Margin of Safety (Units)"),
+            chart_type="bar",
+        ),
+        _safe_item(
+            title="Payback Schedule",
+            caption="Show the annual cash-flow build and cumulative recovery curve used in investor discussions.",
+            table_factory=lambda: outputs.payback,
+            x_field="Year",
+            y_fields=("Cash Flow", "Cumulative"),
+        ),
+        _safe_item(
+            title="Discounted Payback Schedule",
+            caption="Show discounted recovery versus cumulative discounted cash flow across the forecast.",
+            table_factory=lambda: outputs.discounted_payback,
+            x_field="Year",
+            y_fields=("Discounted Cash Flow", "Cumulative"),
+        ),
+    ]
+    groups.append(
+        {
+            "label": "Returns",
+            "description": "Recovery, break-even, and investor-return schedules prepared for export.",
+            "items": [item for item in returns_items if item is not None],
+        }
+    )
+
+    return groups, notices
+
+
+def _render_data_quality_exceptions_dashboard(
+    rows: object,
+    *,
+    heading: str = "### Data Quality Exceptions",
+    caption: str | None = None,
+) -> None:
+    st.markdown(heading)
+    if caption:
+        st.caption(caption)
+
+    metrics = _issue_summary_metrics(rows)
+    active_rows = cast(list[dict[str, object]], metrics["active_rows"])
+    all_rows = cast(list[dict[str, object]], metrics["all_rows"])
+    active_issues = int(metrics["active_issues"])
+    critical_count = int(metrics["critical_count"])
+    high_count = int(metrics["high_count"])
+    areas_impacted = int(metrics["areas_impacted"])
+
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Active Issues", active_issues)
+    metric_cols[1].metric("Critical", critical_count)
+    metric_cols[2].metric("High", high_count)
+    metric_cols[3].metric("Areas Impacted", areas_impacted)
+
+    if active_issues == 0:
+        st.success("No active data-quality exceptions are blocking the current scenario.")
+    elif critical_count > 0:
+        st.error("Critical exceptions need to be resolved before relying on the exported model.")
+    elif high_count > 0:
+        st.warning("High-severity exceptions remain. Review the flagged inputs before sharing the workbook.")
+    else:
+        st.info("Exceptions are informational or moderate. Review them before finalising the case.")
+
+    severity_frame = _issue_breakdown_frame(
+        cast(Mapping[str, int], metrics["severity_counter"]),
+        "Severity",
+        _ISSUE_SEVERITY_ORDER,
+    )
+    area_frame = _issue_breakdown_frame(cast(Mapping[str, int], metrics["area_counter"]), "Area")
+
+    if pd is not None and isinstance(severity_frame, pd.DataFrame) and not severity_frame.empty and px is not None:
+        severity_col, area_col = st.columns(2)
+        with severity_col:
+            fig = px.bar(
+                severity_frame,
+                x="Severity",
+                y="Issues",
+                color="Severity",
+                category_orders={"Severity": list(_ISSUE_SEVERITY_ORDER)},
+                title="Issues by Severity",
+            )
+            fig.update_layout(legend_title_text="", margin=dict(l=24, r=24, t=56, b=24))
+            st.plotly_chart(fig, width="stretch")
+        with area_col:
+            if isinstance(area_frame, pd.DataFrame) and not area_frame.empty:
+                fig = px.bar(
+                    area_frame.sort_values("Issues", ascending=False),
+                    x="Issues",
+                    y="Area",
+                    orientation="h",
+                    title="Issues by Area",
+                )
+                fig.update_layout(margin=dict(l=24, r=24, t=56, b=24))
+                st.plotly_chart(fig, width="stretch")
+
+    table_rows = active_rows or all_rows
+    if table_rows:
+        st.dataframe(_ensure_dataframe(table_rows), width="stretch")
+    else:
+        st.info("No data-quality exception rows are available for this scenario.")
+
+
 def _render_projection_horizon(payload: dict) -> None:
     """Allow users to adjust the model start and end years via dropdowns."""
 
@@ -1281,14 +1687,17 @@ def _render_excel_model_download(
     container: DeltaGenerator, base_model: FinancialModel, base_outputs: FinancialOutputs
 ) -> None:
     with container:
-        st.markdown("### Excel Model Download")
-
         payload = st.session_state.get("input_payload") or {}
         scenario_options = _scenario_options(payload)
         stored_selection = st.session_state.get("excel_scenario_selection")
         default_index = 0
         if isinstance(stored_selection, str) and stored_selection in scenario_options:
             default_index = scenario_options.index(stored_selection)
+
+        st.markdown("### Excel Model Studio")
+        st.caption(
+            "Keep the workbook export pipeline intact while reviewing the funding, operating, and return schedules visually before download."
+        )
 
         selected_scenario = st.selectbox(
             "Select scenario for Excel export",
@@ -1311,21 +1720,34 @@ def _render_excel_model_download(
         excel_bytes = excel_map.get(selected_scenario)
 
         model.scenario = selected_scenario
+        preview_groups, preview_notices = _schedule_preview_groups(model, results)
+        issue_metrics = _issue_summary_metrics(results.data_quality_exceptions or [])
+        preview_count = sum(
+            len(cast(list[dict[str, object]], group.get("items", []))) for group in preview_groups
+        )
 
-        download_container = st.container()
-        with download_container:
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("Scenario", selected_scenario)
+        metric_cols[1].metric("Workbook Status", "Ready" if excel_bytes else "Not Prepared")
+        metric_cols[2].metric("Schedule Previews", preview_count)
+        metric_cols[3].metric("Active Exceptions", int(issue_metrics["active_issues"]))
+
+        control_col, context_col = st.columns([1.2, 1.8])
+        with control_col:
+            st.markdown("#### Export Controls")
+            st.caption(f"Current scenario: {selected_scenario}")
+
             if not excel_bytes:
                 if st.button(
                     "Prepare Excel Model",
                     key=f"prepare_excel_{selected_scenario.lower()}",
                 ):
                     with st.spinner("Preparing Excel workbook..."):
-                        excel_bytes = _generate_excel_bytes(
-                            model, results, selected_scenario
-                        )
+                        excel_bytes = _generate_excel_bytes(model, results, selected_scenario)
                     excel_map[selected_scenario] = excel_bytes
                     st.session_state.excel_bytes_map = excel_map
             if excel_bytes:
+                st.success("Workbook prepared and ready for download.")
                 st.download_button(
                     "Download Excel Model",
                     data=excel_bytes,
@@ -1339,8 +1761,41 @@ def _render_excel_model_download(
                     excel_map.pop(selected_scenario, None)
                     st.session_state.excel_bytes_map = excel_map
                     excel_bytes = None
-            if not excel_bytes:
+            else:
                 st.info("Click 'Prepare Excel Model' to generate the workbook for download.")
+
+        with context_col:
+            st.markdown("#### Workbook Preview")
+            if int(issue_metrics["active_issues"]) == 0:
+                st.success("No active data-quality exceptions are currently blocking the exported workbook.")
+            elif int(issue_metrics["critical_count"]) > 0:
+                st.error("Critical data-quality issues remain. Review the schedule gallery before sharing the workbook.")
+            else:
+                st.warning("The workbook can be generated, but flagged data-quality exceptions should be reviewed.")
+            st.markdown(
+                "The preview gallery below mirrors the exported schedule families so you can inspect trends before downloading."
+            )
+            if preview_notices:
+                for notice in preview_notices:
+                    st.caption(f"Preview unavailable: {notice}")
+
+        st.markdown("#### Schedule Gallery")
+        group_tabs = st.tabs([str(group["label"]) for group in preview_groups])
+        for group, group_tab in zip(preview_groups, group_tabs):
+            with group_tab:
+                st.caption(str(group.get("description", "")))
+                for item in cast(list[dict[str, object]], group.get("items", [])):
+                    st.markdown(f"##### {item['title']}")
+                    st.caption(str(item["caption"]))
+                    _render_schedule_preview_chart(
+                        str(item["title"]),
+                        item["table"],
+                        x_field=str(item["x_field"]),
+                        y_fields=cast(Sequence[str], item["y_fields"]),
+                        chart_type=str(item.get("chart_type", "line")),
+                    )
+                    with st.expander(f"Preview {item['title']} data"):
+                        st.dataframe(_with_index_column(item["table"]), width="stretch")
 
 
 def _request_model_run() -> None:

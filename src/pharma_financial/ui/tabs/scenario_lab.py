@@ -53,5 +53,7 @@ def render_scenario_lab(
         _render_table_like(legacy, outputs.bankability_gate)
         legacy.st.markdown("### Covenant Headroom")
         _render_table_like(legacy, outputs.covenant_headroom)
-        legacy.st.markdown("### Data Quality Exceptions")
-        _render_table_like(legacy, outputs.data_quality_exceptions or [])
+        legacy._render_data_quality_exceptions_dashboard(
+            outputs.data_quality_exceptions or [],
+            caption="Review unresolved exceptions alongside covenant headroom before relying on downside cases.",
+        )

@@ -457,8 +457,10 @@ def render_setup_and_validation(
         _render_table_like(legacy, outputs.bankability_gate)
         quality_col, evidence_col = st.columns(2)
         with quality_col:
-            st.markdown("### Data Quality Exceptions")
-            _render_table_like(legacy, outputs.data_quality_exceptions or [])
+            legacy._render_data_quality_exceptions_dashboard(
+                outputs.data_quality_exceptions or [],
+                caption="Use these exceptions as the setup punch list before moving into scenario analysis.",
+            )
         with evidence_col:
             st.markdown("### Evidence Register")
             _render_table_like(legacy, outputs.evidence_register or [])
