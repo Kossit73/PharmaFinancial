@@ -110,12 +110,17 @@ def render_evidence_register_section(payload: dict) -> None:
     if not isinstance(rows, list):
         rows = []
     st.subheader("Evidence Register")
-    edited = st.data_editor(
+    edited = legacy._render_selectable_data_editor(
         rows,
-        use_container_width=True,
-        hide_index=True,
-        num_rows="dynamic",
         key="assumption_evidence_editor",
+        label_builder=lambda row, index: legacy._editor_row_label(
+            row,
+            index,
+            name_fields=("assumption", "value_reference", "category"),
+            year_fields=("benchmark_year",),
+            fallback_prefix="Evidence",
+        ),
+        num_rows="dynamic",
     )
     normalised = []
     for row in _editor_rows(edited):
@@ -142,12 +147,16 @@ def render_downside_case_section(payload: dict) -> None:
     if not isinstance(rows, list):
         rows = []
     st.subheader("Pharma Downside Cases")
-    edited = st.data_editor(
+    edited = legacy._render_selectable_data_editor(
         rows,
-        use_container_width=True,
-        hide_index=True,
-        num_rows="dynamic",
         key="downside_case_editor",
+        label_builder=lambda row, index: legacy._editor_row_label(
+            row,
+            index,
+            name_fields=("name",),
+            fallback_prefix="Downside case",
+        ),
+        num_rows="dynamic",
     )
     normalised = []
     for row in _editor_rows(edited):

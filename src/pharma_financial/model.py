@@ -3635,18 +3635,19 @@ class FinancialModel:
 
     def _payback_period(self, cash_flows: Iterable[Number]) -> float:
         cumulative = _cumulative(cash_flows)
+        start_year = float(self.years[0]) if self.years else 0.0
         for idx, value in enumerate(cumulative):
             if value >= 0:
                 if idx == 0:
-                    return float(self.years[idx])
+                    return 0.0
                 previous = cumulative[idx - 1]
                 if value == previous:
-                    return float(self.years[idx])
+                    return float(self.years[idx] - start_year)
                 year_before = self.years[idx - 1]
                 year_after = self.years[idx]
                 step = year_after - year_before
                 fraction = (0.0 - previous) / (value - previous)
-                return float(year_before + step * fraction)
+                return float((year_before - start_year) + step * fraction)
         return float("nan")
 
     def payback_schedule(self) -> Table:

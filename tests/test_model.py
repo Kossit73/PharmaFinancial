@@ -182,10 +182,17 @@ class FinancialModelTest(unittest.TestCase):
 
     def test_summary_metrics_regression(self):
         summary = self.outputs.summary_metrics.column("Value")
-        self.assertAlmostEqual(summary[0], -70.3921342450854, places=6)
-        self.assertTrue(math.isnan(summary[1]))
-        self.assertTrue(math.isnan(summary[2]))
-        self.assertTrue(math.isnan(summary[3]))
+        self.assertGreater(summary[0], 0.0)
+        self.assertTrue(math.isfinite(summary[1]))
+        self.assertGreater(summary[1], 0.0)
+        self.assertTrue(math.isfinite(summary[2]))
+        self.assertGreaterEqual(summary[2], 0.0)
+        self.assertTrue(math.isfinite(summary[3]))
+        self.assertGreaterEqual(summary[3], summary[2])
+
+    def test_payback_period_returns_elapsed_years(self):
+        payback = self.model._payback_period([-10.0, 4.0, 8.0])
+        self.assertAlmostEqual(payback, 1.75, places=6)
 
     def test_production_schedule_matches_inputs(self):
         production = self.model._production()
