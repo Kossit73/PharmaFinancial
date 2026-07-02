@@ -255,6 +255,39 @@ class RerunHelperTest(unittest.TestCase):
 
         self.assertIsNone(self.app._irr_diagnostic_message(model))
 
+    def test_resolve_inputs_preserves_default_production_profile(self):
+        class _Container:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        default_payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        inputs, _digest = self.app._resolve_inputs(_Container())
+        resolved_payload = self.stub.session_state["input_payload"]
+
+        self.assertEqual(
+            resolved_payload["production_estimate"],
+            default_payload["production_estimate"],
+        )
+        self.assertAlmostEqual(
+            resolved_payload["total_production_units"]["Tablets"],
+            sum(default_payload["production_estimate"]["Tablets"]),
+            places=6,
+        )
+
+        model = self.app.FinancialModel(inputs)
+        outputs = model.run_core()
+
+        self.assertIsNotNone(self.app._summary_metric(outputs, "IRR"))
+        self.assertIsNone(self.app._irr_diagnostic_message(model))
+
     def test_refresh_runtime_session_state_replaces_legacy_placeholder_payload(self):
         default_payload = json.loads(self.app.DEFAULT_INPUT_JSON)
         placeholder_payload = json.loads(self.app.DEFAULT_INPUT_JSON)
@@ -559,22 +592,22 @@ class RerunHelperTest(unittest.TestCase):
         )
 
         total_units = sum(parsed.production_estimate[product_name])
-        expected_total = float(synced[0]["Total Production Units"]) * len(parsed.years)
+        expected_total = float(synced[0]["Total Production Units"])
         self.assertAlmostEqual(total_units, expected_total, places=6)
 
-    def test_scaled_production_series_treats_total_units_as_annual_capacity(self):
-        yearly_units = 123.0
+    def test_scaled_production_series_preserves_existing_profile_shape(self):
+        total_units = 120.0
         years = [2024, 2025, 2026]
         prior_profile = {"Tablets": [10.0, 20.0, 30.0]}
 
         scaled = self.app._scaled_production_series(
             "Tablets",
-            yearly_units,
+            total_units,
             years,
             prior_profile,
         )
 
-        self.assertEqual(scaled, [yearly_units, yearly_units, yearly_units])
+        self.assertEqual(scaled, [20.0, 40.0, 60.0])
 
     def test_sync_tax_entries_supports_tax_settings_rows_shape(self):
         rows = [

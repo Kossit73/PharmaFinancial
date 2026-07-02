@@ -28,6 +28,8 @@ def _runtime_fingerprint() -> str:
     for path in (
         ROOT / "streamlit_app.py",
         SRC / "pharma_financial" / "app.py",
+        SRC / "pharma_financial" / "inputs.py",
+        SRC / "pharma_financial" / "ui" / "editors" / "core_assumptions.py",
         SRC / "pharma_financial" / "ui" / "state.py",
         SRC / "pharma_financial" / "data" / "default_inputs.json",
     ):
