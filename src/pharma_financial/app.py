@@ -11,6 +11,7 @@ import re
 from collections import Counter
 from dataclasses import replace
 from datetime import datetime
+from html import escape as html_escape
 from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
 import math
@@ -769,6 +770,495 @@ def _issue_breakdown_frame(
     return pd.DataFrame(rows)
 
 
+_EXCEL_STUDIO_FAMILY_SPECS: tuple[dict[str, object], ...] = (
+    {
+        "label": "Workbook Overview",
+        "description": "Headline outputs, dashboard-style scorecards, and chart-pack sheets prepared for the exported workbook.",
+        "sections": ("Executive Summary", "Key Metrics Dashboard", "Chart Pack"),
+    },
+    {
+        "label": "Funding & Controls",
+        "description": "Capital stack, lender controls, evidence quality, and downside review sheets.",
+        "sections": ("Bankability & Funding", "Evidence & Downside Cases"),
+    },
+    {
+        "label": "Operations & Performance",
+        "description": "Commercial schedules, product economics, and operating-cost build-up.",
+        "sections": ("Financial Performance",),
+    },
+    {
+        "label": "Returns & Statements",
+        "description": "Recovery schedules, financial position, and cash flow statements aligned to the export pack.",
+        "sections": ("Break-even & Payback", "Financial Position", "Cash Flow Statement"),
+    },
+    {
+        "label": "Advanced Analysis",
+        "description": "Sensitivity, scenario, and Monte Carlo worksheets supporting downside analysis.",
+        "sections": ("Sensitivity Analysis", "Scenario / IFs Analysis", "Monte Carlo Simulation"),
+    },
+)
+
+_EXCEL_STUDIO_SECTION_CAPTIONS: dict[str, str] = {
+    "Executive Summary": "Board-level metrics and scenario framing for the exported workbook.",
+    "Bankability & Funding": "Funding structure, gate checks, and covenant resilience for investor review.",
+    "Evidence & Downside Cases": "Evidence hygiene and downside diagnostics before the workbook is shared externally.",
+    "Key Metrics Dashboard": "Operating conversion, value creation, and cash-cycle support tables.",
+    "Financial Performance": "Commercial outputs and operating costs that shape the income statement.",
+    "Break-even & Payback": "Recovery profile and volume thresholds used in investment-case discussions.",
+    "Financial Position": "Balance-sheet posture across the projection horizon.",
+    "Cash Flow Statement": "Operating, investing, and financing flows behind closing liquidity.",
+    "Sensitivity Analysis": "Directional stress-test outputs for the most important assumptions.",
+    "Scenario / IFs Analysis": "What-if sheets comparing planned management cases.",
+    "Monte Carlo Simulation": "Probabilistic downside outputs from the stochastic engine.",
+    "Chart Pack": "Presentation-ready trend sheets built from the core model outputs.",
+}
+
+_EXCEL_STUDIO_SHEET_CAPTIONS: dict[str, str] = {
+    "Executive Summary": "A concise investor scorecard of the base-case economics.",
+    "Monte Carlo Range (P10/P50/P90)": "Range view of downside, midpoint, and upside outcomes from the simulation set.",
+    "Scenario Delta (Base/Downside/Upside)": "Direct comparison of the management cases used in the workbook narrative.",
+    "Bankability Gate": "Actual outputs versus the lender and investor hurdles configured in the model.",
+    "Sources & Uses": "Capital stack and deployment plan feeding the workbook funding sheets.",
+    "Liquidity Bridge": "Cash generation, financing flows, and ending liquidity by year.",
+    "Covenant Headroom": "Debt-service resilience and minimum-cash headroom over the forecast.",
+    "Evidence Register": "Source coverage for investor-critical assumptions.",
+    "Data Quality Exceptions": "Open data-quality findings that still require attention before sharing.",
+    "Downside Case Summary": "Summary of downside cases versus the base case.",
+    "Summary Metrics": "Core investment outputs and downside statistics exported into the workbook.",
+    "Goal Seek": "Gap-to-target bridge for the selected commercial objective.",
+    "Working Capital Schedule": "Receivables, inventory, payables, and net working-capital absorption by year.",
+    "Inventory Schedule": "Calculated inventory, recorded balances, and stock-turn diagnostics.",
+    "Statement of Financial Performance": "Revenue conversion from sales through EBITDA to net income.",
+    "Commercial Diagnostics": "Product-by-product scale, utilisation, and unit-economics snapshot.",
+    "Gross Revenue Schedule": "Product sales build-up before commissions and net revenue.",
+    "Total Expenses Schedule": "Operating-cost stack across materials, utilities, labour, and overheads.",
+    "Break-even Analysis": "Product break-even volumes and margin-of-safety view.",
+    "Payback Schedule": "Annual and cumulative cash recovery profile for the investment case.",
+    "Discounted Payback Schedule": "Discounted recovery path against the configured hurdle rate.",
+    "Statement of Financial Position": "Projected assets, liabilities, and equity by year.",
+    "Statement of Cash Flows": "Operating, investing, and financing movements across the forecast.",
+    "Sensitivity Analysis": "Sensitivity worksheet exported for management stress tests.",
+    "Scenario / IFs Analysis": "Scenario worksheet exported for management what-if review.",
+    "Monte Carlo Simulation": "Iteration-level stochastic results used to derive risk statistics.",
+    "Revenue & EBITDA Trend": "Presentation chart sheet for revenue conversion and EBITDA progression.",
+    "Cost Split Trend": "Presentation chart sheet for the operating-cost mix over time.",
+    "Cash Flow Trend": "Presentation chart sheet for annual cash-flow components.",
+    "Break-even Overview": "Presentation chart sheet for break-even demand and margin of safety.",
+    "Sensitivity Trend": "Presentation chart sheet for stress-testing outputs.",
+    "Monte Carlo Simulation Trend": "Presentation chart sheet for the stochastic value distribution.",
+}
+
+_EXCEL_STUDIO_CHART_GUIDE: dict[str, dict[str, object]] = {
+    "Monte Carlo Range (P10/P50/P90)": {
+        "x_field": "Metric",
+        "y_fields": ("P10", "P50", "P90"),
+        "chart_type": "bar",
+    },
+    "Scenario Delta (Base/Downside/Upside)": {
+        "x_field": "Scenario",
+        "y_fields": ("NPV", "IRR", "Investor Viability Score"),
+        "chart_type": "bar",
+    },
+    "Bankability Gate": {
+        "x_field": "Gate",
+        "y_fields": ("Actual", "Threshold"),
+        "chart_type": "bar",
+    },
+    "Sources & Uses": {
+        "x_field": "Line Item",
+        "y_fields": ("Amount",),
+        "chart_type": "barh",
+    },
+    "Liquidity Bridge": {
+        "x_field": "Year",
+        "y_fields": (
+            "Net Cash Generated from Operating Activities",
+            "Net Cash Flow for the Period",
+            "Cash and Cash Equivalents at the End of the Period",
+            "Cash Buffer Headroom",
+        ),
+        "chart_type": "line",
+    },
+    "Covenant Headroom": {
+        "x_field": "Year",
+        "y_fields": ("DSCR", "Minimum DSCR", "DSCR Headroom", "Cash Buffer Headroom"),
+        "chart_type": "line",
+    },
+    "Downside Case Summary": {
+        "x_field": "Case",
+        "y_fields": ("NPV", "IRR", "Investor Viability Score"),
+        "chart_type": "bar",
+    },
+    "Goal Seek": {
+        "x_field": "Metric",
+        "y_fields": ("Target", "Actual", "Gap"),
+        "chart_type": "bar",
+    },
+    "Working Capital Schedule": {
+        "x_field": "Year",
+        "y_fields": (
+            "Accounts Receivable",
+            "Inventory",
+            "Accounts Payable",
+            "Net Working Capital",
+        ),
+        "chart_type": "line",
+    },
+    "Inventory Schedule": {
+        "x_field": "Year",
+        "y_fields": (
+            "Calculated Inventory",
+            "Balance Sheet Inventory",
+            "Inventory Turnover",
+        ),
+        "chart_type": "line",
+    },
+    "Statement of Financial Performance": {
+        "x_field": "Year",
+        "y_fields": ("Net Revenue", "Gross Profit", "EBITDA", "Net Income"),
+        "chart_type": "line",
+    },
+    "Commercial Diagnostics": {
+        "x_field": "Product",
+        "y_fields": ("Year 1 Units", "Peak Units"),
+        "chart_type": "bar",
+    },
+    "Gross Revenue Schedule": {
+        "x_field": "Year",
+        "y_fields": ("Gross Revenue", "Net Revenue", "Distributors Commission"),
+        "chart_type": "line",
+    },
+    "Total Expenses Schedule": {
+        "x_field": "Year",
+        "y_fields": (
+            "Raw Materials",
+            "Utilities",
+            "Direct Labor",
+            "General & Admin",
+            "Total Expenses",
+        ),
+        "chart_type": "area",
+    },
+    "Break-even Analysis": {
+        "x_field": "Product",
+        "y_fields": ("Break-even Units", "Expected Volume", "Margin of Safety (Units)"),
+        "chart_type": "bar",
+    },
+    "Payback Schedule": {
+        "x_field": "Year",
+        "y_fields": ("Cash Flow", "Cumulative"),
+        "chart_type": "line",
+    },
+    "Discounted Payback Schedule": {
+        "x_field": "Year",
+        "y_fields": ("Discounted Cash Flow", "Cumulative"),
+        "chart_type": "line",
+    },
+    "Statement of Financial Position": {
+        "x_field": "Year",
+        "y_fields": ("Cash", "Inventory", "Total Assets", "Equity"),
+        "chart_type": "line",
+    },
+    "Statement of Cash Flows": {
+        "x_field": "Year",
+        "y_fields": (
+            "Net Cash Generated from Operating Activities",
+            "Net Cash Used in Investing Activities",
+            "Net Cash Used in Financing Activities",
+            "Cash and Cash Equivalents at the End of the Period",
+        ),
+        "chart_type": "line",
+    },
+    "Monte Carlo Simulation": {
+        "x_field": "Iteration",
+        "y_fields": ("NPV",),
+        "chart_type": "line",
+    },
+    "Revenue & EBITDA Trend": {
+        "x_field": "Year",
+        "y_fields": ("Gross Revenue", "Net Revenue", "EBITDA"),
+        "chart_type": "line",
+    },
+    "Cost Split Trend": {
+        "x_field": "Year",
+        "y_fields": ("Raw Materials", "Direct Labor", "Utilities", "General & Admin", "Cost of Sales"),
+        "chart_type": "area",
+    },
+    "Cash Flow Trend": {
+        "x_field": "Year",
+        "y_fields": (
+            "Net Cash Generated from Operating Activities",
+            "Net Cash Used in Investing Activities",
+            "Net Cash Used in Financing Activities",
+        ),
+        "chart_type": "line",
+    },
+    "Break-even Overview": {
+        "x_field": "Product",
+        "y_fields": ("Break-even Revenue", "Break-even Units", "Expected Volume", "Margin of Safety (%)"),
+        "chart_type": "bar",
+    },
+    "Monte Carlo Simulation Trend": {
+        "x_field": "Iteration",
+        "y_fields": ("NPV",),
+        "chart_type": "line",
+    },
+}
+
+_EXCEL_STUDIO_METRIC_PREVIEW_ROWS: dict[str, tuple[str, ...]] = {
+    "Executive Summary": ("NPV", "IRR", "Payback Period", "Investor Viability Score"),
+    "Summary Metrics": (
+        "NPV",
+        "IRR",
+        "Payback Period",
+        "Discounted Payback",
+        "Profitability Index",
+        "Investor Viability Score",
+    ),
+}
+
+
+def _shape_of_table(table: object) -> tuple[int, int]:
+    if pd is not None and isinstance(table, pd.DataFrame):
+        return int(table.shape[0]), int(table.shape[1])
+    if isinstance(table, list):
+        if not table:
+            return 0, 0
+        first_row = table[0] if isinstance(table[0], Mapping) else {}
+        return len(table), len(first_row)
+    return 0, 0
+
+
+def _select_numeric_fields(frame: "pd.DataFrame", fields: Sequence[str], limit: int = 4) -> list[str]:
+    selected: list[str] = []
+    for field in fields:
+        if field not in frame.columns:
+            continue
+        if not pd.api.types.is_numeric_dtype(frame[field]):
+            continue
+        if not bool(frame[field].notna().any()):
+            continue
+        selected.append(field)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def _slice_metric_preview_frame(frame: "pd.DataFrame", metric_names: Sequence[str]) -> "pd.DataFrame":
+    if "Metric" not in frame.columns or "Value" not in frame.columns:
+        return frame
+    filtered = frame[frame["Metric"].astype(str).isin(metric_names)][["Metric", "Value"]].copy()
+    if filtered.empty:
+        return frame
+    order = {name: position for position, name in enumerate(metric_names)}
+    filtered["_metric_order"] = filtered["Metric"].astype(str).map(order).fillna(len(order))
+    filtered = filtered.sort_values("_metric_order").drop(columns="_metric_order")
+    return filtered.reset_index(drop=True)
+
+
+def _build_issue_severity_preview_frame(rows: object) -> object:
+    metrics = _issue_summary_metrics(rows)
+    severity_counter = cast(Counter[str], metrics["severity_counter"])
+    return _issue_breakdown_frame(severity_counter, "Severity", _ISSUE_SEVERITY_ORDER)
+
+
+def _preview_chart_payload(title: str, table: object) -> tuple[object, str, list[str], str]:
+    frame = _with_index_column(table)
+    if pd is None or not isinstance(frame, pd.DataFrame) or frame.empty:
+        return frame, "", [], "line"
+
+    if title in _EXCEL_STUDIO_METRIC_PREVIEW_ROWS:
+        frame = _slice_metric_preview_frame(frame, _EXCEL_STUDIO_METRIC_PREVIEW_ROWS[title])
+
+    if title == "Evidence Register" and {"Assumption", "Coverage Ratio"}.issubset(frame.columns):
+        chart_frame = frame[["Assumption", "Coverage Ratio"]].copy()
+        y_fields = _select_numeric_fields(chart_frame, ("Coverage Ratio",), limit=1)
+        return chart_frame, "Assumption", y_fields, "barh"
+
+    if title == "Data Quality Exceptions":
+        chart_frame = _build_issue_severity_preview_frame(frame)
+        if pd is not None and isinstance(chart_frame, pd.DataFrame) and not chart_frame.empty:
+            return chart_frame, "Severity", ["Issues"], "bar"
+        if isinstance(chart_frame, list) and chart_frame:
+            return chart_frame, "Severity", ["Issues"], "bar"
+        return frame, "", [], "bar"
+
+    spec = _EXCEL_STUDIO_CHART_GUIDE.get(title)
+    if spec is not None:
+        x_field = str(spec["x_field"])
+        y_fields = _select_numeric_fields(frame, cast(Sequence[str], spec["y_fields"]))
+        if x_field in frame.columns and y_fields:
+            return frame, x_field, y_fields, str(spec["chart_type"])
+
+    columns = list(frame.columns)
+    if not columns:
+        return frame, "", [], "line"
+    x_candidates = ("Year", "Product", "Scenario", "Case", "Metric", "Line Item", "Gate", "Assumption", "Iteration")
+    x_field = next((field for field in x_candidates if field in columns), str(columns[0]))
+    y_fields = _select_numeric_fields(frame, [field for field in columns if field != x_field])
+    chart_type = "line" if x_field in {"Year", "Iteration"} else "bar"
+    if x_field in {"Line Item", "Assumption"}:
+        chart_type = "barh"
+    return frame, x_field, y_fields, chart_type
+
+
+def _excel_sheet_caption(section_title: str, table_title: str) -> str:
+    return _EXCEL_STUDIO_SHEET_CAPTIONS.get(
+        table_title,
+        f"Preview the exported {table_title.lower()} worksheet from the {section_title} section.",
+    )
+
+
+def _build_excel_sheet_preview_item(
+    section_title: str,
+    table_title: str,
+    table: object,
+    *,
+    note: str | None = None,
+) -> dict[str, object]:
+    preview_table = _with_index_column(table)
+    row_count, column_count = _shape_of_table(preview_table)
+    chart_table, x_field, y_fields, chart_type = _preview_chart_payload(table_title, table)
+    return {
+        "section": section_title,
+        "title": table_title,
+        "caption": _excel_sheet_caption(section_title, table_title),
+        "table": preview_table,
+        "chart_table": chart_table,
+        "x_field": x_field,
+        "y_fields": y_fields,
+        "chart_type": chart_type,
+        "row_count": row_count,
+        "column_count": column_count,
+        "series_count": len(y_fields),
+        "note": note,
+    }
+
+
+def _render_sheet_chip_row(labels: Sequence[str]) -> str:
+    return "".join(
+        f'<span class="excel-chip">{html_escape(str(label))}</span>'
+        for label in labels
+        if str(label).strip()
+    )
+
+
+def _render_excel_studio_hero(
+    *,
+    selected_scenario: str,
+    preview_groups: Sequence[Mapping[str, object]],
+    preview_count: int,
+    workbook_ready: bool,
+    active_issues: int,
+) -> None:
+    family_cards = "".join(
+        f"""
+        <article class="excel-map-card">
+            <p class="excel-map-label">{html_escape(str(group["label"]))}</p>
+            <p class="excel-map-value">{len(cast(list[dict[str, object]], group.get("items", [])))} sheets</p>
+            <p class="excel-map-copy">{html_escape(str(group.get("description", "")))}</p>
+        </article>
+        """
+        for group in preview_groups
+    )
+    readiness_copy = "Workbook prepared" if workbook_ready else "Workbook draft"
+    issue_copy = "No active exceptions" if active_issues == 0 else f"{active_issues} flagged issues"
+    st.markdown(
+        f"""
+        <section class="excel-studio-hero">
+            <p class="excel-studio-kicker">Excel export experience</p>
+            <h3 class="excel-studio-title">Excel Model Studio</h3>
+            <p class="excel-studio-copy">
+                Review every workbook family with presentation-ready plots before downloading the Excel model.
+                The export architecture stays intact while the preview layer gives each worksheet a clearer design treatment.
+            </p>
+            <div class="excel-chip-row">
+                <span class="excel-chip">Scenario: {html_escape(selected_scenario)}</span>
+                <span class="excel-chip">Preview sheets: {preview_count}</span>
+                <span class="excel-chip">{readiness_copy}</span>
+                <span class="excel-chip">{issue_copy}</span>
+            </div>
+            <div class="excel-map-grid">{family_cards}</div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_excel_sheet_preview(item: Mapping[str, object]) -> None:
+    title = str(item["title"])
+    caption = str(item["caption"])
+    section_title = str(item["section"])
+    row_count = int(item.get("row_count", 0))
+    column_count = int(item.get("column_count", 0))
+    series_count = int(item.get("series_count", 0))
+    x_field = str(item.get("x_field", "") or "")
+    y_fields = cast(Sequence[str], item.get("y_fields", ()))
+    note = cast(Optional[str], item.get("note"))
+    badge_labels = [
+        f"{section_title}",
+        f"{row_count} rows",
+        f"{column_count} columns",
+    ]
+    if series_count > 0:
+        badge_labels.append(f"{series_count} plotted series")
+    st.markdown(
+        f"""
+        <section class="excel-sheet-card">
+            <p class="excel-sheet-kicker">Worksheet preview</p>
+            <h4 class="excel-sheet-title">{html_escape(title)}</h4>
+            <p class="excel-sheet-copy">{html_escape(caption)}</p>
+            <div class="excel-chip-row">{_render_sheet_chip_row(badge_labels)}</div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    chart_col, stats_col = st.columns([2.2, 1.1])
+    with chart_col:
+        chart_rendered = False
+        if x_field and y_fields:
+            chart_rendered = _render_schedule_preview_chart(
+                title,
+                item["chart_table"],
+                x_field=x_field,
+                y_fields=y_fields,
+                chart_type=str(item.get("chart_type", "line")),
+            )
+        if not chart_rendered:
+            st.markdown(
+                """
+                <div class="excel-empty-state">
+                    <strong>No plot available for this sheet.</strong><br/>
+                    This worksheet is still included in the Excel export and can be reviewed in the data preview below.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    with stats_col:
+        summary_cols = st.columns(3)
+        summary_cols[0].metric("Rows", row_count)
+        summary_cols[1].metric("Columns", column_count)
+        summary_cols[2].metric("Series", series_count)
+        st.markdown("##### Sheet Context")
+        st.caption(_EXCEL_STUDIO_SECTION_CAPTIONS.get(section_title, "Workbook section preview."))
+        if x_field:
+            st.caption(f"Primary axis: {x_field}")
+        if y_fields:
+            st.markdown(
+                f'<div class="excel-chip-row">{_render_sheet_chip_row(y_fields)}</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption("Narrative or reference sheet without numeric plot series.")
+        if note:
+            st.warning(note)
+
+    with st.expander(f"Preview {title} worksheet data"):
+        st.dataframe(_ensure_dataframe(item["table"]), width="stretch")
+
+
 def _render_schedule_preview_chart(
     title: str,
     table: object,
@@ -776,14 +1266,12 @@ def _render_schedule_preview_chart(
     x_field: str,
     y_fields: Sequence[str],
     chart_type: str = "line",
-) -> None:
+) -> bool:
     frame = _with_index_column(table, default_name=x_field)
     if pd is None or not isinstance(frame, pd.DataFrame):
-        st.dataframe(frame, width="stretch")
-        return
+        return False
     if x_field not in frame.columns:
-        st.dataframe(frame, width="stretch")
-        return
+        return False
 
     numeric_fields = [
         field
@@ -793,13 +1281,11 @@ def _render_schedule_preview_chart(
         and bool(frame[field].notna().any())
     ]
     if not numeric_fields:
-        st.dataframe(frame, width="stretch")
-        return
+        return False
 
     chart_frame = frame[[x_field, *numeric_fields]].copy()
     if px is None:
-        st.dataframe(chart_frame, width="stretch")
-        return
+        return False
 
     long_frame = chart_frame.melt(
         id_vars=[x_field],
@@ -827,11 +1313,14 @@ def _render_schedule_preview_chart(
 
     fig.update_layout(
         legend_title_text="",
+        template="plotly_white",
+        height=360,
         margin=dict(l=24, r=24, t=56, b=24),
         xaxis_title=x_field,
         yaxis_title="Value",
     )
     st.plotly_chart(fig, width="stretch")
+    return True
 
 
 def _schedule_preview_groups(
@@ -840,184 +1329,47 @@ def _schedule_preview_groups(
 ) -> tuple[list[dict[str, object]], list[str]]:
     notices: list[str] = []
 
-    def _safe_item(
-        *,
-        title: str,
-        caption: str,
-        table_factory: Callable[[], object],
-        x_field: str,
-        y_fields: Sequence[str],
-        chart_type: str = "line",
-    ) -> dict[str, object] | None:
-        try:
-            table = table_factory()
-        except Exception as exc:  # pragma: no cover - defensive UI fallback
-            notices.append(f"{title}: {exc}")
-            return None
-        return {
-            "title": title,
-            "caption": caption,
-            "table": table,
-            "x_field": x_field,
-            "y_fields": list(y_fields),
-            "chart_type": chart_type,
-        }
-
-    groups: list[dict[str, object]] = []
-
-    funding_items = [
-        _safe_item(
-            title="Bankability Gate",
-            caption="Compare actual outputs against investor and lender thresholds before exporting the workbook.",
-            table_factory=lambda: outputs.bankability_gate,
-            x_field="Gate",
-            y_fields=("Actual", "Threshold"),
-            chart_type="bar",
-        ),
-        _safe_item(
-            title="Sources & Uses",
-            caption="Review the capital stack and deployment plan that will flow into the Excel pack.",
-            table_factory=lambda: outputs.sources_and_uses,
-            x_field="Line Item",
-            y_fields=("Amount",),
-            chart_type="barh",
-        ),
-        _safe_item(
-            title="Liquidity Bridge",
-            caption="Track operating cash generation, funding drawdowns, and closing liquidity by year.",
-            table_factory=lambda: outputs.liquidity_bridge,
-            x_field="Year",
-            y_fields=(
-                "Net Cash Generated from Operating Activities",
-                "Net Cash Flow for the Period",
-                "Cash and Cash Equivalents at the End of the Period",
-                "Cash Buffer Headroom",
-            ),
-        ),
-        _safe_item(
-            title="Covenant Headroom",
-            caption="Monitor debt-service cover and cash buffer headroom across the forecast horizon.",
-            table_factory=lambda: outputs.covenant_headroom,
-            x_field="Year",
-            y_fields=("DSCR", "Minimum DSCR", "DSCR Headroom", "Cash Buffer Headroom"),
-        ),
-    ]
-    groups.append(
+    groups: list[dict[str, object]] = [
         {
-            "label": "Funding & Controls",
-            "description": "Investor-readiness checks, capital structure, and covenant resilience.",
-            "items": [item for item in funding_items if item is not None],
+            "label": str(spec["label"]),
+            "description": str(spec["description"]),
+            "items": [],
         }
-    )
-
-    operations_items = [
-        _safe_item(
-            title="Working Capital Schedule",
-            caption="Inspect receivables, inventory, payables, and the yearly cash absorption from working capital.",
-            table_factory=model.working_capital_schedule,
-            x_field="Year",
-            y_fields=(
-                "Accounts Receivable",
-                "Inventory",
-                "Accounts Payable",
-                "Net Working Capital",
-            ),
-        ),
-        _safe_item(
-            title="Inventory Schedule",
-            caption="Compare calculated inventory, balance-sheet inventory, and stock turns for each year.",
-            table_factory=model.inventory_schedule,
-            x_field="Year",
-            y_fields=(
-                "Calculated Inventory",
-                "Balance Sheet Inventory",
-                "Inventory Turnover",
-            ),
-        ),
+        for spec in _EXCEL_STUDIO_FAMILY_SPECS
     ]
-    groups.append(
-        {
-            "label": "Operations",
-            "description": "Working-capital intensity and inventory dynamics behind the Excel schedules.",
-            "items": [item for item in operations_items if item is not None],
-        }
-    )
+    group_lookup = {
+        section: str(spec["label"])
+        for spec in _EXCEL_STUDIO_FAMILY_SPECS
+        for section in cast(Sequence[str], spec["sections"])
+    }
+    grouped_items = {
+        str(spec["label"]): cast(list[dict[str, object]], groups[index]["items"])
+        for index, spec in enumerate(_EXCEL_STUDIO_FAMILY_SPECS)
+    }
 
-    performance_items = [
-        _safe_item(
-            title="Gross Revenue Schedule",
-            caption="Visualise product-family sales and the gap between gross revenue and net revenue.",
-            table_factory=model.revenue_schedule,
-            x_field="Year",
-            y_fields=("Gross Revenue", "Net Revenue", "Distributors Commission"),
-        ),
-        _safe_item(
-            title="Total Expenses Schedule",
-            caption="See how the operating cost base compounds across raw materials, utilities, labour, and overheads.",
-            table_factory=model.cost_structure,
-            x_field="Year",
-            y_fields=("Raw Materials", "Utilities", "Direct Labor", "General & Admin", "Total Expenses"),
-            chart_type="area",
-        ),
-        _safe_item(
-            title="Income Statement",
-            caption="Summarise revenue conversion from net sales through EBITDA to net income.",
-            table_factory=lambda: outputs.income_statement,
-            x_field="Year",
-            y_fields=("Net Revenue", "EBITDA", "Net Income"),
-        ),
-        _safe_item(
-            title="Cash Flow Statement",
-            caption="Check how operating, investing, and financing cash flows shape the closing cash position.",
-            table_factory=lambda: outputs.cash_flow,
-            x_field="Year",
-            y_fields=(
-                "Net Cash Generated from Operating Activities",
-                "Net Cash Used in Investing Activities",
-                "Net Cash Used in Financing Activities",
-                "Cash and Cash Equivalents at the End of the Period",
-            ),
-        ),
-    ]
-    groups.append(
-        {
-            "label": "Performance",
-            "description": "Commercial and financial schedules that feed the exported workbook narrative.",
-            "items": [item for item in performance_items if item is not None],
-        }
-    )
-
-    returns_items = [
-        _safe_item(
-            title="Break-even Analysis",
-            caption="Compare expected volume against break-even demand and margin-of-safety levels by product.",
-            table_factory=lambda: outputs.break_even,
-            x_field="Product",
-            y_fields=("Break-even Units", "Expected Volume", "Margin of Safety (Units)"),
-            chart_type="bar",
-        ),
-        _safe_item(
-            title="Payback Schedule",
-            caption="Show the annual cash-flow build and cumulative recovery curve used in investor discussions.",
-            table_factory=lambda: outputs.payback,
-            x_field="Year",
-            y_fields=("Cash Flow", "Cumulative"),
-        ),
-        _safe_item(
-            title="Discounted Payback Schedule",
-            caption="Show discounted recovery versus cumulative discounted cash flow across the forecast.",
-            table_factory=lambda: outputs.discounted_payback,
-            x_field="Year",
-            y_fields=("Discounted Cash Flow", "Cumulative"),
-        ),
-    ]
-    groups.append(
-        {
-            "label": "Returns",
-            "description": "Recovery, break-even, and investor-return schedules prepared for export.",
-            "items": [item for item in returns_items if item is not None],
-        }
-    )
+    for section in collect_report_sections(model, outputs):
+        family_label = group_lookup.get(section.title, "Workbook Overview")
+        for table in section.tables:
+            try:
+                item = _build_excel_sheet_preview_item(
+                    section.title,
+                    table.title,
+                    table.data,
+                    note=table.note,
+                )
+            except Exception as exc:  # pragma: no cover - defensive preview fallback
+                notices.append(f"{section.title} / {table.title}: {exc}")
+                continue
+            grouped_items[family_label].append(item)
+        if section.notes:
+            note_rows = [{"Notes": note} for note in section.notes]
+            grouped_items[family_label].append(
+                _build_excel_sheet_preview_item(
+                    section.title,
+                    f"{section.title} Notes",
+                    note_rows,
+                )
+            )
 
     return groups, notices
 
@@ -1694,11 +2046,6 @@ def _render_excel_model_download(
         if isinstance(stored_selection, str) and stored_selection in scenario_options:
             default_index = scenario_options.index(stored_selection)
 
-        st.markdown("### Excel Model Studio")
-        st.caption(
-            "Keep the workbook export pipeline intact while reviewing the funding, operating, and return schedules visually before download."
-        )
-
         selected_scenario = st.selectbox(
             "Select scenario for Excel export",
             scenario_options,
@@ -1724,6 +2071,13 @@ def _render_excel_model_download(
         issue_metrics = _issue_summary_metrics(results.data_quality_exceptions or [])
         preview_count = sum(
             len(cast(list[dict[str, object]], group.get("items", []))) for group in preview_groups
+        )
+        _render_excel_studio_hero(
+            selected_scenario=selected_scenario,
+            preview_groups=preview_groups,
+            preview_count=preview_count,
+            workbook_ready=excel_bytes is not None,
+            active_issues=int(issue_metrics["active_issues"]),
         )
 
         metric_cols = st.columns(4)
@@ -1765,7 +2119,7 @@ def _render_excel_model_download(
                 st.info("Click 'Prepare Excel Model' to generate the workbook for download.")
 
         with context_col:
-            st.markdown("#### Workbook Preview")
+            st.markdown("#### Workbook Readiness")
             if int(issue_metrics["active_issues"]) == 0:
                 st.success("No active data-quality exceptions are currently blocking the exported workbook.")
             elif int(issue_metrics["critical_count"]) > 0:
@@ -1780,22 +2134,45 @@ def _render_excel_model_download(
                     st.caption(f"Preview unavailable: {notice}")
 
         st.markdown("#### Schedule Gallery")
-        group_tabs = st.tabs([str(group["label"]) for group in preview_groups])
+        group_tabs = st.tabs(
+            [
+                f"{group['label']} ({len(cast(list[dict[str, object]], group.get('items', [])))})"
+                for group in preview_groups
+            ]
+        )
         for group, group_tab in zip(preview_groups, group_tabs):
             with group_tab:
-                st.caption(str(group.get("description", "")))
-                for item in cast(list[dict[str, object]], group.get("items", [])):
-                    st.markdown(f"##### {item['title']}")
-                    st.caption(str(item["caption"]))
-                    _render_schedule_preview_chart(
-                        str(item["title"]),
-                        item["table"],
-                        x_field=str(item["x_field"]),
-                        y_fields=cast(Sequence[str], item["y_fields"]),
-                        chart_type=str(item.get("chart_type", "line")),
-                    )
-                    with st.expander(f"Preview {item['title']} data"):
-                        st.dataframe(_with_index_column(item["table"]), width="stretch")
+                items = cast(list[dict[str, object]], group.get("items", []))
+                st.markdown(
+                    f"""
+                    <section class="excel-family-ribbon">
+                        <p class="excel-family-kicker">{html_escape(str(group["label"]))}</p>
+                        <p class="excel-family-copy">{html_escape(str(group.get("description", "")))}</p>
+                    </section>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                if not items:
+                    st.info("No worksheets are currently available in this family.")
+                    continue
+                section_labels = list(dict.fromkeys(str(item["section"]) for item in items))
+                st.markdown(
+                    f'<div class="excel-chip-row">{_render_sheet_chip_row(section_labels)}</div>',
+                    unsafe_allow_html=True,
+                )
+                option_labels = [
+                    f"{item['section']} / {item['title']}"
+                    for item in items
+                ]
+                selected_label = st.selectbox(
+                    "Select worksheet preview",
+                    option_labels,
+                    key=f"excel_sheet_preview_{_scenario_slug(str(group['label']))}",
+                )
+                selected_item = next(
+                    item for item, option_label in zip(items, option_labels) if option_label == selected_label
+                )
+                _render_excel_sheet_preview(selected_item)
 
 
 def _request_model_run() -> None:
