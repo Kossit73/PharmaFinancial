@@ -1172,7 +1172,7 @@ class RerunHelperTest(unittest.TestCase):
         self.assertEqual(frame.loc[0, "Line Item"], "Share Capital")
         self.assertEqual(frame.loc[1, "Amount"], 0.9)
 
-    def test_schedule_preview_groups_include_core_excel_schedules(self):
+    def test_schedule_preview_groups_cover_exported_workbook_families(self):
         payload = json.loads(
             Path("src/pharma_financial/data/default_inputs.json").read_text(
                 encoding="utf-8"
@@ -1188,12 +1188,84 @@ class RerunHelperTest(unittest.TestCase):
             for group in groups
             for item in group.get("items", [])
         }
+        labels = [str(group["label"]) for group in groups]
 
         self.assertFalse(notices)
+        self.assertEqual(
+            labels,
+            [
+                "Workbook Overview",
+                "Funding & Controls",
+                "Operations & Performance",
+                "Returns & Statements",
+                "Advanced Analysis",
+            ],
+        )
         self.assertIn("Sources & Uses", titles)
+        self.assertIn("Data Quality Exceptions", titles)
         self.assertIn("Working Capital Schedule", titles)
         self.assertIn("Gross Revenue Schedule", titles)
         self.assertIn("Payback Schedule", titles)
+        self.assertIn("Statement of Financial Position", titles)
+        self.assertIn("Statement of Cash Flows", titles)
+        self.assertIn("Monte Carlo Simulation", titles)
+
+    def test_preview_chart_payload_aggregates_issue_severity(self):
+        chart_table, x_field, y_fields, chart_type = self.app._preview_chart_payload(
+            "Data Quality Exceptions",
+            [
+                {"Area": "Funding", "Severity": "Critical", "Issue": "A"},
+                {"Area": "Funding", "Severity": "Critical", "Issue": "B"},
+                {"Area": "Operations", "Severity": "High", "Issue": "C"},
+            ],
+        )
+
+        self.assertEqual(x_field, "Severity")
+        self.assertEqual(y_fields, ["Issues"])
+        self.assertEqual(chart_type, "bar")
+        if self.app.pd is not None and isinstance(chart_table, self.app.pd.DataFrame):
+            rows = chart_table.to_dict(orient="records")
+        else:
+            rows = chart_table
+        self.assertIn({"Severity": "Critical", "Issues": 2}, rows)
+        self.assertIn({"Severity": "High", "Issues": 1}, rows)
+
+    def test_preview_chart_payload_uses_metric_slice_for_summary_metrics(self):
+        if self.app.pd is None:
+            self.skipTest("pandas is required for chart payload assertions")
+
+        frame = self.app.pd.DataFrame(
+            {
+                "Metric": [
+                    "NPV",
+                    "IRR",
+                    "Payback Period",
+                    "Discounted Payback",
+                    "Investor Viability Score",
+                    "Average Debt Service Coverage",
+                ],
+                "Value": [10.0, 0.2, 4.0, 5.0, 0.7, 1.5],
+            }
+        )
+
+        chart_table, x_field, y_fields, chart_type = self.app._preview_chart_payload(
+            "Summary Metrics",
+            frame,
+        )
+
+        self.assertEqual(x_field, "Metric")
+        self.assertEqual(y_fields, ["Value"])
+        self.assertEqual(chart_type, "bar")
+        self.assertEqual(
+            chart_table["Metric"].tolist(),
+            [
+                "NPV",
+                "IRR",
+                "Payback Period",
+                "Discounted Payback",
+                "Investor Viability Score",
+            ],
+        )
 
 
 class UploadLoaderTests(unittest.TestCase):

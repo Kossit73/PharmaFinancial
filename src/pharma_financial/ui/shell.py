@@ -82,6 +82,107 @@ def inject_app_theme() -> None:
             color: var(--pharma-muted);
             margin: 0;
         }
+        .excel-studio-hero {
+            margin: 0.4rem 0 1rem 0;
+            padding: 1.5rem 1.55rem;
+            border-radius: 28px;
+            border: 1px solid rgba(14, 116, 144, 0.14);
+            background:
+                radial-gradient(circle at top right, rgba(56, 189, 248, 0.18), transparent 34%),
+                linear-gradient(135deg, rgba(255,255,255,0.98), rgba(240,249,255,0.97));
+            box-shadow: 0 24px 48px rgba(15, 23, 42, 0.08);
+        }
+        .excel-studio-kicker,
+        .excel-family-kicker,
+        .excel-sheet-kicker,
+        .excel-map-label {
+            margin: 0;
+            font-size: 0.76rem;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: #0f766e;
+            font-weight: 700;
+        }
+        .excel-studio-title,
+        .excel-sheet-title {
+            margin: 0.25rem 0 0 0;
+            color: var(--pharma-ink);
+            font-weight: 800;
+        }
+        .excel-studio-title {
+            font-size: clamp(1.7rem, 2.3vw, 2.5rem);
+        }
+        .excel-studio-copy,
+        .excel-family-copy,
+        .excel-sheet-copy,
+        .excel-map-copy {
+            color: var(--pharma-muted);
+            line-height: 1.55;
+        }
+        .excel-studio-copy {
+            margin: 0.7rem 0 0 0;
+            max-width: 58rem;
+        }
+        .excel-map-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 0.8rem;
+            margin-top: 1rem;
+        }
+        .excel-map-card,
+        .excel-family-ribbon,
+        .excel-sheet-card {
+            border-radius: 22px;
+            border: 1px solid rgba(148, 163, 184, 0.24);
+            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.97));
+            box-shadow: 0 14px 34px rgba(15, 23, 42, 0.05);
+        }
+        .excel-map-card {
+            padding: 0.95rem 1rem;
+        }
+        .excel-map-value {
+            margin: 0.2rem 0 0.28rem 0;
+            font-size: 1.18rem;
+            color: var(--pharma-ink);
+            font-weight: 800;
+        }
+        .excel-family-ribbon {
+            margin: 0.3rem 0 0.85rem 0;
+            padding: 1rem 1.05rem;
+        }
+        .excel-family-copy {
+            margin: 0.35rem 0 0 0;
+        }
+        .excel-sheet-card {
+            margin: 0.8rem 0 1rem 0;
+            padding: 1rem 1.05rem;
+        }
+        .excel-sheet-copy {
+            margin: 0.45rem 0 0 0;
+        }
+        .excel-chip-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.45rem;
+            margin-top: 0.85rem;
+        }
+        .excel-chip {
+            padding: 0.34rem 0.7rem;
+            border-radius: 999px;
+            background: rgba(14, 116, 144, 0.08);
+            border: 1px solid rgba(14, 116, 144, 0.12);
+            color: #0f766e;
+            font-size: 0.8rem;
+            font-weight: 700;
+        }
+        .excel-empty-state {
+            padding: 1rem 1.05rem;
+            border-radius: 18px;
+            border: 1px dashed rgba(148, 163, 184, 0.6);
+            background: rgba(248, 250, 252, 0.95);
+            color: var(--pharma-muted);
+            line-height: 1.55;
+        }
         div[data-baseweb="tab-list"] button[aria-selected="true"] {
             background: linear-gradient(135deg, #1d4ed8, #0891b2);
             color: white;
