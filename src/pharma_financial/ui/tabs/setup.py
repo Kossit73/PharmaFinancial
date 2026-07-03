@@ -173,7 +173,7 @@ def _hydrate_risk(legacy, payload: dict) -> None:
 
 def _core_assumptions_summary(legacy, payload: dict) -> str:
     rows = legacy._payload_to_core_rows(payload)
-    total_units = sum(
+    year1_units = sum(
         legacy._core_row_number(
             row,
             legacy.CORE_TOTAL_UNITS_FIELD,
@@ -185,7 +185,7 @@ def _core_assumptions_summary(legacy, payload: dict) -> str:
     return _format_summary(
         [
             f"{_count_rows(rows)} product rows configured",
-            f"{total_units:,.0f} average annual units produced" if total_units > 0 else "",
+            f"{year1_units:,.0f} Year 1 units configured" if year1_units > 0 else "",
         ],
         "No core assumptions configured yet.",
     )
