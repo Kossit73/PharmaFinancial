@@ -159,6 +159,12 @@ _RUNTIME_CACHE_KEYS: tuple[str, ...] = (
     "last_run_digest",
     "run_requested",
 )
+_WORKBOOK_CACHE_KEYS: tuple[str, ...] = (
+    "excel_scenario_selection",
+    "input_snapshot",
+    "model_results",
+    "excel_bytes_map",
+)
 _RUNTIME_WIDGET_PREFIXES: tuple[str, ...] = (
     "core_",
     "commission_",
@@ -280,7 +286,7 @@ def _replacement_payload_for_legacy_defaults(
 
 
 def _clear_payload_derived_state() -> None:
-    for key in _DERIVED_STATE_KEYS + _RUNTIME_CACHE_KEYS:
+    for key in _DERIVED_STATE_KEYS + _RUNTIME_CACHE_KEYS + _WORKBOOK_CACHE_KEYS:
         st.session_state.pop(key, None)
     for key in _ANALYSIS_CACHE_KEYS:
         st.session_state.pop(key, None)
