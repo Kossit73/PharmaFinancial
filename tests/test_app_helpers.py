@@ -282,13 +282,14 @@ class RerunHelperTest(unittest.TestCase):
         inputs, _digest = self.app._resolve_inputs(_Container())
         resolved_payload = self.stub.session_state["input_payload"]
 
-        self.assertEqual(
-            resolved_payload["production_estimate"],
-            default_payload["production_estimate"],
-        )
+        for product, expected_series in default_payload["production_estimate"].items():
+            actual_series = resolved_payload["production_estimate"][product]
+            self.assertEqual(len(actual_series), len(expected_series))
+            for actual, expected in zip(actual_series, expected_series):
+                self.assertAlmostEqual(actual, expected, places=6)
         self.assertAlmostEqual(
             resolved_payload["total_production_units"]["Tablets"],
-            sum(default_payload["production_estimate"]["Tablets"]),
+            default_payload["total_production_units"]["Tablets"],
             places=6,
         )
 
@@ -707,22 +708,35 @@ class RerunHelperTest(unittest.TestCase):
         )
 
         total_units = sum(parsed.production_estimate[product_name])
-        expected_total = float(synced[0][self.app.CORE_TOTAL_UNITS_FIELD])
+        expected_total = (
+            float(synced[0][self.app.CORE_TOTAL_UNITS_FIELD]) * len(parsed.years)
+        )
         self.assertAlmostEqual(total_units, expected_total, places=6)
 
-    def test_scaled_production_series_preserves_existing_profile_shape(self):
-        total_units = 120.0
+    def test_scaled_production_series_rescales_profile_to_annual_run_rate(self):
+        yearly_units = 120.0
         years = [2024, 2025, 2026]
         prior_profile = {"Tablets": [10.0, 20.0, 30.0]}
 
         scaled = self.app._scaled_production_series(
             "Tablets",
-            total_units,
+            yearly_units,
             years,
             prior_profile,
         )
 
-        self.assertEqual(scaled, [20.0, 40.0, 60.0])
+        self.assertEqual(scaled, [60.0, 120.0, 180.0])
+
+    def test_resolved_total_production_units_converts_legacy_horizon_total_to_annual_value(self):
+        yearly_units = self.app._resolved_total_production_units(
+            "Tablets",
+            600.0,
+            0.0,
+            [2024, 2025, 2026],
+            {"Tablets": [100.0, 200.0, 300.0]},
+        )
+
+        self.assertAlmostEqual(yearly_units, 200.0, places=6)
 
     def test_sync_tax_entries_supports_tax_settings_rows_shape(self):
         rows = [
