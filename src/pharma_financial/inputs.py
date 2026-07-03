@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+import math
 import warnings
 import json
 
@@ -1189,7 +1190,31 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
     for name in unit_costs:
         estimate = production_estimate.get(name, [])
         estimate_total = sum(float(value) for value in estimate)
-        total_units[name] = float(total_units_raw.get(name, estimate_total)) or 0.0
+        estimate_annual = estimate_total / years_length if years_length > 0 else estimate_total
+        configured_total = float(total_units_raw.get(name, 0.0) or 0.0)
+        flat_annual_series = bool(estimate) and all(
+            math.isclose(float(value), float(estimate[0]), rel_tol=1e-9, abs_tol=1e-9)
+            for value in estimate
+        )
+        if configured_total <= 0.0:
+            resolved_total = estimate_annual
+        elif flat_annual_series and math.isclose(
+            configured_total,
+            float(estimate[0]),
+            rel_tol=1e-9,
+            abs_tol=1e-9,
+        ):
+            resolved_total = configured_total
+        elif math.isclose(
+            configured_total,
+            estimate_total,
+            rel_tol=1e-9,
+            abs_tol=1e-9,
+        ):
+            resolved_total = estimate_annual
+        else:
+            resolved_total = configured_total
+        total_units[name] = resolved_total
         capacity[name] = float(capacity_raw.get(name, 0.0))
 
     fixed_overrides, variable_overrides = _parse_fixed_variable_costs(

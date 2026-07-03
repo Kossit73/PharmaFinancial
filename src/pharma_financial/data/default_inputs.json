@@ -62,10 +62,10 @@
     ]
   },
   "total_production_units": {
-    "Tablets": 10000000.0,
-    "Capsules": 10000000.0,
-    "Liquid": 10000000.0,
-    "Ointment": 10000000.0
+    "Tablets": 436.29,
+    "Capsules": 94.89,
+    "Liquid": 1.299,
+    "Ointment": 0.132
   },
   "production_capacity": {
     "Tablets": 10000000.0,

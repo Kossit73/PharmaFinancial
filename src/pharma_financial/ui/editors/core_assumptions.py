@@ -72,8 +72,8 @@ def render_core_assumptions_section(payload: dict) -> None:
         st.info("No core assumptions configured. Use the editor below or the add form to add entries.")
 
     st.caption(
-        "Planned Total Units rescales the saved production curve across the full projection horizon. "
-        "Year 1 Units, Year 1 Revenue, and Year 1 Cost are derived automatically from that curve."
+        "Yearly Total Units Produced sets the average annual production level across the projection horizon. "
+        "Year 1 Units, Year 1 Revenue, and Year 1 Cost are derived automatically from the saved yearly profile."
     )
 
     edited_rows = legacy._render_selectable_data_editor(
@@ -112,13 +112,13 @@ def render_core_assumptions_section(payload: dict) -> None:
                 format="%.4f",
             ),
             legacy.CORE_TOTAL_UNITS_FIELD: st.column_config.NumberColumn(
-                "Planned Total Units",
+                "Yearly Total Units Produced",
                 min_value=0.0,
                 step=1.0,
                 format="%.4f",
                 help=(
-                    "Total units across the full projection horizon. Saving this value rescales the "
-                    "existing year-by-year production profile instead of flattening it."
+                    "Average units produced per projection year. Saving this value rescales the saved "
+                    "year-by-year production profile to the selected annual run-rate."
                 ),
             ),
             legacy.CORE_CAPACITY_FIELD: st.column_config.NumberColumn(
@@ -127,8 +127,8 @@ def render_core_assumptions_section(payload: dict) -> None:
                 step=1.0,
                 format="%.4f",
                 help=(
-                    "Optional cap on Planned Total Units. Use the same full-projection unit basis as "
-                    "Planned Total Units."
+                    "Optional annual cap on Yearly Total Units Produced. Use the same average-year basis "
+                    "as Yearly Total Units Produced."
                 ),
             ),
             legacy.CORE_YEAR1_UNITS_FIELD: st.column_config.NumberColumn(
@@ -161,8 +161,8 @@ def render_core_assumptions_section(payload: dict) -> None:
         ],
         num_rows="dynamic",
         row_caption=(
-            "Edit one product below, then click Save row. Planned Total Units rescales the saved "
-            "production curve and refreshes the derived Year 1 outputs."
+            "Edit one product below, then click Save row. Yearly Total Units Produced rescales the "
+            "saved yearly production profile and refreshes the derived Year 1 outputs."
         ),
         full_caption=(
             "Edit the full table below, then click Apply table changes. Derived Year 1 outputs "
@@ -213,7 +213,7 @@ def render_core_assumptions_section(payload: dict) -> None:
 
     if capped_products:
         st.warning(
-            "Planned total units were capped at the Capacity Limit for: "
+            "Yearly total units produced were capped at the Capacity Limit for: "
             + ", ".join(capped_products)
             + "."
         )
@@ -239,7 +239,7 @@ def render_core_assumptions_section(payload: dict) -> None:
             "Markup / Unit", value=0.0, step=0.01, format="%.2f", key="core_new_markup"
         )
         new_units = st.number_input(
-            "Planned Total Units",
+            "Yearly Total Units Produced",
             value=0.0,
             step=1.0,
             format="%.4f",
@@ -279,7 +279,7 @@ def render_core_assumptions_section(payload: dict) -> None:
                 new_capacity > 0.0
                 and float(new_row[legacy.CORE_TOTAL_UNITS_FIELD]) < float(new_units) - 1e-9
             ):
-                st.warning("Planned total units were capped at the Capacity Limit.")
+                st.warning("Yearly total units produced were capped at the Capacity Limit.")
             rows.append(new_row)
             st.session_state["core_assumption_rows"] = rows
             legacy._prime_core_widget_state(rows)

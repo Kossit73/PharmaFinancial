@@ -525,7 +525,8 @@ def render_commercial_operations(
         summary=_core_assumptions_summary(legacy, payload),
         description=(
             "Review or update product-level production, pricing, and capacity assumptions. "
-            "Planned Total Units rescales the saved production curve across the full projection horizon."
+            "Yearly Total Units Produced sets the average annual production level used to rescale the "
+            "saved yearly profile."
         ),
         payload=payload,
         render_body=core_assumptions.render_core_assumptions_section,

@@ -8402,7 +8402,7 @@ CORE_PRODUCTION_COST_FIELD = "Production Cost"
 CORE_SELLING_PRICE_FIELD = "Selling Price"
 CORE_FREIGHT_COST_FIELD = "Freight Cost"
 CORE_MARKUP_FIELD = "Markup"
-CORE_TOTAL_UNITS_FIELD = "Planned Total Units"
+CORE_TOTAL_UNITS_FIELD = "Yearly Total Units Produced"
 CORE_CAPACITY_FIELD = "Capacity Limit"
 CORE_YEAR1_UNITS_FIELD = "Year 1 Units"
 CORE_YEAR1_REVENUE_FIELD = "Year 1 Revenue"
@@ -10129,14 +10129,14 @@ def _scaled_production_series(
     if target_length == 0:
         return []
 
-    desired_total = max(float(total_units), 0.0)
+    desired_annual = max(float(total_units), 0.0)
+    desired_total = desired_annual * target_length
     current_total = sum(series)
     if current_total > 0.0:
         factor = desired_total / current_total if desired_total > 0.0 else 0.0
         return [value * factor for value in series]
 
-    per_year = desired_total / target_length if target_length else 0.0
-    return [per_year for _ in range(target_length)]
+    return [desired_annual for _ in range(target_length)]
 
 
 _PRODUCTION_TOTAL_PLACEHOLDER_RATIO = 100.0
@@ -10173,13 +10173,27 @@ def _resolved_total_production_units(
     existing_estimate: Mapping[str, Sequence[Any]] | Sequence[Any] | None,
 ) -> float:
     estimate_series = _normalised_production_series(product, years, existing_estimate)
+    year_count = max(len(years), 1)
     estimate_total = sum(estimate_series)
+    estimate_annual = estimate_total / year_count if estimate_total > 0.0 else 0.0
     resolved_total = max(float(configured_total), 0.0)
+    is_flat_annual_series = bool(estimate_series) and all(
+        math.isclose(value, estimate_series[0], rel_tol=1e-9, abs_tol=1e-9)
+        for value in estimate_series
+    )
 
     if estimate_total <= 0.0:
         return resolved_total
     if resolved_total <= 0.0:
-        return estimate_total
+        return estimate_annual
+
+    if is_flat_annual_series and math.isclose(
+        resolved_total,
+        estimate_series[0],
+        rel_tol=1e-9,
+        abs_tol=1e-9,
+    ):
+        return resolved_total
 
     matches_capacity = max_capacity > 0.0 and math.isclose(
         resolved_total,
@@ -10188,7 +10202,14 @@ def _resolved_total_production_units(
         abs_tol=1e-9,
     )
     if matches_capacity and resolved_total >= estimate_total * _PRODUCTION_TOTAL_PLACEHOLDER_RATIO:
-        return estimate_total
+        return estimate_annual
+    if math.isclose(
+        resolved_total,
+        estimate_total,
+        rel_tol=1e-9,
+        abs_tol=1e-9,
+    ):
+        return estimate_annual
     return resolved_total
 
 
