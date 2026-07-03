@@ -185,7 +185,7 @@ def _core_assumptions_summary(legacy, payload: dict) -> str:
     return _format_summary(
         [
             f"{_count_rows(rows)} product rows configured",
-            f"{total_units:,.0f} planned units across the projection" if total_units > 0 else "",
+            f"{total_units:,.0f} average annual units produced" if total_units > 0 else "",
         ],
         "No core assumptions configured yet.",
     )
