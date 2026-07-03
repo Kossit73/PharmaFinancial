@@ -1065,6 +1065,15 @@ def _select_numeric_fields(frame: "pd.DataFrame", fields: Sequence[str], limit: 
     return selected
 
 
+def _melt_value_column_name(frame: "pd.DataFrame", preferred: str = "Value") -> str:
+    candidate = preferred
+    suffix = 2
+    while candidate in frame.columns:
+        candidate = f"{preferred} {suffix}"
+        suffix += 1
+    return candidate
+
+
 def _slice_metric_preview_frame(frame: "pd.DataFrame", metric_names: Sequence[str]) -> "pd.DataFrame":
     if "Metric" not in frame.columns or "Value" not in frame.columns:
         return frame
@@ -1308,21 +1317,22 @@ def _render_schedule_preview_chart(
     if px is None:
         return False
 
+    value_column = _melt_value_column_name(chart_frame, preferred="Value")
     long_frame = chart_frame.melt(
         id_vars=[x_field],
         value_vars=numeric_fields,
         var_name="Series",
-        value_name="Value",
+        value_name=value_column,
     )
 
     if chart_type == "area":
-        fig = px.area(long_frame, x=x_field, y="Value", color="Series", title=title)
+        fig = px.area(long_frame, x=x_field, y=value_column, color="Series", title=title)
     elif chart_type == "bar":
-        fig = px.bar(long_frame, x=x_field, y="Value", color="Series", barmode="group", title=title)
+        fig = px.bar(long_frame, x=x_field, y=value_column, color="Series", barmode="group", title=title)
     elif chart_type == "barh":
         fig = px.bar(
             long_frame,
-            x="Value",
+            x=value_column,
             y=x_field,
             color="Series",
             orientation="h",
@@ -1330,7 +1340,7 @@ def _render_schedule_preview_chart(
             title=title,
         )
     else:
-        fig = px.line(long_frame, x=x_field, y="Value", color="Series", markers=True, title=title)
+        fig = px.line(long_frame, x=x_field, y=value_column, color="Series", markers=True, title=title)
 
     fig.update_layout(
         legend_title_text="",

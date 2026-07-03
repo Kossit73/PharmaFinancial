@@ -1267,6 +1267,27 @@ class RerunHelperTest(unittest.TestCase):
             ],
         )
 
+    def test_render_schedule_preview_chart_handles_existing_value_column(self):
+        if self.app.pd is None:
+            self.skipTest("pandas is required for chart rendering assertions")
+
+        frame = self.app.pd.DataFrame(
+            {
+                "Metric": ["NPV", "IRR"],
+                "Value": [10.0, 0.2],
+            }
+        )
+
+        rendered = self.app._render_schedule_preview_chart(
+            "Summary Metrics",
+            frame,
+            x_field="Metric",
+            y_fields=["Value"],
+            chart_type="bar",
+        )
+
+        self.assertTrue(rendered)
+
 
 class UploadLoaderTests(unittest.TestCase):
     def setUp(self):
