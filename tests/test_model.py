@@ -318,6 +318,176 @@ class FinancialModelTest(unittest.TestCase):
         for idx, value in enumerate(aggregate):
             self.assertAlmostEqual(value, per_product_totals[idx], places=6)
 
+    def test_parse_inputs_reads_explicit_yearly_schedule_overrides(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+        )
+        years = payload["years"]
+        payload["labor"] = {
+            "direct": {"Operators": 1000.0},
+            "indirect": {"Supervisor": 500.0},
+            "direct_schedule": {
+                "rows": [
+                    {"role": "Operators", "year": int(years[0]), "annual_cost": 1000.0},
+                    {"role": "Operators", "year": int(years[1]), "annual_cost": 1100.0},
+                    {"role": "Operators", "year": int(years[2]), "annual_cost": 1210.0},
+                ]
+            },
+            "indirect_schedule": {
+                "rows": [
+                    {"role": "Supervisor", "year": int(years[0]), "annual_cost": 500.0},
+                    {"role": "Supervisor", "year": int(years[1]), "annual_cost": 525.0},
+                    {"role": "Supervisor", "year": int(years[2]), "annual_cost": 551.25},
+                ]
+            },
+        }
+        payload["core_assumptions_schedule"] = {
+            "rows": [
+                {
+                    "product": "Tablets",
+                    "year": int(years[0]),
+                    "production_cost": 2.0,
+                    "total_units": 100.0,
+                    "selling_price": 10.0,
+                    "freight_cost": 0.5,
+                    "markup": 0.75,
+                    "capacity": 140.0,
+                },
+                {
+                    "product": "Tablets",
+                    "year": int(years[1]),
+                    "production_cost": 2.06,
+                    "total_units": 120.0,
+                    "selling_price": 10.5,
+                    "freight_cost": 0.51,
+                    "markup": 0.7575,
+                    "capacity": 145.6,
+                },
+                {
+                    "product": "Tablets",
+                    "year": int(years[2]),
+                    "production_cost": 2.1218,
+                    "total_units": 144.0,
+                    "selling_price": 11.025,
+                    "freight_cost": 0.5202,
+                    "markup": 0.765075,
+                    "capacity": 151.424,
+                },
+            ]
+        }
+        payload["fixed_variable_costs"] = {
+            "rows": [{"product": "Tablets", "fixed_cost": 1000.0, "variable_cost": 2.0}],
+            "yearly_rows": [
+                {"product": "Tablets", "year": int(years[0]), "fixed_cost": 1000.0, "variable_cost": 2.0},
+                {"product": "Tablets", "year": int(years[1]), "fixed_cost": 1100.0, "variable_cost": 2.5},
+                {"product": "Tablets", "year": int(years[2]), "fixed_cost": 1210.0, "variable_cost": 3.0},
+            ],
+        }
+
+        parsed = parse_inputs(payload)
+
+        self.assertEqual(parsed.production_cost_schedules["Tablets"][:3], [2.0, 2.06, 2.1218])
+        self.assertEqual(parsed.selling_price_schedules["Tablets"][:3], [10.0, 10.5, 11.025])
+        self.assertEqual(parsed.freight_cost_schedules["Tablets"][:3], [0.5, 0.51, 0.5202])
+        self.assertEqual(parsed.markup_schedules["Tablets"][:3], [0.75, 0.7575, 0.765075])
+        self.assertEqual(parsed.capacity_schedules["Tablets"][:3], [140.0, 145.6, 151.424])
+        self.assertEqual(parsed.total_production_units["Tablets"], payload["total_production_units"]["Tablets"])
+        self.assertEqual(parsed.direct_labor_schedules["Operators"][:3], [1000.0, 1100.0, 1210.0])
+        self.assertEqual(parsed.indirect_labor_schedules["Supervisor"][:3], [500.0, 525.0, 551.25])
+        self.assertEqual(parsed.variable_cost_schedules["Tablets"][:3], [2.0, 2.5, 3.0])
+        self.assertEqual(parsed.fixed_cost_schedules["Tablets"][:3], [1000.0, 1100.0, 1210.0])
+
+    def test_explicit_yearly_schedules_flow_into_revenue_and_costs(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+        )
+        years = payload["years"]
+        payload["labor"] = {
+            "direct": {"Operators": 1000.0},
+            "indirect": {"Supervisor": 500.0},
+            "direct_schedule": {
+                "rows": [
+                    {"role": "Operators", "year": int(years[0]), "annual_cost": 1000.0},
+                    {"role": "Operators", "year": int(years[1]), "annual_cost": 1100.0},
+                    {"role": "Operators", "year": int(years[2]), "annual_cost": 1210.0},
+                ]
+            },
+        }
+        payload["core_assumptions_schedule"] = {
+            "rows": [
+                {
+                    "product": "Tablets",
+                    "year": int(years[0]),
+                    "production_cost": 2.0,
+                    "total_units": 100.0,
+                    "selling_price": 10.0,
+                    "freight_cost": 0.5,
+                    "markup": 0.75,
+                    "capacity": 140.0,
+                },
+                {
+                    "product": "Tablets",
+                    "year": int(years[1]),
+                    "production_cost": 2.06,
+                    "total_units": 120.0,
+                    "selling_price": 10.5,
+                    "freight_cost": 0.51,
+                    "markup": 0.7575,
+                    "capacity": 145.6,
+                },
+                {
+                    "product": "Tablets",
+                    "year": int(years[2]),
+                    "production_cost": 2.1218,
+                    "total_units": 144.0,
+                    "selling_price": 11.025,
+                    "freight_cost": 0.5202,
+                    "markup": 0.765075,
+                    "capacity": 151.424,
+                },
+            ]
+        }
+        payload["fixed_variable_costs"] = {
+            "rows": [{"product": "Tablets", "fixed_cost": 1000.0, "variable_cost": 2.0}],
+            "yearly_rows": [
+                {"product": "Tablets", "year": int(years[0]), "fixed_cost": 1000.0, "variable_cost": 2.0},
+                {"product": "Tablets", "year": int(years[1]), "fixed_cost": 1100.0, "variable_cost": 2.5},
+                {"product": "Tablets", "year": int(years[2]), "fixed_cost": 1210.0, "variable_cost": 3.0},
+            ],
+        }
+
+        parsed = parse_inputs(payload)
+        model = FinancialModel(parsed)
+        revenue = model.revenue_schedule()
+        costs = model.cost_structure()
+        units = parsed.production_estimate["Tablets"]
+        revenue_risk = model._risk_revenue_array()
+        cost_risk = model._risk_cost_array()
+
+        self.assertAlmostEqual(revenue.column("Tablets")[1], units[1] * 10.5 * revenue_risk[1], places=6)
+        self.assertAlmostEqual(
+            costs.column("Raw Materials - Tablets")[1],
+            units[1] * 2.5 * cost_risk[1],
+            places=6,
+        )
+        self.assertAlmostEqual(
+            costs.column("Direct Labor")[1],
+            1100.0 * cost_risk[1],
+            places=6,
+        )
+
+    def test_parse_inputs_preserves_year1_total_units_without_horizon_averaging(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+        )
+        payload["total_production_units"]["Tablets"] = 123.0
+        payload["production_estimate"]["Tablets"] = [123.0, 150.0, 180.0]
+
+        parsed = parse_inputs(payload)
+
+        self.assertEqual(parsed.total_production_units["Tablets"], 123.0)
+        self.assertEqual(parsed.production_estimate["Tablets"][:3], [123.0, 150.0, 180.0])
+
     def test_custom_projection_years(self):
         payload = json.loads(
             Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")

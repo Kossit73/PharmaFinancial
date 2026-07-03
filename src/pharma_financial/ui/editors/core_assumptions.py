@@ -14,66 +14,15 @@ def render_core_assumptions_section(payload: dict) -> None:
         st.session_state["core_assumption_rows"] = rows
     legacy._prime_core_widget_state(rows)
 
-    production_estimate = payload.get("production_estimate", {})
-    total_unit_defaults = payload.get("total_production_units", {})
-    capacity_defaults = payload.get("production_capacity", {})
     years = payload.get("years", [])
-    inflation_factors = legacy._inflation_factors_from_payload(payload)
-    risk_factors = legacy._risk_factors_from_payload(payload)
-    inflation_factor = inflation_factors[0] if inflation_factors else 1.0
-    risk_factor = risk_factors[0] if risk_factors else 1.0
-
-    editor_rows: list[dict] = []
-    for row_product in rows:
-        product_name = str(row_product.get(legacy.CORE_PRODUCT_FIELD, "") or "").strip()
-        default_units = legacy._core_row_number(
-            row_product,
-            legacy.CORE_TOTAL_UNITS_FIELD,
-            legacy._LEGACY_CORE_TOTAL_UNITS_FIELD,
-        )
-        default_capacity = legacy._core_row_number(
-            row_product,
-            legacy.CORE_CAPACITY_FIELD,
-            legacy._LEGACY_CORE_CAPACITY_FIELD,
-        )
-        if default_capacity == 0.0 and product_name in capacity_defaults:
-            default_capacity = float(capacity_defaults[product_name] or 0.0)
-        if default_units == 0.0:
-            default_units = legacy._resolved_total_production_units(
-                product_name,
-                float(total_unit_defaults.get(product_name, 0.0) or 0.0),
-                default_capacity,
-                years,
-                production_estimate if isinstance(production_estimate, legacy.Mapping) else {},
-            )
-        production = legacy._core_row_number(row_product, legacy.CORE_PRODUCTION_COST_FIELD)
-        selling = legacy._core_row_number(row_product, legacy.CORE_SELLING_PRICE_FIELD)
-        freight = legacy._core_row_number(row_product, legacy.CORE_FREIGHT_COST_FIELD)
-        markup = legacy._core_row_number(row_product, legacy.CORE_MARKUP_FIELD)
-        editor_rows.append(
-            legacy._build_core_assumption_row(
-                product_name=product_name,
-                production_cost=production,
-                selling_price=selling,
-                freight_cost=freight,
-                markup_value=markup,
-                total_units=default_units,
-                max_capacity=default_capacity,
-                years=years,
-                production_estimate=production_estimate
-                if isinstance(production_estimate, legacy.Mapping)
-                else {},
-                inflation_factor=inflation_factor,
-                risk_factor=risk_factor,
-            )
-        )
+    editor_rows = [dict(row) for row in rows]
 
     if not editor_rows:
         st.info("No core assumptions configured. Use the editor below or the add form to add entries.")
 
     st.caption(
-        "Yearly Total Units Produced sets the average annual production level across the projection horizon. "
-        "Year 1 Units, Year 1 Revenue, and Year 1 Cost are derived automatically from the saved yearly profile."
+        "Yearly Total Units Produced is the Year 1 production quantity. Use the yearly schedule below to "
+        "calculate later years with the Yearly Increment Tool or manual edits."
     )
 
     edited_rows = legacy._render_selectable_data_editor(
@@ -117,8 +66,7 @@ def render_core_assumptions_section(payload: dict) -> None:
                 step=1.0,
                 format="%.4f",
                 help=(
-                    "Average units produced per projection year. Saving this value rescales the saved "
-                    "year-by-year production profile to the selected annual run-rate."
+                    "Year 1 production quantity. Later years stay editable in the yearly schedule below."
                 ),
             ),
             legacy.CORE_CAPACITY_FIELD: st.column_config.NumberColumn(
@@ -127,8 +75,7 @@ def render_core_assumptions_section(payload: dict) -> None:
                 step=1.0,
                 format="%.4f",
                 help=(
-                    "Optional annual cap on Yearly Total Units Produced. Use the same average-year basis "
-                    "as Yearly Total Units Produced."
+                    "Optional Year 1 capacity reference. Use the yearly schedule below if capacity changes by year."
                 ),
             ),
             legacy.CORE_YEAR1_UNITS_FIELD: st.column_config.NumberColumn(
@@ -161,17 +108,14 @@ def render_core_assumptions_section(payload: dict) -> None:
         ],
         num_rows="dynamic",
         row_caption=(
-            "Edit one product below, then click Save row. Yearly Total Units Produced rescales the "
-            "saved yearly production profile and refreshes the derived Year 1 outputs."
+            "Edit one product below, then click Save row. These values define the editable Year 1 baseline."
         ),
         full_caption=(
-            "Edit the full table below, then click Apply table changes. Derived Year 1 outputs "
-            "refresh after the draft is applied."
+            "Edit the full table below, then click Apply table changes. These values remain editable and are not auto-rescaled."
         ),
     )
 
     updated_rows: list[dict] = []
-    capped_products: list[str] = []
     for row in edited_rows:
         product = str(row.get(legacy.CORE_PRODUCT_FIELD, "") or "").strip()
         if not product:
@@ -195,31 +139,208 @@ def render_core_assumptions_section(payload: dict) -> None:
             selling_price=selling,
             freight_cost=freight,
             markup_value=markup,
-            total_units=requested_units,
-            max_capacity=max_capacity,
+            total_units=max(requested_units, 0.0),
+            max_capacity=max(max_capacity, 0.0),
             years=years,
-            production_estimate=production_estimate
-            if isinstance(production_estimate, legacy.Mapping)
-            else {},
-            inflation_factor=inflation_factor,
-            risk_factor=risk_factor,
+            production_estimate={},
         )
-        if (
-            max_capacity > 0.0
-            and float(updated_row[legacy.CORE_TOTAL_UNITS_FIELD]) < requested_units - 1e-9
-        ):
-            capped_products.append(product)
         updated_rows.append(updated_row)
-
-    if capped_products:
-        st.warning(
-            "Yearly total units produced were capped at the Capacity Limit for: "
-            + ", ".join(capped_products)
-            + "."
-        )
 
     st.session_state["core_assumption_rows"] = updated_rows
     legacy._prime_core_widget_state(updated_rows)
+
+    schedule_editor_key = "core_assumptions_schedule_editor"
+    schedule_rows = legacy._core_schedule_rows_from_rows(updated_rows, payload)
+    saved_schedule_rows, draft_schedule_rows = legacy._initialise_selectable_editor_state(
+        schedule_editor_key,
+        schedule_rows,
+    )
+    working_schedule_rows = (
+        draft_schedule_rows
+        if not legacy._editor_rows_equal(saved_schedule_rows, draft_schedule_rows)
+        else saved_schedule_rows
+    )
+
+    st.markdown("#### Yearly Increment Tool")
+    st.caption(
+        "Use the saved Year 1 baseline above, then populate each later year below with an increment or direct edits."
+    )
+    yearly_increment = st.number_input(
+        "Yearly Increment %",
+        value=float(st.session_state.get("core_schedule_increment_pct", 0.0) or 0.0),
+        step=0.1,
+        key="core_schedule_increment_pct",
+    )
+    target_column = st.selectbox(
+        "Apply increment to",
+        [
+            "All Supported Fields",
+            "Production Cost / Unit",
+            "Selling Price / Unit",
+            "Freight Cost / Unit",
+            "Markup / Unit",
+            "Yearly Total Units Produced",
+            "Capacity Limit",
+        ],
+        key="core_schedule_increment_target",
+    )
+    increment_cols = st.columns(3)
+    preview_increment = increment_cols[0].button(
+        "Preview Yearly Increment",
+        key="core_schedule_increment_preview",
+    )
+    apply_increment = increment_cols[1].button(
+        "Apply Yearly Increment",
+        key="core_schedule_increment_apply",
+    )
+    cancel_increment = increment_cols[2].button(
+        "Cancel Yearly Increment",
+        key="core_schedule_increment_cancel",
+    )
+
+    if preview_increment or apply_increment:
+        selected_fields = (
+            (
+                legacy.CORE_PRODUCTION_COST_FIELD,
+                legacy.CORE_SELLING_PRICE_FIELD,
+                legacy.CORE_FREIGHT_COST_FIELD,
+                legacy.CORE_MARKUP_FIELD,
+                legacy.CORE_TOTAL_UNITS_FIELD,
+                legacy.CORE_CAPACITY_FIELD,
+            )
+            if target_column == "All Supported Fields"
+            else (
+                legacy.CORE_PRODUCTION_COST_FIELD,
+            )
+            if target_column == "Production Cost / Unit"
+            else (
+                legacy.CORE_SELLING_PRICE_FIELD,
+            )
+            if target_column == "Selling Price / Unit"
+            else (
+                legacy.CORE_FREIGHT_COST_FIELD,
+            )
+            if target_column == "Freight Cost / Unit"
+            else (
+                legacy.CORE_MARKUP_FIELD,
+            )
+            if target_column == "Markup / Unit"
+            else (
+                legacy.CORE_TOTAL_UNITS_FIELD,
+            )
+            if target_column == "Yearly Total Units Produced"
+            else (legacy.CORE_CAPACITY_FIELD,)
+        )
+        incremented_rows = legacy._apply_grouped_yearly_increment(
+            working_schedule_rows,
+            group_field=legacy.CORE_PRODUCT_FIELD,
+            target_fields=selected_fields,
+            increment_pct=float(yearly_increment),
+            integer_fields=(
+                legacy.CORE_TOTAL_UNITS_FIELD,
+                legacy.CORE_CAPACITY_FIELD,
+            ),
+        )
+        if preview_increment:
+            legacy._set_editor_draft_rows(
+                schedule_editor_key,
+                incremented_rows,
+                refresh_widgets=True,
+            )
+        else:
+            legacy._commit_editor_rows(
+                schedule_editor_key,
+                incremented_rows,
+                message="Applied yearly increment.",
+            )
+        legacy._rerun()
+
+    if cancel_increment and not legacy._editor_rows_equal(saved_schedule_rows, draft_schedule_rows):
+        legacy._discard_editor_draft(
+            schedule_editor_key,
+            message="Discarded yearly increment draft.",
+        )
+        legacy._rerun()
+
+    st.markdown("#### Core Assumptions by Year")
+    schedule_rows = legacy._render_selectable_data_editor(
+        schedule_rows,
+        key=schedule_editor_key,
+        label_builder=lambda row, index: legacy._editor_row_label(
+            row,
+            index,
+            name_fields=(legacy.CORE_PRODUCT_FIELD,),
+            year_fields=(legacy.CORE_SCHEDULE_YEAR_FIELD,),
+            fallback_prefix="Core row",
+        ),
+        column_order=[
+            legacy.CORE_SCHEDULE_YEAR_FIELD,
+            legacy.CORE_PRODUCT_FIELD,
+            legacy.CORE_PRODUCTION_COST_FIELD,
+            legacy.CORE_SELLING_PRICE_FIELD,
+            legacy.CORE_FREIGHT_COST_FIELD,
+            legacy.CORE_MARKUP_FIELD,
+            legacy.CORE_TOTAL_UNITS_FIELD,
+            legacy.CORE_CAPACITY_FIELD,
+        ],
+        column_config={
+            legacy.CORE_SCHEDULE_YEAR_FIELD: st.column_config.NumberColumn(
+                "Year",
+                disabled=True,
+                format="%d",
+            ),
+            legacy.CORE_PRODUCT_FIELD: st.column_config.TextColumn(
+                "Product",
+                disabled=True,
+            ),
+            legacy.CORE_PRODUCTION_COST_FIELD: st.column_config.NumberColumn(
+                "Production Cost / Unit",
+                min_value=0.0,
+                step=0.001,
+                format="%.4f",
+            ),
+            legacy.CORE_SELLING_PRICE_FIELD: st.column_config.NumberColumn(
+                "Selling Price / Unit",
+                min_value=0.0,
+                step=0.001,
+                format="%.4f",
+            ),
+            legacy.CORE_FREIGHT_COST_FIELD: st.column_config.NumberColumn(
+                "Freight Cost / Unit",
+                min_value=0.0,
+                step=0.001,
+                format="%.4f",
+            ),
+            legacy.CORE_MARKUP_FIELD: st.column_config.NumberColumn(
+                "Markup / Unit",
+                min_value=0.0,
+                step=0.001,
+                format="%.4f",
+            ),
+            legacy.CORE_TOTAL_UNITS_FIELD: st.column_config.NumberColumn(
+                "Yearly Total Units Produced",
+                min_value=0.0,
+                step=1.0,
+                format="%.4f",
+            ),
+            legacy.CORE_CAPACITY_FIELD: st.column_config.NumberColumn(
+                "Capacity Limit",
+                min_value=0.0,
+                step=1.0,
+                format="%.4f",
+            ),
+        },
+        num_rows="fixed",
+        row_caption=(
+            "Select one product-year row below, edit the values, then click Save row."
+        ),
+        full_caption=(
+            "Edit the full yearly schedule below, then click Apply table changes."
+        ),
+    )
+    legacy._core_schedule_rows_to_payload(schedule_rows, payload)
+    st.session_state["core_assumption_rows"] = legacy._payload_to_core_rows(payload)
+    legacy._prime_core_widget_state(st.session_state["core_assumption_rows"])
 
     st.markdown("#### Add a core assumption")
     with st.form("add_core_assumption"):
@@ -269,17 +390,8 @@ def render_core_assumptions_section(payload: dict) -> None:
                 total_units=float(new_units),
                 max_capacity=float(new_capacity),
                 years=years,
-                production_estimate=production_estimate
-                if isinstance(production_estimate, legacy.Mapping)
-                else {},
-                inflation_factor=inflation_factor,
-                risk_factor=risk_factor,
+                production_estimate={},
             )
-            if (
-                new_capacity > 0.0
-                and float(new_row[legacy.CORE_TOTAL_UNITS_FIELD]) < float(new_units) - 1e-9
-            ):
-                st.warning("Yearly total units produced were capped at the Capacity Limit.")
             rows.append(new_row)
             st.session_state["core_assumption_rows"] = rows
             legacy._prime_core_widget_state(rows)
