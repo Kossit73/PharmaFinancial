@@ -4081,6 +4081,119 @@ def _render_labor_section(section: str, state_key: str, payload: dict) -> None:
         if row.get("Role")
     }
 
+    schedule_editor_key = f"{state_key}_schedule_editor"
+    schedule_rows = _payload_to_labor_schedule_rows(section, payload)
+    saved_schedule_rows, draft_schedule_rows = _initialise_selectable_editor_state(
+        schedule_editor_key,
+        schedule_rows,
+    )
+    working_schedule_rows = (
+        draft_schedule_rows
+        if not _editor_rows_equal(saved_schedule_rows, draft_schedule_rows)
+        else saved_schedule_rows
+    )
+
+    st.markdown("#### Yearly Increment Tool")
+    st.caption(
+        "Use the annual costs above as the year-one baseline, then populate the labour schedule below."
+    )
+    yearly_increment = st.number_input(
+        "Yearly Increment %",
+        value=float(st.session_state.get(f"{state_key}_increment_pct", 0.0) or 0.0),
+        step=0.1,
+        key=f"{state_key}_increment_pct",
+    )
+    st.selectbox(
+        "Apply increment to",
+        ["Annual Cost"],
+        key=f"{state_key}_increment_target",
+    )
+    increment_cols = st.columns(3)
+    preview_increment = increment_cols[0].button(
+        "Preview Yearly Increment",
+        key=f"{state_key}_increment_preview",
+    )
+    apply_increment = increment_cols[1].button(
+        "Apply Yearly Increment",
+        key=f"{state_key}_increment_apply",
+    )
+    cancel_increment = increment_cols[2].button(
+        "Cancel Yearly Increment",
+        key=f"{state_key}_increment_cancel",
+    )
+
+    if preview_increment or apply_increment:
+        incremented_rows = _apply_grouped_yearly_increment(
+            working_schedule_rows,
+            group_field="Role",
+            target_fields=("Annual Cost",),
+            increment_pct=float(yearly_increment),
+        )
+        if preview_increment:
+            _set_editor_draft_rows(
+                schedule_editor_key,
+                incremented_rows,
+                refresh_widgets=True,
+            )
+        else:
+            _commit_editor_rows(
+                schedule_editor_key,
+                incremented_rows,
+                message="Applied yearly increment.",
+            )
+        _rerun()
+
+    if cancel_increment and not _editor_rows_equal(saved_schedule_rows, draft_schedule_rows):
+        _discard_editor_draft(
+            schedule_editor_key,
+            message="Discarded yearly increment draft.",
+        )
+        _rerun()
+
+    st.markdown("#### Labour Cost by Year")
+    schedule_rows = _render_selectable_data_editor(
+        schedule_rows,
+        key=schedule_editor_key,
+        label_builder=lambda row, index: _editor_row_label(
+            row,
+            index,
+            name_fields=("Role",),
+            year_fields=(CORE_SCHEDULE_YEAR_FIELD,),
+            fallback_prefix="Labour row",
+        ),
+        column_order=[CORE_SCHEDULE_YEAR_FIELD, "Role", "Annual Cost"],
+        column_config={
+            CORE_SCHEDULE_YEAR_FIELD: st.column_config.NumberColumn(
+                "Year",
+                disabled=True,
+                format="%d",
+            ),
+            "Role": st.column_config.TextColumn(
+                "Role",
+                disabled=True,
+            ),
+            "Annual Cost": st.column_config.NumberColumn(
+                "Annual Cost",
+                min_value=0.0,
+                step=0.001,
+                format="%.4f",
+            ),
+        },
+        num_rows="fixed",
+        row_caption=(
+            "Select one role-year row below, edit the annual cost, then click Save row."
+        ),
+        full_caption=(
+            "Edit the full labour schedule below, then click Apply table changes."
+        ),
+    )
+    _labor_schedule_rows_to_payload(section, schedule_rows, payload)
+    st.session_state[state_key] = _mapping_to_rows(
+        payload.get("labor", {}).get(section, {}),
+        "Role",
+        "Annual Cost",
+    )
+
 
 def _payload_labor_mode(payload: Mapping) -> str:
     labor = payload.get("labor", {}) if isinstance(payload, Mapping) else {}
@@ -5230,6 +5343,126 @@ def _render_fixed_variable_costs(payload: dict) -> None:
 
     st.session_state["fixed_variable_rows"] = updated_rows
     _fixed_variable_rows_to_payload(updated_rows, payload)
+
+    schedule_editor_key = "fixed_variable_schedule_editor"
+    schedule_rows = _payload_to_fixed_variable_schedule_rows(payload)
+    saved_schedule_rows, draft_schedule_rows = _initialise_selectable_editor_state(
+        schedule_editor_key,
+        schedule_rows,
+    )
+    working_schedule_rows = (
+        draft_schedule_rows
+        if not _editor_rows_equal(saved_schedule_rows, draft_schedule_rows)
+        else saved_schedule_rows
+    )
+
+    st.markdown("#### Yearly Increment Tool")
+    st.caption(
+        "Use the product costs above as the year-one baseline, then populate the yearly cost schedule below."
+    )
+    yearly_increment = st.number_input(
+        "Yearly Increment %",
+        value=float(st.session_state.get("fixed_variable_increment_pct", 0.0) or 0.0),
+        step=0.1,
+        key="fixed_variable_increment_pct",
+    )
+    target_column = st.selectbox(
+        "Apply increment to",
+        ["All", "Fixed Cost", "Variable Cost"],
+        key="fixed_variable_increment_target",
+    )
+    increment_cols = st.columns(3)
+    preview_increment = increment_cols[0].button(
+        "Preview Yearly Increment",
+        key="fixed_variable_increment_preview",
+    )
+    apply_increment = increment_cols[1].button(
+        "Apply Yearly Increment",
+        key="fixed_variable_increment_apply",
+    )
+    cancel_increment = increment_cols[2].button(
+        "Cancel Yearly Increment",
+        key="fixed_variable_increment_cancel",
+    )
+
+    if preview_increment or apply_increment:
+        selected_fields = (
+            ("Fixed Cost", "Variable Cost")
+            if target_column == "All"
+            else (target_column,)
+        )
+        incremented_rows = _apply_grouped_yearly_increment(
+            working_schedule_rows,
+            group_field="Product",
+            target_fields=selected_fields,
+            increment_pct=float(yearly_increment),
+        )
+        if preview_increment:
+            _set_editor_draft_rows(
+                schedule_editor_key,
+                incremented_rows,
+                refresh_widgets=True,
+            )
+        else:
+            _commit_editor_rows(
+                schedule_editor_key,
+                incremented_rows,
+                message="Applied yearly increment.",
+            )
+        _rerun()
+
+    if cancel_increment and not _editor_rows_equal(saved_schedule_rows, draft_schedule_rows):
+        _discard_editor_draft(
+            schedule_editor_key,
+            message="Discarded yearly increment draft.",
+        )
+        _rerun()
+
+    st.markdown("#### Fixed & Variable Costs by Year")
+    schedule_rows = _render_selectable_data_editor(
+        schedule_rows,
+        key=schedule_editor_key,
+        label_builder=lambda row, index: _editor_row_label(
+            row,
+            index,
+            name_fields=("Product",),
+            year_fields=(CORE_SCHEDULE_YEAR_FIELD,),
+            fallback_prefix="Cost row",
+        ),
+        column_order=[CORE_SCHEDULE_YEAR_FIELD, "Product", "Fixed Cost", "Variable Cost"],
+        column_config={
+            CORE_SCHEDULE_YEAR_FIELD: st.column_config.NumberColumn(
+                "Year",
+                disabled=True,
+                format="%d",
+            ),
+            "Product": st.column_config.TextColumn(
+                "Product",
+                disabled=True,
+            ),
+            "Fixed Cost": st.column_config.NumberColumn(
+                "Fixed Cost",
+                min_value=0.0,
+                step=1000.0,
+                format="%.2f",
+            ),
+            "Variable Cost": st.column_config.NumberColumn(
+                "Variable Cost",
+                min_value=0.0,
+                step=0.001,
+                format="%.4f",
+            ),
+        },
+        num_rows="fixed",
+        row_caption=(
+            "Select one product-year row below, edit the costs, then click Save row."
+        ),
+        full_caption=(
+            "Edit the full yearly cost schedule below, then click Apply table changes."
+        ),
+    )
+    _fixed_variable_schedule_rows_to_payload(schedule_rows, payload)
+    st.session_state["fixed_variable_rows"] = _payload_to_fixed_variable_rows(payload)
 
     st.markdown("#### Add Fixed & Variable Cost")
     with st.form("fixed_variable_add_form", clear_on_submit=True):
@@ -8407,6 +8640,11 @@ CORE_CAPACITY_FIELD = "Capacity Limit"
 CORE_YEAR1_UNITS_FIELD = "Year 1 Units"
 CORE_YEAR1_REVENUE_FIELD = "Year 1 Revenue"
 CORE_YEAR1_COST_FIELD = "Year 1 Cost"
+CORE_SCHEDULE_SECTION_KEY = "core_assumptions_schedule"
+CORE_SCHEDULE_ROWS_KEY = "rows"
+CORE_SCHEDULE_YEAR_FIELD = "Year"
+LABOR_SCHEDULE_ROWS_KEY = "rows"
+FIXED_VARIABLE_YEARLY_ROWS_KEY = "yearly_rows"
 
 _LEGACY_CORE_TOTAL_UNITS_FIELD = "Total Production Units"
 _LEGACY_CORE_CAPACITY_FIELD = "Max Capacity"
@@ -8442,24 +8680,12 @@ def _build_core_assumption_row(
     inflation_factor: float = 1.0,
     risk_factor: float = 1.0,
 ) -> dict[str, object]:
-    clamped_units = max(float(total_units), 0.0)
+    year1_units = max(float(total_units), 0.0)
     capacity_value = max(float(max_capacity), 0.0)
-    if capacity_value > 0.0 and clamped_units > capacity_value + 1e-9:
-        clamped_units = capacity_value
-
-    scaled_series = _scaled_production_series(
-        product_name,
-        clamped_units,
-        years,
-        production_estimate or {},
-    )
-    first_year_units = scaled_series[0] if scaled_series else 0.0
-    year1_revenue = first_year_units * selling_price * inflation_factor * risk_factor
+    year1_revenue = year1_units * selling_price
     year1_cost = (
-        first_year_units
+        year1_units
         * (production_cost + freight_cost + markup_value)
-        * inflation_factor
-        * risk_factor
     )
 
     return {
@@ -8468,23 +8694,15 @@ def _build_core_assumption_row(
         CORE_SELLING_PRICE_FIELD: float(selling_price),
         CORE_FREIGHT_COST_FIELD: float(freight_cost),
         CORE_MARKUP_FIELD: float(markup_value),
-        CORE_TOTAL_UNITS_FIELD: clamped_units,
+        CORE_TOTAL_UNITS_FIELD: year1_units,
         CORE_CAPACITY_FIELD: capacity_value,
-        CORE_YEAR1_UNITS_FIELD: float(first_year_units),
+        CORE_YEAR1_UNITS_FIELD: float(year1_units),
         CORE_YEAR1_REVENUE_FIELD: float(year1_revenue),
         CORE_YEAR1_COST_FIELD: float(year1_cost),
     }
 
 
 def _estimate_core_first_year_units(row: Mapping[str, object], total_units: float) -> float:
-    existing_total = _core_row_number(
-        row,
-        CORE_TOTAL_UNITS_FIELD,
-        _LEGACY_CORE_TOTAL_UNITS_FIELD,
-    )
-    existing_year1 = _core_row_number(row, CORE_YEAR1_UNITS_FIELD)
-    if existing_total > 0.0 and existing_year1 > 0.0:
-        return existing_year1 * (float(total_units) / existing_total)
     return float(total_units)
 
 
@@ -8494,25 +8712,104 @@ def _payload_to_core_rows(payload: Mapping) -> list[dict]:
     totals = payload.get("total_production_units", {})
     capacities = payload.get("production_capacity", {})
     estimates = payload.get("production_estimate", {})
+    schedule_section = payload.get(CORE_SCHEDULE_SECTION_KEY, {})
+    schedule_rows = schedule_section.get(CORE_SCHEDULE_ROWS_KEY, []) if isinstance(schedule_section, Mapping) else []
     years = payload.get("years", [])
-    inflation_factors = _inflation_factors_from_payload(payload)
-    risk_factors = _risk_factors_from_payload(payload)
+    first_year = None
+    if isinstance(years, Sequence) and years:
+        try:
+            first_year = int(years[0])
+        except (TypeError, ValueError):
+            first_year = None
+
+    schedule_lookup: dict[str, Mapping[str, object]] = {}
+    if isinstance(schedule_rows, Sequence) and not isinstance(schedule_rows, (str, bytes)):
+        for entry in schedule_rows:
+            if not isinstance(entry, Mapping):
+                continue
+            product = str(entry.get("product") or entry.get(CORE_PRODUCT_FIELD) or "").strip()
+            if not product:
+                continue
+            year_value = entry.get("year", entry.get(CORE_SCHEDULE_YEAR_FIELD))
+            try:
+                year = int(year_value)
+            except (TypeError, ValueError):
+                continue
+            if first_year is None or year == first_year:
+                schedule_lookup[product] = entry
+
     rows: list[dict] = []
     for name, values in unit_costs.items():
-        production_cost = float(values.get("production", 0.0))
-        selling_price = float(values.get("price", 0.0))
-        freight_cost = float(values.get("freight", 0.0))
-        markup_value = float(markup.get(name, 0.0))
-        max_capacity = float(capacities.get(name, 0.0))
-        total_units = _resolved_total_production_units(
-            name,
-            float(totals.get(name, 0.0)),
-            max_capacity,
-            years,
-            estimates,
+        schedule_entry = schedule_lookup.get(str(name), {})
+        production_cost = float(values.get("production", 0.0) or 0.0)
+        if production_cost <= 0.0:
+            production_cost = float(
+                schedule_entry.get("production_cost", schedule_entry.get(CORE_PRODUCTION_COST_FIELD, 0.0))
+                or 0.0
+            )
+        selling_price = float(values.get("price", 0.0) or 0.0)
+        if selling_price <= 0.0:
+            selling_price = float(
+                schedule_entry.get("selling_price", schedule_entry.get(CORE_SELLING_PRICE_FIELD, 0.0))
+                or 0.0
+            )
+        freight_cost = float(values.get("freight", 0.0) or 0.0)
+        if freight_cost <= 0.0:
+            freight_cost = float(
+                schedule_entry.get("freight_cost", schedule_entry.get(CORE_FREIGHT_COST_FIELD, 0.0))
+                or 0.0
+            )
+        markup_value = float(markup.get(name, 0.0) or 0.0)
+        if markup_value <= 0.0:
+            markup_value = float(
+                schedule_entry.get("markup", schedule_entry.get(CORE_MARKUP_FIELD, 0.0))
+                or 0.0
+            )
+        max_capacity = float(capacities.get(name, 0.0) or 0.0)
+        if max_capacity <= 0.0:
+            max_capacity = float(
+                schedule_entry.get("capacity", schedule_entry.get(CORE_CAPACITY_FIELD, 0.0))
+                or 0.0
+            )
+        if isinstance(estimates, Mapping) and name in estimates and isinstance(estimates.get(name), Sequence):
+            estimate_series = [float(value) for value in estimates.get(name, [])]
+        else:
+            estimate_series = []
+        total_units = float(totals.get(name, 0.0) or 0.0)
+        estimate_average = (
+            sum(estimate_series) / len(estimate_series)
+            if estimate_series
+            else 0.0
         )
-        inflation_factor = inflation_factors[0] if inflation_factors else 1.0
-        risk_factor = risk_factors[0] if risk_factors else 1.0
+        looks_like_legacy_average = (
+            bool(estimate_series)
+            and not all(
+                math.isclose(
+                    float(value),
+                    float(estimate_series[0]),
+                    rel_tol=1e-9,
+                    abs_tol=1e-9,
+                )
+                for value in estimate_series
+            )
+            and math.isclose(
+                total_units,
+                estimate_average,
+                rel_tol=1e-9,
+                abs_tol=1e-9,
+            )
+        )
+        if total_units <= 0.0 or looks_like_legacy_average:
+            total_units = float(
+                schedule_entry.get(
+                    "total_units",
+                    schedule_entry.get(
+                        CORE_TOTAL_UNITS_FIELD,
+                        estimate_series[0] if estimate_series else 0.0,
+                    ),
+                )
+                or 0.0
+            )
         rows.append(
             _build_core_assumption_row(
                 product_name=str(name),
@@ -8524,8 +8821,6 @@ def _payload_to_core_rows(payload: Mapping) -> list[dict]:
                 max_capacity=max_capacity,
                 years=years,
                 production_estimate=estimates if isinstance(estimates, Mapping) else {},
-                inflation_factor=inflation_factor,
-                risk_factor=risk_factor,
             )
         )
     return rows
@@ -9143,11 +9438,16 @@ def _sync_core_rows_from_widgets(rows: Sequence[Mapping]) -> list[dict]:
         if capacity is not None:
             current[CORE_CAPACITY_FIELD] = float(capacity)
 
-        total_units = _core_row_number(current, CORE_TOTAL_UNITS_FIELD, _LEGACY_CORE_TOTAL_UNITS_FIELD)
-        max_capacity = _core_row_number(current, CORE_CAPACITY_FIELD, _LEGACY_CORE_CAPACITY_FIELD)
-        if max_capacity > 0.0 and total_units > max_capacity:
-            total_units = max_capacity
+        total_units = max(
+            _core_row_number(current, CORE_TOTAL_UNITS_FIELD, _LEGACY_CORE_TOTAL_UNITS_FIELD),
+            0.0,
+        )
+        max_capacity = max(
+            _core_row_number(current, CORE_CAPACITY_FIELD, _LEGACY_CORE_CAPACITY_FIELD),
+            0.0,
+        )
         current[CORE_TOTAL_UNITS_FIELD] = total_units
+        current[CORE_CAPACITY_FIELD] = max_capacity
 
         production_cost = _core_row_number(current, CORE_PRODUCTION_COST_FIELD)
         selling_price = _core_row_number(current, CORE_SELLING_PRICE_FIELD)
@@ -9170,8 +9470,6 @@ def _core_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
     unit_costs: dict[str, dict[str, float]] = {}
     markup: dict[str, float] = {}
     years = payload.get("years", [])
-    existing_estimate = payload.get("production_estimate", {})
-    production_estimate: dict[str, list[float]] = {}
     total_units_map: dict[str, float] = {}
     capacity_map: dict[str, float] = {}
 
@@ -9186,27 +9484,23 @@ def _core_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> None:
         }
         markup[name] = _core_row_number(row, CORE_MARKUP_FIELD)
         max_capacity = _core_row_number(row, CORE_CAPACITY_FIELD, _LEGACY_CORE_CAPACITY_FIELD)
-        total_units = _core_row_number(row, CORE_TOTAL_UNITS_FIELD, _LEGACY_CORE_TOTAL_UNITS_FIELD)
-        if max_capacity > 0.0 and total_units > max_capacity:
-            total_units = max_capacity
+        total_units = max(
+            _core_row_number(row, CORE_TOTAL_UNITS_FIELD, _LEGACY_CORE_TOTAL_UNITS_FIELD),
+            0.0,
+        )
         total_units_map[name] = total_units
         capacity_map[name] = max_capacity
 
-        scaled = _scaled_production_series(name, total_units, years, existing_estimate)
-        production_estimate[name] = scaled
-
     payload["unit_costs"] = unit_costs
     payload["markup"] = markup
-    if production_estimate:
-        payload["production_estimate"] = production_estimate
-    if total_units_map:
-        payload["total_production_units"] = total_units_map
-    else:
-        payload.pop("total_production_units", None)
+    payload["total_production_units"] = total_units_map
     if capacity_map:
         payload["production_capacity"] = capacity_map
     else:
         payload.pop("production_capacity", None)
+
+    schedule_rows = _core_schedule_rows_from_rows(rows, payload)
+    _core_schedule_rows_to_payload(schedule_rows, payload)
 
 
 def _get_widget_value(key: str, default: Any) -> Any:
@@ -9474,6 +9768,8 @@ def _labor_rows_to_payload(section: str, rows: Sequence[Mapping], payload: dict)
         for row in rows
         if row.get("Role")
     }
+    schedule_rows = _labor_schedule_rows_from_rows(section, rows, payload)
+    _labor_schedule_rows_to_payload(section, schedule_rows, payload)
 
 
 def _sync_fixed_variable_rows_from_widgets(rows: Sequence[Mapping]) -> list[dict]:
@@ -10142,6 +10438,432 @@ def _scaled_production_series(
 _PRODUCTION_TOTAL_PLACEHOLDER_RATIO = 100.0
 
 
+def _payload_year_sequence(payload: Mapping[str, object]) -> list[int]:
+    raw_years = payload.get("years", []) if isinstance(payload, Mapping) else []
+    years: list[int] = []
+    if isinstance(raw_years, Sequence) and not isinstance(raw_years, (str, bytes)):
+        for value in raw_years:
+            try:
+                years.append(int(value))
+            except (TypeError, ValueError):
+                continue
+    return years or [1]
+
+
+def _merge_schedule_rows(
+    default_rows: Sequence[Mapping[str, object]],
+    stored_rows: Sequence[Mapping[str, object]] | object,
+    *,
+    key_fields: Sequence[str],
+    field_aliases: Mapping[str, Sequence[str]],
+) -> list[dict[str, object]]:
+    lookup: dict[tuple[str, ...], Mapping[str, object]] = {}
+    if isinstance(stored_rows, Sequence) and not isinstance(stored_rows, (str, bytes, bytearray)):
+        for raw_row in stored_rows:
+            if not isinstance(raw_row, Mapping):
+                continue
+            key = tuple(str(raw_row.get(field, "") or "").strip() for field in key_fields)
+            if all(key):
+                lookup[key] = raw_row
+
+    merged: list[dict[str, object]] = []
+    for row in default_rows:
+        current = dict(row)
+        key = tuple(str(current.get(field, "") or "").strip() for field in key_fields)
+        stored = lookup.get(key)
+        if stored is not None:
+            for target_field, aliases in field_aliases.items():
+                for alias in aliases:
+                    if alias in stored and stored.get(alias) not in (None, ""):
+                        current[target_field] = stored.get(alias)
+                        break
+        merged.append(current)
+    return merged
+
+
+def _apply_grouped_yearly_increment(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    group_field: str,
+    target_fields: Sequence[str],
+    increment_pct: float,
+    integer_fields: Sequence[str] = (),
+) -> list[dict[str, object]]:
+    updated_rows = [dict(row) for row in rows if isinstance(row, Mapping)]
+    if not updated_rows or not target_fields:
+        return updated_rows
+
+    grouped_indices: dict[str, list[int]] = {}
+    for index, row in enumerate(updated_rows):
+        group_value = str(row.get(group_field, "") or "").strip()
+        if not group_value:
+            continue
+        grouped_indices.setdefault(group_value, []).append(index)
+
+    integer_field_set = set(integer_fields)
+    factor = 1.0 + float(increment_pct) / 100.0
+    for indices in grouped_indices.values():
+        if not indices:
+            continue
+        running_values: dict[str, float] = {}
+        first_row = updated_rows[indices[0]]
+        for field in target_fields:
+            parsed = _parse_float(first_row.get(field))
+            running_values[field] = max(parsed if parsed is not None else 0.0, 0.0)
+        for index in indices[1:]:
+            current_row = updated_rows[index]
+            for field in target_fields:
+                next_value = max(running_values[field] * factor, 0.0)
+                if field in integer_field_set:
+                    current_row[field] = int(max(round(next_value), 0))
+                else:
+                    current_row[field] = max(next_value, 0.0)
+                running_values[field] = next_value
+    return updated_rows
+
+
+def _core_schedule_rows_from_rows(
+    rows: Sequence[Mapping[str, object]],
+    payload: Mapping[str, object],
+) -> list[dict[str, object]]:
+    years = _payload_year_sequence(payload)
+    production_estimate = payload.get("production_estimate", {})
+    section = payload.get(CORE_SCHEDULE_SECTION_KEY, {})
+    stored_rows = section.get(CORE_SCHEDULE_ROWS_KEY, []) if isinstance(section, Mapping) else []
+
+    defaults: list[dict[str, object]] = []
+    for row in rows:
+        product = str(row.get(CORE_PRODUCT_FIELD, "") or "").strip()
+        if not product:
+            continue
+        base_production_cost = max(_core_row_number(row, CORE_PRODUCTION_COST_FIELD), 0.0)
+        base_selling_price = max(_core_row_number(row, CORE_SELLING_PRICE_FIELD), 0.0)
+        base_freight_cost = max(_core_row_number(row, CORE_FREIGHT_COST_FIELD), 0.0)
+        base_markup = max(_core_row_number(row, CORE_MARKUP_FIELD), 0.0)
+        base_units = max(_core_row_number(row, CORE_TOTAL_UNITS_FIELD, _LEGACY_CORE_TOTAL_UNITS_FIELD), 0.0)
+        base_capacity = max(_core_row_number(row, CORE_CAPACITY_FIELD, _LEGACY_CORE_CAPACITY_FIELD), 0.0)
+        units_series = _normalised_production_series(
+            product,
+            years,
+            production_estimate,
+        )
+        for index, year in enumerate(years):
+            units_value = base_units
+            if index > 0 and index < len(units_series):
+                units_value = max(float(units_series[index]), 0.0)
+            defaults.append(
+                {
+                    CORE_SCHEDULE_YEAR_FIELD: int(year),
+                    CORE_PRODUCT_FIELD: product,
+                    CORE_PRODUCTION_COST_FIELD: base_production_cost,
+                    CORE_SELLING_PRICE_FIELD: base_selling_price,
+                    CORE_FREIGHT_COST_FIELD: base_freight_cost,
+                    CORE_MARKUP_FIELD: base_markup,
+                    CORE_TOTAL_UNITS_FIELD: units_value,
+                    CORE_CAPACITY_FIELD: base_capacity,
+                }
+            )
+
+    return _merge_schedule_rows(
+        defaults,
+        stored_rows,
+        key_fields=(CORE_PRODUCT_FIELD, CORE_SCHEDULE_YEAR_FIELD),
+        field_aliases={
+            CORE_PRODUCTION_COST_FIELD: ("production_cost", CORE_PRODUCTION_COST_FIELD),
+            CORE_TOTAL_UNITS_FIELD: ("total_units", CORE_TOTAL_UNITS_FIELD),
+            CORE_SELLING_PRICE_FIELD: ("selling_price", CORE_SELLING_PRICE_FIELD),
+            CORE_FREIGHT_COST_FIELD: ("freight_cost", CORE_FREIGHT_COST_FIELD),
+            CORE_MARKUP_FIELD: ("markup", CORE_MARKUP_FIELD),
+            CORE_CAPACITY_FIELD: ("capacity", CORE_CAPACITY_FIELD),
+        },
+    )
+
+
+def _payload_to_core_schedule_rows(payload: Mapping[str, object]) -> list[dict[str, object]]:
+    return _core_schedule_rows_from_rows(_payload_to_core_rows(payload), payload)
+
+
+def _core_schedule_rows_to_payload(rows: Sequence[Mapping[str, object]], payload: dict) -> None:
+    section = payload.setdefault(CORE_SCHEDULE_SECTION_KEY, {})
+    if not isinstance(section, dict):
+        section = {}
+        payload[CORE_SCHEDULE_SECTION_KEY] = section
+
+    years = _payload_year_sequence(payload)
+    year_index = {int(year): index for index, year in enumerate(years)}
+    serialised: list[dict[str, object]] = []
+    production_map: dict[str, list[float]] = {}
+    production_cost_map: dict[str, list[float]] = {}
+    price_map: dict[str, list[float]] = {}
+    freight_map: dict[str, list[float]] = {}
+    markup_map: dict[str, list[float]] = {}
+    capacity_map: dict[str, list[float]] = {}
+    for row in rows:
+        product = str(row.get(CORE_PRODUCT_FIELD, "") or "").strip()
+        year_value = row.get(CORE_SCHEDULE_YEAR_FIELD)
+        try:
+            year = int(year_value)
+        except (TypeError, ValueError):
+            continue
+        if not product or year not in year_index:
+            continue
+        production_cost_value = max(
+            _core_row_number(row, CORE_PRODUCTION_COST_FIELD, "production_cost"),
+            0.0,
+        )
+        units_value = max(_core_row_number(row, CORE_TOTAL_UNITS_FIELD), 0.0)
+        price_value = max(_core_row_number(row, CORE_SELLING_PRICE_FIELD), 0.0)
+        freight_value = max(
+            _core_row_number(row, CORE_FREIGHT_COST_FIELD, "freight_cost"),
+            0.0,
+        )
+        markup_value = max(
+            _core_row_number(row, CORE_MARKUP_FIELD, "markup"),
+            0.0,
+        )
+        capacity_value = max(
+            _core_row_number(row, CORE_CAPACITY_FIELD, "capacity"),
+            0.0,
+        )
+        serialised.append(
+            {
+                "product": product,
+                "year": year,
+                "production_cost": production_cost_value,
+                "total_units": units_value,
+                "selling_price": price_value,
+                "freight_cost": freight_value,
+                "markup": markup_value,
+                "capacity": capacity_value,
+            }
+        )
+        series = production_map.setdefault(product, [0.0 for _ in years])
+        series[year_index[year]] = units_value
+        production_cost_series = production_cost_map.setdefault(product, [0.0 for _ in years])
+        production_cost_series[year_index[year]] = production_cost_value
+        price_series = price_map.setdefault(product, [0.0 for _ in years])
+        price_series[year_index[year]] = price_value
+        freight_series = freight_map.setdefault(product, [0.0 for _ in years])
+        freight_series[year_index[year]] = freight_value
+        markup_series = markup_map.setdefault(product, [0.0 for _ in years])
+        markup_series[year_index[year]] = markup_value
+        capacity_series = capacity_map.setdefault(product, [0.0 for _ in years])
+        capacity_series[year_index[year]] = capacity_value
+
+    if serialised:
+        section[CORE_SCHEDULE_ROWS_KEY] = serialised
+    else:
+        section.pop(CORE_SCHEDULE_ROWS_KEY, None)
+
+    unit_costs = payload.get("unit_costs")
+    if not isinstance(unit_costs, dict):
+        unit_costs = {}
+        payload["unit_costs"] = unit_costs
+    markup_payload = payload.get("markup")
+    if not isinstance(markup_payload, dict):
+        markup_payload = {}
+        payload["markup"] = markup_payload
+    production_capacity = payload.get("production_capacity")
+    if not isinstance(production_capacity, dict):
+        production_capacity = {}
+        payload["production_capacity"] = production_capacity
+
+    if production_map:
+        payload["production_estimate"] = production_map
+        payload["total_production_units"] = {
+            product: (float(values[0]) if values else 0.0)
+            for product, values in production_map.items()
+        }
+        for product, prices in price_map.items():
+            costs = unit_costs.setdefault(product, {})
+            if not isinstance(costs, dict):
+                costs = {}
+                unit_costs[product] = costs
+            if prices:
+                costs["price"] = float(prices[0])
+            if product in production_cost_map and production_cost_map[product]:
+                costs["production"] = float(production_cost_map[product][0])
+            if product in freight_map and freight_map[product]:
+                costs["freight"] = float(freight_map[product][0])
+            if product in markup_map and markup_map[product]:
+                markup_payload[product] = float(markup_map[product][0])
+            if product in capacity_map and capacity_map[product]:
+                production_capacity[product] = float(capacity_map[product][0])
+    else:
+        payload.pop("production_estimate", None)
+        payload.pop("total_production_units", None)
+
+
+def _labor_schedule_rows_from_rows(
+    section: str,
+    rows: Sequence[Mapping[str, object]],
+    payload: Mapping[str, object],
+) -> list[dict[str, object]]:
+    years = _payload_year_sequence(payload)
+    labor = payload.get("labor", {}) if isinstance(payload, Mapping) else {}
+    stored_section = labor.get(f"{section}_schedule", {}) if isinstance(labor, Mapping) else {}
+    stored_rows = stored_section.get(LABOR_SCHEDULE_ROWS_KEY, []) if isinstance(stored_section, Mapping) else []
+
+    defaults: list[dict[str, object]] = []
+    for row in rows:
+        role = str(row.get("Role", "") or "").strip()
+        if not role:
+            continue
+        annual_cost = max(float(row.get("Annual Cost", 0.0) or 0.0), 0.0)
+        for year in years:
+            defaults.append(
+                {
+                    CORE_SCHEDULE_YEAR_FIELD: int(year),
+                    "Role": role,
+                    "Annual Cost": annual_cost,
+                }
+            )
+
+    return _merge_schedule_rows(
+        defaults,
+        stored_rows,
+        key_fields=("Role", CORE_SCHEDULE_YEAR_FIELD),
+        field_aliases={"Annual Cost": ("annual_cost", "Annual Cost")},
+    )
+
+
+def _payload_to_labor_schedule_rows(section: str, payload: Mapping[str, object]) -> list[dict[str, object]]:
+    labor = payload.get("labor", {}) if isinstance(payload, Mapping) else {}
+    base_rows = _mapping_to_rows(
+        labor.get(section, {}) if isinstance(labor, Mapping) else {},
+        "Role",
+        "Annual Cost",
+    )
+    return _labor_schedule_rows_from_rows(section, base_rows, payload)
+
+
+def _labor_schedule_rows_to_payload(section: str, rows: Sequence[Mapping[str, object]], payload: dict) -> None:
+    labor = payload.setdefault("labor", {})
+    if not isinstance(labor, dict):
+        labor = {}
+        payload["labor"] = labor
+
+    years = _payload_year_sequence(payload)
+    year_index = {int(year): index for index, year in enumerate(years)}
+    serialised: list[dict[str, object]] = []
+    schedule_map: dict[str, list[float]] = {}
+    for row in rows:
+        role = str(row.get("Role", "") or "").strip()
+        year_value = row.get(CORE_SCHEDULE_YEAR_FIELD)
+        try:
+            year = int(year_value)
+        except (TypeError, ValueError):
+            continue
+        if not role or year not in year_index:
+            continue
+        annual_cost = max(float(row.get("Annual Cost", 0.0) or 0.0), 0.0)
+        serialised.append({"role": role, "year": year, "annual_cost": annual_cost})
+        schedule_map.setdefault(role, [0.0 for _ in years])[year_index[year]] = annual_cost
+
+    if serialised:
+        labor[f"{section}_schedule"] = {LABOR_SCHEDULE_ROWS_KEY: serialised}
+        labor[section] = {
+            role: float(values[0]) if values else 0.0
+            for role, values in schedule_map.items()
+        }
+    else:
+        labor.pop(f"{section}_schedule", None)
+
+
+def _fixed_variable_schedule_rows_from_rows(
+    rows: Sequence[Mapping[str, object]],
+    payload: Mapping[str, object],
+) -> list[dict[str, object]]:
+    years = _payload_year_sequence(payload)
+    section = payload.get("fixed_variable_costs", {}) if isinstance(payload, Mapping) else {}
+    stored_rows = (
+        section.get(FIXED_VARIABLE_YEARLY_ROWS_KEY, [])
+        if isinstance(section, Mapping)
+        else []
+    )
+
+    defaults: list[dict[str, object]] = []
+    for row in rows:
+        product = str(row.get("Product", "") or "").strip()
+        if not product:
+            continue
+        fixed_cost = max(float(row.get("Fixed Cost", 0.0) or 0.0), 0.0)
+        variable_cost = max(float(row.get("Variable Cost", 0.0) or 0.0), 0.0)
+        for year in years:
+            defaults.append(
+                {
+                    CORE_SCHEDULE_YEAR_FIELD: int(year),
+                    "Product": product,
+                    "Fixed Cost": fixed_cost,
+                    "Variable Cost": variable_cost,
+                }
+            )
+
+    return _merge_schedule_rows(
+        defaults,
+        stored_rows,
+        key_fields=("Product", CORE_SCHEDULE_YEAR_FIELD),
+        field_aliases={
+            "Fixed Cost": ("fixed_cost", "Fixed Cost"),
+            "Variable Cost": ("variable_cost", "Variable Cost"),
+        },
+    )
+
+
+def _payload_to_fixed_variable_schedule_rows(payload: Mapping[str, object]) -> list[dict[str, object]]:
+    return _fixed_variable_schedule_rows_from_rows(_payload_to_fixed_variable_rows(payload), payload)
+
+
+def _fixed_variable_schedule_rows_to_payload(rows: Sequence[Mapping[str, object]], payload: dict) -> None:
+    section = payload.setdefault("fixed_variable_costs", {})
+    if not isinstance(section, dict):
+        section = {}
+        payload["fixed_variable_costs"] = section
+
+    years = _payload_year_sequence(payload)
+    year_index = {int(year): index for index, year in enumerate(years)}
+    serialised: list[dict[str, object]] = []
+    fixed_map: dict[str, list[float]] = {}
+    variable_map: dict[str, list[float]] = {}
+    for row in rows:
+        product = str(row.get("Product", "") or "").strip()
+        year_value = row.get(CORE_SCHEDULE_YEAR_FIELD)
+        try:
+            year = int(year_value)
+        except (TypeError, ValueError):
+            continue
+        if not product or year not in year_index:
+            continue
+        fixed_cost = max(float(row.get("Fixed Cost", 0.0) or 0.0), 0.0)
+        variable_cost = max(float(row.get("Variable Cost", 0.0) or 0.0), 0.0)
+        serialised.append(
+            {
+                "product": product,
+                "year": year,
+                "fixed_cost": fixed_cost,
+                "variable_cost": variable_cost,
+            }
+        )
+        fixed_map.setdefault(product, [0.0 for _ in years])[year_index[year]] = fixed_cost
+        variable_map.setdefault(product, [0.0 for _ in years])[year_index[year]] = variable_cost
+
+    if serialised:
+        section[FIXED_VARIABLE_YEARLY_ROWS_KEY] = serialised
+        base_rows: list[dict[str, object]] = []
+        for product in sorted(set(fixed_map) | set(variable_map)):
+            entry: dict[str, object] = {
+                "product": product,
+                "variable_cost": float(variable_map.get(product, [0.0])[0] if variable_map.get(product) else 0.0),
+            }
+            fixed_values = fixed_map.get(product, [])
+            if fixed_values:
+                entry["fixed_cost"] = float(fixed_values[0])
+            base_rows.append(entry)
+        section["rows"] = base_rows
+    else:
+        section.pop(FIXED_VARIABLE_YEARLY_ROWS_KEY, None)
+
+
 def _normalised_production_series(
     product: str,
     years: Sequence[Any],
@@ -10274,6 +10996,8 @@ def _fixed_variable_rows_to_payload(rows: Sequence[Mapping], payload: dict) -> N
         mapping[product] = (fixed_cost if has_fixed else None, variable_cost)
 
     section["rows"] = serialised
+    schedule_rows = _fixed_variable_schedule_rows_from_rows(rows, payload)
+    _fixed_variable_schedule_rows_to_payload(schedule_rows, payload)
 
     break_even = payload.get("break_even")
     if isinstance(break_even, dict):

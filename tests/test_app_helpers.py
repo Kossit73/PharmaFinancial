@@ -289,7 +289,7 @@ class RerunHelperTest(unittest.TestCase):
                 self.assertAlmostEqual(actual, expected, places=6)
         self.assertAlmostEqual(
             resolved_payload["total_production_units"]["Tablets"],
-            default_payload["total_production_units"]["Tablets"],
+            default_payload["production_estimate"]["Tablets"][0],
             places=6,
         )
 
@@ -648,14 +648,6 @@ class RerunHelperTest(unittest.TestCase):
         rows = self.app._payload_to_core_rows(payload)
         self.assertTrue(rows)
 
-        inflation = self.app._inflation_factors_from_payload(payload)
-        risk = self.app._risk_factors_from_payload(payload)
-        years = payload.get("years", [])
-        estimates = payload.get("production_estimate", {})
-
-        inflation_factor = inflation[0] if inflation else 1.0
-        risk_factor = risk[0] if risk else 1.0
-
         for row in rows:
             units = float(row[self.app.CORE_TOTAL_UNITS_FIELD])
             selling = float(row[self.app.CORE_SELLING_PRICE_FIELD])
@@ -664,17 +656,10 @@ class RerunHelperTest(unittest.TestCase):
             markup = float(row.get(self.app.CORE_MARKUP_FIELD, 0.0))
             capacity = float(row.get(self.app.CORE_CAPACITY_FIELD, 0.0))
 
-            scaled = self.app._scaled_production_series(
-                str(row[self.app.CORE_PRODUCT_FIELD]), units, years, estimates
-            )
-            first_year_units = scaled[0] if scaled else 0.0
+            expected_revenue = units * selling
+            expected_cost = units * (production + freight + markup)
 
-            expected_revenue = first_year_units * selling * inflation_factor * risk_factor
-            expected_cost = (
-                first_year_units * (production + freight + markup) * inflation_factor * risk_factor
-            )
-
-            self.assertAlmostEqual(row[self.app.CORE_YEAR1_UNITS_FIELD], first_year_units, places=8)
+            self.assertAlmostEqual(row[self.app.CORE_YEAR1_UNITS_FIELD], units, places=8)
             self.assertAlmostEqual(row[self.app.CORE_YEAR1_REVENUE_FIELD], expected_revenue, places=8)
             self.assertAlmostEqual(row[self.app.CORE_YEAR1_COST_FIELD], expected_cost, places=8)
             if capacity > 0:
@@ -706,12 +691,75 @@ class RerunHelperTest(unittest.TestCase):
         self.assertAlmostEqual(
             parsed.unit_costs[product_name].selling_price, new_price, places=6
         )
-
-        total_units = sum(parsed.production_estimate[product_name])
-        expected_total = (
-            float(synced[0][self.app.CORE_TOTAL_UNITS_FIELD]) * len(parsed.years)
+        self.assertAlmostEqual(
+            parsed.total_production_units[product_name],
+            float(synced[0][self.app.CORE_TOTAL_UNITS_FIELD]),
+            places=6,
         )
-        self.assertAlmostEqual(total_units, expected_total, places=6)
+
+        self.assertAlmostEqual(
+            parsed.production_estimate[product_name][0],
+            float(synced[0][self.app.CORE_TOTAL_UNITS_FIELD]),
+            places=6,
+        )
+
+    def test_core_schedule_rows_to_payload_updates_yearly_profile(self):
+        payload = json.loads(
+            Path("src/pharma_financial/data/default_inputs.json").read_text(encoding="utf-8")
+        )
+        years = payload["years"]
+        product = "Tablets"
+        schedule_rows = []
+        units_value = 100.0
+        production_cost_value = 2.0
+        price_value = 10.0
+        freight_value = 0.5
+        markup_value = 0.75
+        capacity_value = 140.0
+        for year in years:
+            schedule_rows.append(
+                {
+                    self.app.CORE_SCHEDULE_YEAR_FIELD: int(year),
+                    self.app.CORE_PRODUCT_FIELD: product,
+                    self.app.CORE_PRODUCTION_COST_FIELD: production_cost_value,
+                    self.app.CORE_TOTAL_UNITS_FIELD: units_value,
+                    self.app.CORE_SELLING_PRICE_FIELD: price_value,
+                    self.app.CORE_FREIGHT_COST_FIELD: freight_value,
+                    self.app.CORE_MARKUP_FIELD: markup_value,
+                    self.app.CORE_CAPACITY_FIELD: capacity_value,
+                }
+            )
+            units_value *= 1.2
+            production_cost_value *= 1.03
+            price_value *= 1.05
+            freight_value *= 1.02
+            markup_value *= 1.01
+            capacity_value *= 1.04
+
+        self.app._core_schedule_rows_to_payload(schedule_rows, payload)
+
+        self.assertEqual(
+            payload["production_estimate"][product][:3],
+            [100.0, 120.0, 144.0],
+        )
+        self.assertAlmostEqual(
+            payload["total_production_units"][product],
+            100.0,
+            places=6,
+        )
+        self.assertEqual(
+            payload[self.app.CORE_SCHEDULE_SECTION_KEY][self.app.CORE_SCHEDULE_ROWS_KEY][1]["selling_price"],
+            10.5,
+        )
+        self.assertEqual(
+            payload[self.app.CORE_SCHEDULE_SECTION_KEY][self.app.CORE_SCHEDULE_ROWS_KEY][0]["production_cost"],
+            2.0,
+        )
+        self.assertAlmostEqual(payload["unit_costs"][product]["production"], 2.0, places=6)
+        self.assertAlmostEqual(payload["unit_costs"][product]["price"], 10.0, places=6)
+        self.assertAlmostEqual(payload["unit_costs"][product]["freight"], 0.5, places=6)
+        self.assertAlmostEqual(payload["markup"][product], 0.75, places=6)
+        self.assertAlmostEqual(payload["production_capacity"][product], 140.0, places=6)
 
     def test_scaled_production_series_rescales_profile_to_annual_run_rate(self):
         yearly_units = 120.0

@@ -378,6 +378,26 @@ class FinancialModel:
         self._price_adjustments_cache = adjustments
         return adjustments
 
+    def _explicit_schedule_map(
+        self,
+        schedules: Mapping[str, Sequence[Number]] | None,
+    ) -> Dict[str, np.ndarray]:
+        year_count = len(self.years)
+        resolved: Dict[str, np.ndarray] = {}
+        if not isinstance(schedules, Mapping):
+            return resolved
+        for name, values in schedules.items():
+            if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
+                continue
+            series = [float(value) for value in values]
+            if not series:
+                continue
+            resolved[str(name)] = np.array(
+                self._pad_series(series, year_count, fill=float(series[-1])),
+                dtype=float,
+            )
+        return resolved
+
     def _commission_parameters(self) -> dict[int, dict[str, tuple[float, float, int]]]:
         if self._commission_cache is not None:
             return self._commission_cache
@@ -448,12 +468,18 @@ class FinancialModel:
     def _per_product_raw_material_series(self) -> Dict[str, np.ndarray]:
         production = self._production()
         variable_lookup = self._variable_costs()
+        explicit_variable_schedules = self._explicit_schedule_map(
+            getattr(self.inputs, "variable_cost_schedules", {}),
+        )
         inflation = self._inflation_array()
         risk = self._risk_cost_array()
 
         series: Dict[str, np.ndarray] = {}
         for product in self.products:
             units = np.array(production.get(product, [0.0 for _ in self.years]), dtype=float)
+            if product in explicit_variable_schedules:
+                series[product] = units * explicit_variable_schedules[product] * risk
+                continue
             variable_cost = variable_lookup.get(product, 0.0)
             series[product] = units * variable_cost * inflation * risk
         return series
@@ -549,6 +575,10 @@ class FinancialModel:
         if abs(case.price_multiplier - 1.0) > 1e-9:
             for params in scenario_inputs.unit_costs.values():
                 params.selling_price *= case.price_multiplier
+            scenario_inputs.selling_price_schedules = {
+                product: [float(value) * case.price_multiplier for value in values]
+                for product, values in scenario_inputs.selling_price_schedules.items()
+            }
 
         if abs(case.raw_material_multiplier - 1.0) > 1e-9:
             scenario_inputs.raw_material_cost_per_unit *= case.raw_material_multiplier
@@ -556,11 +586,19 @@ class FinancialModel:
                 product: float(value) * case.raw_material_multiplier
                 for product, value in scenario_inputs.variable_cost_overrides.items()
             }
+            scenario_inputs.variable_cost_schedules = {
+                product: [float(value) * case.raw_material_multiplier for value in values]
+                for product, values in scenario_inputs.variable_cost_schedules.items()
+            }
 
         if abs(case.direct_labor_multiplier - 1.0) > 1e-9:
             scenario_inputs.direct_labor_costs = {
                 role: float(value) * case.direct_labor_multiplier
                 for role, value in scenario_inputs.direct_labor_costs.items()
+            }
+            scenario_inputs.direct_labor_schedules = {
+                role: [float(value) * case.direct_labor_multiplier for value in values]
+                for role, values in scenario_inputs.direct_labor_schedules.items()
             }
             if scenario_inputs.labor_model is not None:
                 for role in scenario_inputs.labor_model.roles:
@@ -575,6 +613,10 @@ class FinancialModel:
             scenario_inputs.indirect_labor_costs = {
                 role: float(value) * case.overhead_multiplier
                 for role, value in scenario_inputs.indirect_labor_costs.items()
+            }
+            scenario_inputs.indirect_labor_schedules = {
+                role: [float(value) * case.overhead_multiplier for value in values]
+                for role, values in scenario_inputs.indirect_labor_schedules.items()
             }
             if scenario_inputs.labor_model is not None:
                 for role in scenario_inputs.labor_model.roles:
@@ -673,6 +715,9 @@ class FinancialModel:
 
         prices = self._unit_prices()
         price_adjustments = self._price_adjustments()
+        explicit_prices = self._explicit_schedule_map(
+            getattr(self.inputs, "selling_price_schedules", {}),
+        )
         production = self._production()
         commission_params = self._commission_parameters()
         year_count = len(self.years)
@@ -685,8 +730,11 @@ class FinancialModel:
         for product in self.products:
             units = np.array(production.get(product, [0.0 for _ in range(year_count)]), dtype=float)
             price = float(prices.get(product, 0.0))
-            adjustment = np.array(price_adjustments.get(product, [1.0 for _ in range(year_count)]), dtype=float)
-            gross_values = units * price * adjustment * inflation_array * risk_array
+            if product in explicit_prices:
+                gross_values = units * explicit_prices[product] * risk_array
+            else:
+                adjustment = np.array(price_adjustments.get(product, [1.0 for _ in range(year_count)]), dtype=float)
+                gross_values = units * price * adjustment * inflation_array * risk_array
             columns[product] = gross_values.tolist()
             gross_totals_array += gross_values
 
@@ -844,17 +892,30 @@ class FinancialModel:
             direct_labor = (direct_array * inflation_array * risk_array).tolist()
             indirect_labor = (indirect_array * inflation_array * risk_array).tolist()
         else:
-            base_direct = sum(self.inputs.direct_labor_costs.values())
-            baseline_units = total_units[0] or 1.0
-            direct_labor = (
-                base_direct
-                * (total_units_array / baseline_units)
-                * inflation_array
-                * risk_array
-            ).tolist()
+            direct_schedule_map = self._explicit_schedule_map(
+                getattr(self.inputs, "direct_labor_schedules", {}),
+            )
+            indirect_schedule_map = self._explicit_schedule_map(
+                getattr(self.inputs, "indirect_labor_schedules", {}),
+            )
 
-            base_indirect = sum(self.inputs.indirect_labor_costs.values())
-            indirect_labor = (base_indirect * inflation_array * risk_array).tolist()
+            if direct_schedule_map:
+                direct_labor = (self._sum_series_map(direct_schedule_map) * risk_array).tolist()
+            else:
+                base_direct = sum(self.inputs.direct_labor_costs.values())
+                baseline_units = total_units[0] or 1.0
+                direct_labor = (
+                    base_direct
+                    * (total_units_array / baseline_units)
+                    * inflation_array
+                    * risk_array
+                ).tolist()
+
+            if indirect_schedule_map:
+                indirect_labor = (self._sum_series_map(indirect_schedule_map) * risk_array).tolist()
+            else:
+                base_indirect = sum(self.inputs.indirect_labor_costs.values())
+                indirect_labor = (base_indirect * inflation_array * risk_array).tolist()
 
         utility_cost_share = self.inputs.utility_cost_of_sales_share
         utility_cost_of_sales = [value * utility_cost_share for value in utilities]
@@ -2404,6 +2465,10 @@ class FinancialModel:
                 if variable in {"tablet_price", "selling_price", "price"}:
                     for params in scenario_inputs.unit_costs.values():
                         params.selling_price *= multiplier
+                    scenario_inputs.selling_price_schedules = {
+                        product: [float(value) * multiplier for value in values]
+                        for product, values in scenario_inputs.selling_price_schedules.items()
+                    }
                 elif variable in {"volume", "production"}:
                     scenario_inputs.production_estimate = {
                         product: [float(value) * multiplier for value in values]
@@ -2415,6 +2480,10 @@ class FinancialModel:
                         for product, value in scenario_inputs.variable_cost_overrides.items()
                     }
                     scenario_inputs.variable_cost_overrides = scaled
+                    scenario_inputs.variable_cost_schedules = {
+                        product: [float(value) * multiplier for value in values]
+                        for product, values in scenario_inputs.variable_cost_schedules.items()
+                    }
                     scenario_inputs.raw_material_cost_per_unit *= multiplier
                     scenario_inputs.raw_material_factors = {
                         product: float(value)

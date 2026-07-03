@@ -281,18 +281,27 @@ class ModelInputs:
     production_estimate: Mapping[str, List[float]]
     unit_costs: Mapping[str, ProductParameters]
     price_adjustments: Mapping[str, List[float]]
+    production_cost_schedules: Mapping[str, List[float]]
+    selling_price_schedules: Mapping[str, List[float]]
+    freight_cost_schedules: Mapping[str, List[float]]
+    markup_schedules: Mapping[str, List[float]]
     markup: Mapping[str, float]
     total_production_units: Mapping[str, float]
     production_capacity: Mapping[str, float]
+    capacity_schedules: Mapping[str, List[float]]
     break_even_rows: List[BreakEvenRow]
     fixed_cost_overrides: Mapping[str, float]
     variable_cost_overrides: Mapping[str, float]
+    fixed_cost_schedules: Mapping[str, List[float]]
+    variable_cost_schedules: Mapping[str, List[float]]
     inflation_series: List[float]
     raw_material_cost_per_unit: float
     raw_material_factors: Mapping[str, float]
     utility_schedule: UtilitySchedule
     direct_labor_costs: Mapping[str, float]
     indirect_labor_costs: Mapping[str, float]
+    direct_labor_schedules: Mapping[str, List[float]]
+    indirect_labor_schedules: Mapping[str, List[float]]
     labor_model: Optional[LaborModelParameters]
     depreciation_schedule: List[DepreciationRow]
     distributor_commission: List[DistributorCommissionRow]
@@ -948,6 +957,250 @@ def _parse_fixed_variable_costs(raw: object) -> tuple[Dict[str, float], Dict[str
     return fixed, variable
 
 
+def _parse_labor_schedule(raw: object, years: Sequence[int]) -> Dict[str, List[float]]:
+    if isinstance(raw, Mapping):
+        entries = raw.get("rows", [])
+    else:
+        entries = raw
+    if not isinstance(entries, Iterable) or isinstance(entries, (str, bytes, Mapping)):
+        return {}
+
+    year_index = {int(year): index for index, year in enumerate(years)}
+    schedules: Dict[str, List[Optional[float]]] = {}
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        role = str(entry.get("role") or entry.get("Role") or "").strip()
+        year_value = entry.get("year", entry.get("Year"))
+        if not role:
+            continue
+        try:
+            year = int(year_value)
+        except (TypeError, ValueError):
+            continue
+        if year not in year_index:
+            continue
+        try:
+            annual_cost = max(float(entry.get("annual_cost", entry.get("Annual Cost", 0.0)) or 0.0), 0.0)
+        except (TypeError, ValueError):
+            annual_cost = 0.0
+        schedules.setdefault(role, [None for _ in years])[year_index[year]] = annual_cost
+
+    resolved: Dict[str, List[float]] = {}
+    for role, values in schedules.items():
+        running = 0.0
+        series: List[float] = []
+        for value in values:
+            if value is not None:
+                running = value
+            series.append(running)
+        resolved[role] = series
+    return resolved
+
+
+def _parse_fixed_variable_yearly_rows(
+    raw: object,
+    years: Sequence[int],
+) -> tuple[Dict[str, List[float]], Dict[str, List[float]]]:
+    if isinstance(raw, Mapping):
+        entries = raw.get("yearly_rows", [])
+    else:
+        entries = []
+    if not isinstance(entries, Iterable) or isinstance(entries, (str, bytes, Mapping)):
+        return {}, {}
+
+    year_index = {int(year): index for index, year in enumerate(years)}
+    fixed_raw: Dict[str, List[Optional[float]]] = {}
+    variable_raw: Dict[str, List[Optional[float]]] = {}
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        product = str(entry.get("product") or entry.get("Product") or "").strip()
+        year_value = entry.get("year", entry.get("Year"))
+        if not product:
+            continue
+        try:
+            year = int(year_value)
+        except (TypeError, ValueError):
+            continue
+        if year not in year_index:
+            continue
+        position = year_index[year]
+        if "fixed_cost" in entry or "Fixed Cost" in entry:
+            try:
+                fixed_value = max(float(entry.get("fixed_cost", entry.get("Fixed Cost", 0.0)) or 0.0), 0.0)
+            except (TypeError, ValueError):
+                fixed_value = 0.0
+            fixed_raw.setdefault(product, [None for _ in years])[position] = fixed_value
+        if "variable_cost" in entry or "Variable Cost" in entry:
+            try:
+                variable_value = max(float(entry.get("variable_cost", entry.get("Variable Cost", 0.0)) or 0.0), 0.0)
+            except (TypeError, ValueError):
+                variable_value = 0.0
+            variable_raw.setdefault(product, [None for _ in years])[position] = variable_value
+
+    def _resolve(values_by_name: Dict[str, List[Optional[float]]]) -> Dict[str, List[float]]:
+        resolved: Dict[str, List[float]] = {}
+        for name, values in values_by_name.items():
+            running = 0.0
+            series: List[float] = []
+            for value in values:
+                if value is not None:
+                    running = value
+                series.append(running)
+            resolved[name] = series
+        return resolved
+
+    return _resolve(fixed_raw), _resolve(variable_raw)
+
+
+def _parse_core_assumption_schedule_rows(
+    raw: object,
+    years: Sequence[int],
+    production_estimate: Mapping[str, List[float]],
+    unit_costs: Mapping[str, ProductParameters],
+    markup: Mapping[str, float],
+    production_capacity: Mapping[str, float],
+) -> tuple[
+    Dict[str, List[float]],
+    Dict[str, List[float]],
+    Dict[str, List[float]],
+    Dict[str, List[float]],
+    Dict[str, List[float]],
+    Dict[str, List[float]],
+]:
+    if isinstance(raw, Mapping):
+        entries = raw.get("rows", [])
+    else:
+        entries = []
+    if not isinstance(entries, Iterable) or isinstance(entries, (str, bytes, Mapping)):
+        return dict(production_estimate), {}, {}, {}, {}, {}
+
+    year_index = {int(year): index for index, year in enumerate(years)}
+    resolved_production: Dict[str, List[float]] = {
+        name: _coerce_schedule(values, len(years))
+        for name, values in production_estimate.items()
+    }
+    raw_production_costs: Dict[str, List[float]] = {}
+    raw_prices: Dict[str, List[Optional[float]]] = {}
+    raw_freight_costs: Dict[str, List[float]] = {}
+    raw_markup: Dict[str, List[float]] = {}
+    raw_capacity: Dict[str, List[float]] = {}
+    explicit_production_costs: set[str] = set()
+    explicit_prices: set[str] = set()
+    explicit_freight_costs: set[str] = set()
+    explicit_markup: set[str] = set()
+    explicit_capacity: set[str] = set()
+
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        product = str(entry.get("product") or entry.get("Product") or "").strip()
+        year_value = entry.get("year", entry.get("Year"))
+        if not product:
+            continue
+        try:
+            year = int(year_value)
+        except (TypeError, ValueError):
+            continue
+        if year not in year_index:
+            continue
+        position = year_index[year]
+        resolved_production.setdefault(product, [0.0 for _ in years])
+        if "total_units" in entry or "Yearly Total Units Produced" in entry:
+            try:
+                units_value = max(float(entry.get("total_units", entry.get("Yearly Total Units Produced", 0.0)) or 0.0), 0.0)
+            except (TypeError, ValueError):
+                units_value = 0.0
+            resolved_production[product][position] = units_value
+        if "production_cost" in entry or "Production Cost / Unit" in entry:
+            default_cost = unit_costs.get(product).production_cost if product in unit_costs else 0.0
+            raw_production_costs.setdefault(product, [default_cost for _ in years])
+            try:
+                production_cost_value = max(
+                    float(entry.get("production_cost", entry.get("Production Cost / Unit", 0.0)) or 0.0),
+                    0.0,
+                )
+            except (TypeError, ValueError):
+                production_cost_value = 0.0
+            raw_production_costs[product][position] = production_cost_value
+            explicit_production_costs.add(product)
+        if "selling_price" in entry or "Selling Price" in entry:
+            default_price = unit_costs.get(product).selling_price if product in unit_costs else 0.0
+            raw_prices.setdefault(product, [default_price for _ in years])
+            try:
+                price_value = max(float(entry.get("selling_price", entry.get("Selling Price", 0.0)) or 0.0), 0.0)
+            except (TypeError, ValueError):
+                price_value = 0.0
+            raw_prices[product][position] = price_value
+            explicit_prices.add(product)
+        if "freight_cost" in entry or "Freight Cost / Unit" in entry:
+            default_freight = unit_costs.get(product).freight_cost if product in unit_costs else 0.0
+            raw_freight_costs.setdefault(product, [default_freight for _ in years])
+            try:
+                freight_value = max(
+                    float(entry.get("freight_cost", entry.get("Freight Cost / Unit", 0.0)) or 0.0),
+                    0.0,
+                )
+            except (TypeError, ValueError):
+                freight_value = 0.0
+            raw_freight_costs[product][position] = freight_value
+            explicit_freight_costs.add(product)
+        if "markup" in entry or "Markup / Unit" in entry:
+            default_markup = float(markup.get(product, 0.0) or 0.0)
+            raw_markup.setdefault(product, [default_markup for _ in years])
+            try:
+                markup_value = max(
+                    float(entry.get("markup", entry.get("Markup / Unit", 0.0)) or 0.0),
+                    0.0,
+                )
+            except (TypeError, ValueError):
+                markup_value = 0.0
+            raw_markup[product][position] = markup_value
+            explicit_markup.add(product)
+        if "capacity" in entry or "Capacity Limit" in entry:
+            default_capacity = float(production_capacity.get(product, 0.0) or 0.0)
+            raw_capacity.setdefault(product, [default_capacity for _ in years])
+            try:
+                capacity_value = max(
+                    float(entry.get("capacity", entry.get("Capacity Limit", 0.0)) or 0.0),
+                    0.0,
+                )
+            except (TypeError, ValueError):
+                capacity_value = 0.0
+            raw_capacity[product][position] = capacity_value
+            explicit_capacity.add(product)
+
+    return (
+        resolved_production,
+        {
+            product: values
+            for product, values in raw_production_costs.items()
+            if product in explicit_production_costs
+        },
+        {
+            product: values
+            for product, values in raw_prices.items()
+            if product in explicit_prices
+        },
+        {
+            product: values
+            for product, values in raw_freight_costs.items()
+            if product in explicit_freight_costs
+        },
+        {
+            product: values
+            for product, values in raw_markup.items()
+            if product in explicit_markup
+        },
+        {
+            product: values
+            for product, values in raw_capacity.items()
+            if product in explicit_capacity
+        },
+    )
+
+
 def _coerce_schedule(values: Iterable[float], length: int) -> List[float]:
     """Normalise a schedule to match the projection horizon length."""
     sequence = [float(value) for value in values]
@@ -1057,6 +1310,8 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
     utility_source = raw["utility_costs"]
     labor_mapping = raw.get("labor", {}) if isinstance(raw.get("labor", {}), Mapping) else {}
     labor_model = _parse_labor_model(labor_mapping, years)
+    direct_labor_schedules = _parse_labor_schedule(labor_mapping.get("direct_schedule", {}), years)
+    indirect_labor_schedules = _parse_labor_schedule(labor_mapping.get("indirect_schedule", {}), years)
     utility_rows = list(utility_source.get("years", [])) if isinstance(utility_source, Mapping) else []
 
     if utility_rows:
@@ -1181,45 +1436,83 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
     else:
         production_source = {}
 
+    capacity_raw = raw.get("production_capacity", {})
+    production_estimate, production_cost_schedules, selling_price_schedules, freight_cost_schedules, markup_schedules, capacity_schedules = _parse_core_assumption_schedule_rows(
+        raw.get("core_assumptions_schedule", {}),
+        years,
+        production_estimate,
+        unit_costs,
+        raw.get("markup", {}) if isinstance(raw.get("markup", {}), Mapping) else {},
+        capacity_raw if isinstance(capacity_raw, Mapping) else {},
+    )
+
 
     total_units_raw = raw.get("total_production_units", {})
-    capacity_raw = raw.get("production_capacity", {})
 
     total_units: Dict[str, float] = {}
     capacity: Dict[str, float] = {}
     for name in unit_costs:
         estimate = production_estimate.get(name, [])
-        estimate_total = sum(float(value) for value in estimate)
-        estimate_annual = estimate_total / years_length if years_length > 0 else estimate_total
         configured_total = float(total_units_raw.get(name, 0.0) or 0.0)
-        flat_annual_series = bool(estimate) and all(
-            math.isclose(float(value), float(estimate[0]), rel_tol=1e-9, abs_tol=1e-9)
-            for value in estimate
+        estimate_average = (
+            sum(float(value) for value in estimate) / len(estimate)
+            if estimate
+            else 0.0
         )
-        if configured_total <= 0.0:
-            resolved_total = estimate_annual
-        elif flat_annual_series and math.isclose(
-            configured_total,
-            float(estimate[0]),
-            rel_tol=1e-9,
-            abs_tol=1e-9,
-        ):
+        looks_like_legacy_average = (
+            bool(estimate)
+            and not all(
+                math.isclose(
+                    float(value),
+                    float(estimate[0]),
+                    rel_tol=1e-9,
+                    abs_tol=1e-9,
+                )
+                for value in estimate
+            )
+            and math.isclose(
+                configured_total,
+                estimate_average,
+                rel_tol=1e-9,
+                abs_tol=1e-9,
+            )
+        )
+        if (configured_total > 0.0 or name in total_units_raw) and not looks_like_legacy_average:
             resolved_total = configured_total
-        elif math.isclose(
-            configured_total,
-            estimate_total,
-            rel_tol=1e-9,
-            abs_tol=1e-9,
-        ):
-            resolved_total = estimate_annual
+        elif estimate:
+            resolved_total = float(estimate[0])
         else:
-            resolved_total = configured_total
-        total_units[name] = resolved_total
-        capacity[name] = float(capacity_raw.get(name, 0.0))
+            resolved_total = 0.0
+        total_units[name] = max(resolved_total, 0.0)
+
+        configured_capacity = float(capacity_raw.get(name, 0.0) or 0.0) if isinstance(capacity_raw, Mapping) else 0.0
+        if configured_capacity > 0.0 or (isinstance(capacity_raw, Mapping) and name in capacity_raw):
+            resolved_capacity = configured_capacity
+        else:
+            schedule_capacity = capacity_schedules.get(name, [])
+            resolved_capacity = float(schedule_capacity[0]) if schedule_capacity else 0.0
+        capacity[name] = max(resolved_capacity, 0.0)
+
+    resolved_markup = {
+        str(name): float(value or 0.0)
+        for name, value in (
+            raw.get("markup", {}) if isinstance(raw.get("markup", {}), Mapping) else {}
+        ).items()
+    }
 
     fixed_overrides, variable_overrides = _parse_fixed_variable_costs(
         raw.get("fixed_variable_costs")
     )
+    fixed_cost_schedules, variable_cost_schedules = _parse_fixed_variable_yearly_rows(
+        raw.get("fixed_variable_costs"),
+        years,
+    )
+    for product, values in fixed_cost_schedules.items():
+        if values:
+            fixed_overrides[product] = float(values[0])
+    for product, values in variable_cost_schedules.items():
+        if values:
+            variable_overrides[product] = float(values[0])
 
     raw_material_mapping = raw.get("raw_material_cost", {})
     raw_material_base = 0.0
@@ -1336,18 +1629,27 @@ def parse_inputs(raw: Mapping[str, object]) -> ModelInputs:
         production_estimate=production_estimate,
         unit_costs=unit_costs,
         price_adjustments=price_adjustments,
-        markup=raw["markup"],
+        production_cost_schedules=production_cost_schedules,
+        selling_price_schedules=selling_price_schedules,
+        freight_cost_schedules=freight_cost_schedules,
+        markup_schedules=markup_schedules,
+        markup=resolved_markup,
         total_production_units=total_units,
         production_capacity=capacity,
+        capacity_schedules=capacity_schedules,
         break_even_rows=break_even_rows,
         fixed_cost_overrides=fixed_overrides,
         variable_cost_overrides=variable_overrides,
+        fixed_cost_schedules=fixed_cost_schedules,
+        variable_cost_schedules=variable_cost_schedules,
         inflation_series=inflation_series,
         raw_material_cost_per_unit=float(raw["raw_material_cost"]["per_unit"]),
         raw_material_factors=raw_material_factors,
         utility_schedule=utility,
         direct_labor_costs=labor_mapping.get("direct", {}),
         indirect_labor_costs=labor_mapping.get("indirect", {}),
+        direct_labor_schedules=direct_labor_schedules,
+        indirect_labor_schedules=indirect_labor_schedules,
         labor_model=labor_model,
         depreciation_schedule=depreciation_schedule,
         distributor_commission=commission_rows,
