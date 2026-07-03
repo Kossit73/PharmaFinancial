@@ -186,17 +186,38 @@ _RUNTIME_WIDGET_PREFIXES: tuple[str, ...] = (
 )
 
 
+def _runtime_state_dependency_paths() -> tuple[Path, ...]:
+    root = Path(__file__).resolve().parent
+    ui_root = root / "ui"
+    tabs_root = ui_root / "tabs"
+    editors_root = ui_root / "editors"
+    return (
+        root / "app.py",
+        root / "model.py",
+        root / "report.py",
+        root / "inputs.py",
+        ui_root / "io.py",
+        ui_root / "shell.py",
+        ui_root / "state.py",
+        ui_root / "tab_registry.py",
+        editors_root / "bankability.py",
+        editors_root / "core_assumptions.py",
+        tabs_root / "assistant.py",
+        tabs_root / "investment_case.py",
+        tabs_root / "scenario_lab.py",
+        tabs_root / "setup.py",
+        tabs_root / "statements.py",
+        DEFAULT_INPUT_PATH,
+    )
+
+
 def _runtime_state_fingerprint() -> str:
     env_value = os.environ.get(RUNTIME_STATE_FINGERPRINT_ENV, "").strip()
     if env_value:
         return env_value
 
     hasher = hashlib.sha256()
-    for path in (
-        Path(__file__).resolve(),
-        Path(__file__).resolve().parent / "ui" / "state.py",
-        DEFAULT_INPUT_PATH,
-    ):
+    for path in _runtime_state_dependency_paths():
         hasher.update(path.name.encode("utf-8"))
         try:
             hasher.update(path.read_bytes())
