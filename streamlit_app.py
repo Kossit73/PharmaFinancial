@@ -23,20 +23,37 @@ if FALLBACK_SRC.exists() and str(FALLBACK_SRC) not in sys.path:  # pragma: no co
     sys.path.insert(0, str(FALLBACK_SRC))
 
 
-def _runtime_fingerprint() -> str:
-    hasher = hashlib.sha256()
-    for path in (
+def _runtime_dependency_paths() -> tuple[Path, ...]:
+    ui_root = SRC / "pharma_financial" / "ui"
+    tabs_root = ui_root / "tabs"
+    editors_root = ui_root / "editors"
+    # Hosted runtimes can keep a session cache across code refreshes. Track the
+    # workbook preview UI modules explicitly so UI-only deployments invalidate
+    # the cached payload state as reliably as model/data changes.
+    return (
         ROOT / "streamlit_app.py",
         SRC / "pharma_financial" / "app.py",
         SRC / "pharma_financial" / "model.py",
         SRC / "pharma_financial" / "report.py",
         SRC / "pharma_financial" / "inputs.py",
-        SRC / "pharma_financial" / "ui" / "editors" / "core_assumptions.py",
-        SRC / "pharma_financial" / "ui" / "tabs" / "setup.py",
-        SRC / "pharma_financial" / "ui" / "tabs" / "investment_case.py",
-        SRC / "pharma_financial" / "ui" / "state.py",
+        ui_root / "io.py",
+        ui_root / "shell.py",
+        ui_root / "state.py",
+        ui_root / "tab_registry.py",
+        editors_root / "bankability.py",
+        editors_root / "core_assumptions.py",
+        tabs_root / "assistant.py",
+        tabs_root / "investment_case.py",
+        tabs_root / "scenario_lab.py",
+        tabs_root / "setup.py",
+        tabs_root / "statements.py",
         SRC / "pharma_financial" / "data" / "default_inputs.json",
-    ):
+    )
+
+
+def _runtime_fingerprint() -> str:
+    hasher = hashlib.sha256()
+    for path in _runtime_dependency_paths():
         hasher.update(path.name.encode("utf-8"))
         try:
             hasher.update(path.read_bytes())
