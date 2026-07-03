@@ -351,6 +351,10 @@ class RerunHelperTest(unittest.TestCase):
                 "finance_share_capital": 1.0,
                 "sensitivity_results": {"stale": True},
                 "sensitivity_results_digest": "stale",
+                "excel_scenario_selection": "downside",
+                "input_snapshot": {"legacy": True},
+                "model_results": ("stale-model", "stale-results"),
+                "excel_bytes_map": {"base": b"stale"},
             }
         )
 
@@ -382,6 +386,10 @@ class RerunHelperTest(unittest.TestCase):
         self.assertNotIn("finance_share_capital", self.stub.session_state)
         self.assertNotIn("sensitivity_results", self.stub.session_state)
         self.assertNotIn("sensitivity_results_digest", self.stub.session_state)
+        self.assertNotIn("excel_scenario_selection", self.stub.session_state)
+        self.assertNotIn("input_snapshot", self.stub.session_state)
+        self.assertNotIn("model_results", self.stub.session_state)
+        self.assertNotIn("excel_bytes_map", self.stub.session_state)
 
     def test_refresh_runtime_session_state_preserves_non_placeholder_payload(self):
         payload = json.loads(self.app.DEFAULT_INPUT_JSON)
@@ -394,6 +402,10 @@ class RerunHelperTest(unittest.TestCase):
                 "input_payload": payload,
                 "last_model": object(),
                 "finance_share_capital": 7.7,
+                "excel_scenario_selection": "base",
+                "input_snapshot": {"legacy": True},
+                "model_results": ("stale-model", "stale-results"),
+                "excel_bytes_map": {"base": b"stale"},
             }
         )
 
@@ -405,6 +417,10 @@ class RerunHelperTest(unittest.TestCase):
         )
         self.assertNotIn("last_model", self.stub.session_state)
         self.assertNotIn("finance_share_capital", self.stub.session_state)
+        self.assertNotIn("excel_scenario_selection", self.stub.session_state)
+        self.assertNotIn("input_snapshot", self.stub.session_state)
+        self.assertNotIn("model_results", self.stub.session_state)
+        self.assertNotIn("excel_bytes_map", self.stub.session_state)
 
     def test_set_state_replaces_legacy_default_payload_and_skips_stale_rows(self):
         default_payload = json.loads(self.app.DEFAULT_INPUT_JSON)
