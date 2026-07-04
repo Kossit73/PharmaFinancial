@@ -355,6 +355,10 @@ class RerunHelperTest(unittest.TestCase):
                 "input_snapshot": {"legacy": True},
                 "model_results": ("stale-model", "stale-results"),
                 "excel_bytes_map": {"base": b"stale"},
+                "business_plan_reports": {"Excel": (b"stale", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "stale.xlsx")},
+                "business_plan_bundle": b"stale-zip",
+                self.app.WORKBOOK_PAYLOAD_DIGEST_KEY: "stale-digest",
+                self.app.BUSINESS_PLAN_SCENARIO_KEY: "downside",
             }
         )
 
@@ -390,6 +394,10 @@ class RerunHelperTest(unittest.TestCase):
         self.assertNotIn("input_snapshot", self.stub.session_state)
         self.assertNotIn("model_results", self.stub.session_state)
         self.assertNotIn("excel_bytes_map", self.stub.session_state)
+        self.assertNotIn("business_plan_reports", self.stub.session_state)
+        self.assertNotIn("business_plan_bundle", self.stub.session_state)
+        self.assertNotIn(self.app.WORKBOOK_PAYLOAD_DIGEST_KEY, self.stub.session_state)
+        self.assertNotIn(self.app.BUSINESS_PLAN_SCENARIO_KEY, self.stub.session_state)
 
     def test_refresh_runtime_session_state_preserves_non_placeholder_payload(self):
         payload = json.loads(self.app.DEFAULT_INPUT_JSON)
@@ -406,6 +414,10 @@ class RerunHelperTest(unittest.TestCase):
                 "input_snapshot": {"legacy": True},
                 "model_results": ("stale-model", "stale-results"),
                 "excel_bytes_map": {"base": b"stale"},
+                "business_plan_reports": {"Excel": (b"stale", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "stale.xlsx")},
+                "business_plan_bundle": b"stale-zip",
+                self.app.WORKBOOK_PAYLOAD_DIGEST_KEY: "stale-digest",
+                self.app.BUSINESS_PLAN_SCENARIO_KEY: "base",
             }
         )
 
@@ -421,6 +433,56 @@ class RerunHelperTest(unittest.TestCase):
         self.assertNotIn("input_snapshot", self.stub.session_state)
         self.assertNotIn("model_results", self.stub.session_state)
         self.assertNotIn("excel_bytes_map", self.stub.session_state)
+        self.assertNotIn("business_plan_reports", self.stub.session_state)
+        self.assertNotIn("business_plan_bundle", self.stub.session_state)
+        self.assertNotIn(self.app.WORKBOOK_PAYLOAD_DIGEST_KEY, self.stub.session_state)
+        self.assertNotIn(self.app.BUSINESS_PLAN_SCENARIO_KEY, self.stub.session_state)
+
+    def test_sync_workbook_cache_with_payload_digest_clears_export_artifacts(self):
+        self.stub.session_state.update(
+            {
+                "excel_scenario_selection": "downside",
+                "input_snapshot": {"legacy": True},
+                "model_results": ("stale-model", "stale-results"),
+                "excel_bytes_map": {"base": b"stale"},
+                "business_plan_reports": {"Excel": (b"stale", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "stale.xlsx")},
+                "business_plan_bundle": b"stale-zip",
+                self.app.WORKBOOK_PAYLOAD_DIGEST_KEY: "old-digest",
+                self.app.BUSINESS_PLAN_SCENARIO_KEY: "downside",
+            }
+        )
+
+        changed = self.app._sync_workbook_cache_with_payload_digest("new-digest")
+
+        self.assertTrue(changed)
+        self.assertEqual(self.stub.session_state["excel_scenario_selection"], "downside")
+        self.assertNotIn("input_snapshot", self.stub.session_state)
+        self.assertNotIn("model_results", self.stub.session_state)
+        self.assertNotIn("excel_bytes_map", self.stub.session_state)
+        self.assertNotIn("business_plan_reports", self.stub.session_state)
+        self.assertNotIn("business_plan_bundle", self.stub.session_state)
+        self.assertNotIn(self.app.BUSINESS_PLAN_SCENARIO_KEY, self.stub.session_state)
+        self.assertEqual(
+            self.stub.session_state[self.app.WORKBOOK_PAYLOAD_DIGEST_KEY], "new-digest"
+        )
+
+    def test_sync_business_plan_cache_for_scenario_clears_only_mismatched_bundle(self):
+        self.stub.session_state.update(
+            {
+                "business_plan_reports": {"Excel": (b"stale", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "stale.xlsx")},
+                "business_plan_bundle": b"stale-zip",
+                self.app.BUSINESS_PLAN_SCENARIO_KEY: "base",
+            }
+        )
+
+        changed = self.app._sync_business_plan_cache_for_scenario("downside")
+
+        self.assertTrue(changed)
+        self.assertNotIn("business_plan_reports", self.stub.session_state)
+        self.assertNotIn("business_plan_bundle", self.stub.session_state)
+        self.assertEqual(
+            self.stub.session_state[self.app.BUSINESS_PLAN_SCENARIO_KEY], "downside"
+        )
 
     def test_set_state_replaces_legacy_default_payload_and_skips_stale_rows(self):
         default_payload = json.loads(self.app.DEFAULT_INPUT_JSON)

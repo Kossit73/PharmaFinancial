@@ -159,12 +159,20 @@ _RUNTIME_CACHE_KEYS: tuple[str, ...] = (
     "last_run_digest",
     "run_requested",
 )
-_WORKBOOK_CACHE_KEYS: tuple[str, ...] = (
-    "excel_scenario_selection",
+_WORKBOOK_WIDGET_STATE_KEYS: tuple[str, ...] = ("excel_scenario_selection",)
+_WORKBOOK_PAYLOAD_CACHE_KEYS: tuple[str, ...] = (
     "input_snapshot",
     "model_results",
     "excel_bytes_map",
+    "business_plan_reports",
+    "business_plan_bundle",
 )
+_WORKBOOK_CACHE_KEYS: tuple[str, ...] = (
+    *_WORKBOOK_WIDGET_STATE_KEYS,
+    *_WORKBOOK_PAYLOAD_CACHE_KEYS,
+)
+WORKBOOK_PAYLOAD_DIGEST_KEY = "_pharma_workbook_payload_digest"
+BUSINESS_PLAN_SCENARIO_KEY = "_pharma_business_plan_scenario"
 _RUNTIME_WIDGET_PREFIXES: tuple[str, ...] = (
     "core_",
     "commission_",
@@ -288,6 +296,8 @@ def _replacement_payload_for_legacy_defaults(
 def _clear_payload_derived_state() -> None:
     for key in _DERIVED_STATE_KEYS + _RUNTIME_CACHE_KEYS + _WORKBOOK_CACHE_KEYS:
         st.session_state.pop(key, None)
+    st.session_state.pop(WORKBOOK_PAYLOAD_DIGEST_KEY, None)
+    st.session_state.pop(BUSINESS_PLAN_SCENARIO_KEY, None)
     for key in _ANALYSIS_CACHE_KEYS:
         st.session_state.pop(key, None)
         st.session_state.pop(f"{key}_digest", None)
@@ -314,6 +324,29 @@ def _refresh_runtime_session_state() -> bool:
     _clear_payload_derived_state()
 
     st.session_state[RUNTIME_STATE_FINGERPRINT_KEY] = runtime_fingerprint
+    return True
+
+
+def _sync_workbook_cache_with_payload_digest(digest: str) -> bool:
+    previous_digest = str(st.session_state.get(WORKBOOK_PAYLOAD_DIGEST_KEY, "") or "")
+    if previous_digest == digest:
+        return False
+
+    for key in _WORKBOOK_PAYLOAD_CACHE_KEYS:
+        st.session_state.pop(key, None)
+    st.session_state.pop(BUSINESS_PLAN_SCENARIO_KEY, None)
+    st.session_state[WORKBOOK_PAYLOAD_DIGEST_KEY] = digest
+    return True
+
+
+def _sync_business_plan_cache_for_scenario(scenario_name: str) -> bool:
+    previous_scenario = str(st.session_state.get(BUSINESS_PLAN_SCENARIO_KEY, "") or "")
+    if previous_scenario == scenario_name:
+        return False
+
+    st.session_state.pop("business_plan_reports", None)
+    st.session_state.pop("business_plan_bundle", None)
+    st.session_state[BUSINESS_PLAN_SCENARIO_KEY] = scenario_name
     return True
 
 
@@ -1899,6 +1932,7 @@ def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:
     st.session_state["input_payload"] = committed_payload
 
     inputs, digest = _cached_parse_inputs(committed_payload)
+    _sync_workbook_cache_with_payload_digest(digest)
     st.session_state["input_fingerprint"] = digest
     return inputs, digest
 
@@ -4301,11 +4335,13 @@ def _render_rag_tab(
     )
 
     scenario_name = st.session_state.get("excel_scenario_selection", "base")
+    _sync_business_plan_cache_for_scenario(scenario_name)
     if st.button("Prepare Business Plan Bundle", key="prepare_business_plan"):
         with st.spinner("Building reports..."):
             reports, bundle = _build_business_plan_bundle(model, outputs, scenario_name)
         st.session_state["business_plan_reports"] = reports
         st.session_state["business_plan_bundle"] = bundle
+        st.session_state[BUSINESS_PLAN_SCENARIO_KEY] = scenario_name
 
     reports = st.session_state.get("business_plan_reports", {})
     bundle = st.session_state.get("business_plan_bundle")
