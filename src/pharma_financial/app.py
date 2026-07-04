@@ -443,7 +443,7 @@ def _render_model_hero() -> None:
         f"""
         <section class="designer-hero">
             <p class="designer-kicker">Pharma planning suite</p>
-            <h1 class="designer-title">Longevity Pharmaceuticals Financial Model</h1>
+            <h1 class="designer-title">NumQuants Pharmaceuticals Financial Model</h1>
             <p class="designer-copy">
                 Review revenue, operations, financing, and risk assumptions in a cleaner executive shell
                 built for management review and investor presentation.
@@ -1689,7 +1689,7 @@ def main() -> None:
         )
 
     st.set_page_config(
-        page_title="Pharmaceuticals Financial Model",
+        page_title="NumQuants Pharmaceuticals Financial Model",
         page_icon="💊",
         layout="wide",
     )
@@ -2176,7 +2176,7 @@ def _render_excel_model_download(
                 st.download_button(
                     "Download Excel Model",
                     data=excel_bytes,
-                    file_name="Ecommerce_Financial_Model.xlsx",
+                    file_name="Pharma_Financial_Model.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
                 if st.button(
