@@ -524,7 +524,12 @@ def _build_excel(sections: Sequence[ReportSection]) -> bytes:
     if pd is not None:
         buffer = BytesIO()
         try:
-            with pd.ExcelWriter(buffer) as writer:  # type: ignore[arg-type]
+            # The workbook styling and chart helpers below rely on openpyxl's
+            # worksheet API. If pandas selects xlsxwriter by default, the code
+            # falls back to the plain ZIP writer and strips charts/numeric cell
+            # types from the exported workbook. Force openpyxl so the richer
+            # workbook is emitted consistently across environments.
+            with pd.ExcelWriter(buffer, engine="openpyxl") as writer:  # type: ignore[arg-type]
                 for entry in entries:
                     rows = entry["rows"]
                     frame = _rows_to_dataframe(rows)
