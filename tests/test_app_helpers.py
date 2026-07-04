@@ -4,6 +4,7 @@ import os
 import sys
 import types
 import unittest
+import zipfile
 from io import BytesIO
 from pathlib import Path
 
@@ -18,9 +19,10 @@ except Exception:  # pragma: no cover - import guard for missing optional depend
     FPDF = None  # type: ignore
 
 try:  # pragma: no cover - optional dependency check
-    from openpyxl import Workbook
+    from openpyxl import Workbook, load_workbook
 except Exception:  # pragma: no cover - import guard for missing optional dependency
     Workbook = None  # type: ignore
+    load_workbook = None  # type: ignore
 
 
 class _NoOp:
@@ -1081,6 +1083,21 @@ class RerunHelperTest(unittest.TestCase):
         workbook = self.app._generate_excel_bytes(model, outputs, "Base")
         self.assertIsInstance(workbook, (bytes, bytearray))
         self.assertGreater(len(workbook), 0)
+
+        with zipfile.ZipFile(BytesIO(workbook)) as archive:
+            chart_parts = [
+                name for name in archive.namelist() if name.startswith("xl/charts/")
+            ]
+            drawing_parts = [
+                name for name in archive.namelist() if name.startswith("xl/drawings/")
+            ]
+        self.assertGreater(len(chart_parts), 0)
+        self.assertGreater(len(drawing_parts), 0)
+
+        self.assertIsNotNone(load_workbook)
+        loaded = load_workbook(BytesIO(workbook), data_only=False)
+        summary_sheet = loaded[loaded.sheetnames[0]]
+        self.assertIsInstance(summary_sheet["B2"].value, float)
 
     def test_labor_model_payload_helpers_roundtrip(self):
         payload = json.loads(
