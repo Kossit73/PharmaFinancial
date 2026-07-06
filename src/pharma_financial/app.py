@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import copy
-import csv
 import hashlib
 import io
 import json
@@ -38,6 +37,7 @@ else:  # pragma: no cover - used when Streamlit isn't fully available
     DeltaGenerator = Any  # type: ignore[misc]
 
 from .ai import AIInsights
+from . import document_io
 from .debt import amortise_entries
 from .inputs import DebtEntry, ModelInputs, parse_inputs
 from .model import (
@@ -68,21 +68,6 @@ try:  # pragma: no cover - optional dependency for charting
     import plotly.graph_objects as go
 except Exception:  # pragma: no cover - gracefully degrade when Plotly missing
     go = None  # type: ignore
-
-try:  # pragma: no cover - optional dependency for Excel ingestion
-    from openpyxl import load_workbook
-except Exception:  # pragma: no cover - import guard when package missing
-    load_workbook = None  # type: ignore
-
-try:  # pragma: no cover - optional dependency for Word ingestion
-    from docx import Document
-except Exception:  # pragma: no cover - import guard when package missing
-    Document = None  # type: ignore
-
-try:  # pragma: no cover - optional dependency for PDF ingestion
-    from PyPDF2 import PdfReader
-except Exception:  # pragma: no cover - import guard when package missing
-    PdfReader = None  # type: ignore
 
 # ---------------------------------------------------------------------------
 # Module level caches
@@ -246,6 +231,7 @@ GEN_AI_LABEL_TO_CODE = {label: code for code, label in GEN_AI_FEATURE_LABELS.ite
 
 _INPUT_CACHE: dict[str, ModelInputs] = {}
 _MODEL_CACHE: dict[str, tuple["FinancialModel", "FinancialOutputs"]] = {}
+_DERIVED_CACHE: dict[tuple[str, str], Any] = {}
 _ANALYSIS_CACHE_KEYS = ("sensitivity_results", "monte_carlo_results", "ai_insights")
 
 
@@ -376,6 +362,7 @@ def _clear_analysis_cache() -> None:
     for key in _ANALYSIS_CACHE_KEYS:
         st.session_state.pop(key, None)
         st.session_state.pop(f"{key}_digest", None)
+    _clear_derived_cache()
 
 
 def _analysis_cache_value(key: str, digest: str, fallback):
@@ -389,6 +376,7 @@ def _analysis_cache_value(key: str, digest: str, fallback):
 def _store_analysis_cache(key: str, digest: str, value) -> None:
     st.session_state[key] = value
     st.session_state[f"{key}_digest"] = digest
+    _clear_derived_cache(digest)
 
 
 def _merge_analysis_outputs(outputs: FinancialOutputs, digest: str) -> FinancialOutputs:
@@ -404,6 +392,93 @@ def _merge_analysis_outputs(outputs: FinancialOutputs, digest: str) -> Financial
             "ai_insights", digest, outputs.ai_insights
         ),
     )
+
+
+def _clear_derived_cache(digest: str | None = None) -> None:
+    if digest is None:
+        _DERIVED_CACHE.clear()
+        return
+    stale_keys = [key for key in _DERIVED_CACHE if key[0] == digest]
+    for key in stale_keys:
+        _DERIVED_CACHE.pop(key, None)
+
+
+def _cached_derived_value(digest: str, cache_name: str, builder: Callable[[], Any]) -> Any:
+    cache_key = (digest, cache_name)
+    cached = _DERIVED_CACHE.get(cache_key)
+    if cached is None:
+        cached = builder()
+        _DERIVED_CACHE[cache_key] = cached
+    return cached
+
+
+def _rows_digest(rows: Sequence[Mapping[str, object]] | Sequence[Mapping]) -> str:
+    return _payload_digest({"rows": [dict(row) for row in rows]})
+
+
+def _ensure_editor_draft(
+    applied_key: str,
+    draft_key: str,
+    rows: Sequence[Mapping[str, object]] | Sequence[Mapping],
+) -> list[dict]:
+    applied_rows = [dict(row) for row in rows]
+    applied_digest = _rows_digest(applied_rows)
+    source_key = f"{draft_key}__source_digest"
+    stored_draft = st.session_state.get(draft_key)
+    stored_source = st.session_state.get(source_key)
+    if not isinstance(stored_draft, list) or stored_source != applied_digest:
+        stored_draft = copy.deepcopy(applied_rows)
+        st.session_state[draft_key] = stored_draft
+        st.session_state[source_key] = applied_digest
+    return copy.deepcopy(cast(list[dict], stored_draft))
+
+
+def _store_editor_draft(
+    draft_key: str,
+    rows: Sequence[Mapping[str, object]] | Sequence[Mapping],
+) -> list[dict]:
+    draft_rows = [dict(row) for row in rows]
+    st.session_state[draft_key] = copy.deepcopy(draft_rows)
+    return draft_rows
+
+
+def _apply_editor_draft(applied_key: str, draft_key: str) -> list[dict]:
+    draft_rows = st.session_state.get(draft_key, [])
+    if not isinstance(draft_rows, list):
+        draft_rows = []
+    applied_rows = copy.deepcopy(draft_rows)
+    st.session_state[applied_key] = applied_rows
+    st.session_state[f"{draft_key}__source_digest"] = _rows_digest(applied_rows)
+    return applied_rows
+
+
+def _discard_editor_draft(applied_key: str, draft_key: str) -> list[dict]:
+    applied_rows = st.session_state.get(applied_key, [])
+    if not isinstance(applied_rows, list):
+        applied_rows = []
+    restored_rows = copy.deepcopy(applied_rows)
+    st.session_state[draft_key] = restored_rows
+    st.session_state[f"{draft_key}__source_digest"] = _rows_digest(restored_rows)
+    return restored_rows
+
+
+def _editor_draft_is_dirty(applied_key: str, draft_key: str) -> bool:
+    applied_rows = st.session_state.get(applied_key, [])
+    draft_rows = st.session_state.get(draft_key, [])
+    if not isinstance(applied_rows, list) or not isinstance(draft_rows, list):
+        return False
+    return _rows_digest(applied_rows) != _rows_digest(draft_rows)
+
+
+def _results_are_stale(current_digest: str | None, last_digest: str | None) -> bool:
+    return bool(current_digest and last_digest and current_digest != last_digest)
+
+
+def _render_stale_results_notice(current_digest: str | None, last_digest: str | None) -> None:
+    if _results_are_stale(current_digest, last_digest):
+        st.warning(
+            "Displayed results reflect the last completed run. Press Run Model to apply pending input changes."
+        )
 
 
 def _scenario_options(payload: Mapping[str, object]) -> List[str]:
@@ -676,26 +751,22 @@ def main() -> None:
 
     config_container = st.container()
 
-    inputs, digest = _resolve_inputs(config_container)
+    inputs, draft_digest = _resolve_inputs(config_container)
     run_requested = bool(st.session_state.pop("run_requested", False))
     last_digest = st.session_state.get("last_run_digest")
     model = st.session_state.get("last_model")
     outputs = st.session_state.get("last_outputs")
+    result_digest = str(last_digest) if isinstance(last_digest, str) else None
     if run_requested:
-        model, outputs = _cached_model_run(inputs, digest)
+        model, outputs = _cached_model_run(inputs, draft_digest)
+        snapshot = _clone_payload(st.session_state.get("input_payload", {}))
         st.session_state["last_model"] = model
         st.session_state["last_outputs"] = outputs
-        st.session_state["last_run_digest"] = digest
+        st.session_state["last_run_digest"] = draft_digest
+        st.session_state["last_run_payload_snapshot"] = snapshot
+        st.session_state["input_snapshot"] = snapshot
         _clear_analysis_cache()
-    elif last_digest != digest:
-        # Auto-refresh model outputs when assumptions change so actions on
-        # downstream tabs (e.g. RAG bundle generation) are immediately usable
-        # without requiring a manual return to the Input Landing Page.
-        model, outputs = _cached_model_run(inputs, digest)
-        st.session_state["last_model"] = model
-        st.session_state["last_outputs"] = outputs
-        st.session_state["last_run_digest"] = digest
-        _clear_analysis_cache()
+        result_digest = draft_digest
 
     tabs = st.tabs(
         [
@@ -709,31 +780,44 @@ def main() -> None:
     )
 
     with tabs[0]:
-        _render_inputs_tab(inputs, model, outputs)
+        _render_inputs_tab(inputs, model, outputs, draft_digest, result_digest)
     with tabs[1]:
         if outputs is None or model is None:
             st.info("Press Run on the Input Landing Page to generate results.")
         else:
-            _render_income_statement(model, outputs)
+            _render_stale_results_notice(draft_digest, result_digest)
+            _render_income_statement(model, outputs, result_digest or draft_digest)
     with tabs[2]:
         if outputs is None:
             st.info("Press Run on the Input Landing Page to generate results.")
         else:
-            _render_statement_tab("Statement of Financial Position", outputs.balance_sheet)
+            _render_stale_results_notice(draft_digest, result_digest)
+            _render_statement_tab(
+                "Statement of Financial Position",
+                outputs.balance_sheet,
+                result_digest or draft_digest,
+            )
     with tabs[3]:
         if outputs is None:
             st.info("Press Run on the Input Landing Page to generate results.")
         else:
-            _render_statement_tab("Statement of Cash Flows", outputs.cash_flow)
+            _render_stale_results_notice(draft_digest, result_digest)
+            _render_statement_tab(
+                "Statement of Cash Flows",
+                outputs.cash_flow,
+                result_digest or draft_digest,
+            )
     with tabs[4]:
         if outputs is None or model is None:
             st.info("Press Run on the Input Landing Page to generate results.")
         else:
-            _render_rag_tab(model, outputs, digest)
+            _render_stale_results_notice(draft_digest, result_digest)
+            _render_rag_tab(model, outputs, result_digest or draft_digest)
     with tabs[5]:
         if outputs is None or model is None:
             st.info("Press Run on the Input Landing Page to generate results.")
         else:
+            _render_stale_results_notice(draft_digest, result_digest)
             dashboard_tabs = st.tabs(
                 [
                     "Executive Summary",
@@ -745,16 +829,16 @@ def main() -> None:
                 ]
             )
             with dashboard_tabs[0]:
-                _render_executive_summary(model, outputs, digest)
+                _render_executive_summary(model, outputs, result_digest or draft_digest)
             with dashboard_tabs[1]:
                 _render_excel_model_download(st.container(), model, outputs)
-                _render_dashboard_tab(model, outputs, digest)
+                _render_dashboard_tab(model, outputs, result_digest or draft_digest)
             with dashboard_tabs[2]:
-                _render_sensitivity(model, outputs, digest)
+                _render_sensitivity(model, outputs, result_digest or draft_digest)
             with dashboard_tabs[3]:
                 _render_scenarios(outputs)
             with dashboard_tabs[4]:
-                _render_monte_carlo(model, outputs, digest)
+                _render_monte_carlo(model, outputs, result_digest or draft_digest)
             with dashboard_tabs[5]:
                 _render_break_even(outputs)
 
@@ -981,170 +1065,27 @@ def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:
 def _load_payload_from_bytes(data: bytes, suffix: str) -> Mapping[str, object]:
     """Load a payload mapping from uploaded file bytes."""
 
-    suffix = suffix or ".json"
-    if suffix in {".json", ""}:
-        return _load_payload_from_text(data.decode("utf-8"))
-    if suffix == ".csv":
-        return _load_payload_from_csv(data)
-    if suffix in {".xlsx", ".xls"}:
-        return _load_payload_from_excel(data)
-    if suffix == ".docx":
-        return _load_payload_from_docx(data)
-    if suffix == ".pdf":
-        return _load_payload_from_pdf(data)
-    raise ValueError(f"Unsupported file type: {suffix}")
+    return document_io.load_payload_from_bytes(data, suffix)
 
 
 def _load_payload_from_text(text: str) -> Mapping[str, object]:
-    stripped = text.strip()
-    if not stripped:
-        raise ValueError("Uploaded file was empty.")
-    try:
-        return json.loads(stripped)
-    except json.JSONDecodeError as exc:  # pragma: no cover - invalid user input
-        raise ValueError("Uploaded document does not contain valid JSON assumptions.") from exc
-
-
-def _extract_json_fragment(text: str) -> str:
-    if "{" in text and "}" in text:
-        start = text.find("{")
-        end = text.rfind("}")
-        if end > start:
-            return text[start : end + 1]
-    return text
-
-
-def _load_payload_from_csv(data: bytes) -> Mapping[str, object]:
-    text = data.decode("utf-8-sig")
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        fragment = _extract_json_fragment(text)
-        if fragment and fragment != text:
-            return _load_payload_from_text(fragment)
-
-        reader = csv.reader(io.StringIO(text))
-        cells: list[str] = []
-        for row in reader:
-            cells.extend(cell for cell in row if cell is not None)
-        joined = _extract_json_fragment("".join(cells).strip())
-        if not joined:
-            raise ValueError("CSV file did not contain any usable JSON text.")
-        return _load_payload_from_text(joined)
-
-
-def _load_payload_from_excel(data: bytes) -> Mapping[str, object]:
-    if load_workbook is None:  # pragma: no cover - optional dependency path
-        raise ValueError("Excel support requires the 'openpyxl' package to be installed.")
-
-    workbook = load_workbook(filename=io.BytesIO(data), data_only=True)
-    text_parts: list[str] = []
-    for sheet in workbook.worksheets:
-        for row in sheet.iter_rows():
-            for cell in row:
-                value = cell.value
-                if value is None:
-                    continue
-                text_parts.append(str(value))
-    combined = _extract_json_fragment("\n".join(text_parts).strip())
-    if not combined:
-        raise ValueError("Excel file did not contain any readable text.")
-    return _load_payload_from_text(combined)
-
-
-def _load_payload_from_docx(data: bytes) -> Mapping[str, object]:
-    if Document is None:  # pragma: no cover - optional dependency path
-        raise ValueError("Word support requires the 'python-docx' package to be installed.")
-
-    document = Document(io.BytesIO(data))
-    text = _extract_json_fragment(
-        "\n".join(paragraph.text for paragraph in document.paragraphs).strip()
-    )
-    if not text:
-        raise ValueError("Word document did not contain any readable text.")
-    return _load_payload_from_text(text)
-
-
-def _load_payload_from_pdf(data: bytes) -> Mapping[str, object]:
-    if PdfReader is None:  # pragma: no cover - optional dependency path
-        raise ValueError("PDF support requires the 'PyPDF2' package to be installed.")
-
-    reader = PdfReader(io.BytesIO(data))
-    text_parts: list[str] = []
-    for page in reader.pages:
-        extracted = page.extract_text() or ""
-        text_parts.append(extracted)
-    combined = _extract_json_fragment("\n".join(text_parts).strip())
-    if not combined:
-        raise ValueError("PDF file did not contain any readable text.")
-    return _load_payload_from_text(combined)
+    return document_io.load_payload_from_text(text)
 
 
 def _extract_text_from_upload(filename: str, data: bytes) -> str:
-    suffix = Path(filename).suffix.lower()
-    if suffix in {".txt", ".md", ".csv"}:
-        return data.decode("utf-8", errors="replace")
-    if suffix == ".docx":
-        if Document is None:
-            raise ValueError("Word support requires the 'python-docx' package to be installed.")
-        document = Document(io.BytesIO(data))
-        text = "\n".join(paragraph.text for paragraph in document.paragraphs).strip()
-        if not text:
-            raise ValueError("Word document did not contain any readable text.")
-        return text
-    if suffix == ".pdf":
-        if PdfReader is None:
-            raise ValueError("PDF support requires the 'PyPDF2' package to be installed.")
-        reader = PdfReader(io.BytesIO(data))
-        text = "\n".join(page.extract_text() or "" for page in reader.pages).strip()
-        if not text:
-            raise ValueError("PDF file did not contain any readable text.")
-        return text
-    raise ValueError("Unsupported file type for RAG. Upload TXT, MD, CSV, DOCX, or PDF files.")
-
-
-def _tokenize(text: str) -> List[str]:
-    return re.findall(r"[A-Za-z0-9']+", text.lower())
-
-
-def _chunk_text(text: str, *, size: int, overlap: int) -> List[str]:
-    words = text.split()
-    if not words:
-        return []
-    chunks: List[str] = []
-    step = max(1, size - overlap)
-    for start in range(0, len(words), step):
-        chunk = " ".join(words[start:start + size]).strip()
-        if chunk:
-            chunks.append(chunk)
-    return chunks
+    return document_io.extract_text_from_upload(filename, data)
 
 
 def _build_rag_chunks(documents: List[Mapping[str, str]]) -> List[Mapping[str, object]]:
-    chunks: List[Mapping[str, object]] = []
-    for doc in documents:
-        name = str(doc.get("name", "Document"))
-        text = str(doc.get("text", "") or "").strip()
-        for chunk in _chunk_text(text, size=RAG_CHUNK_SIZE, overlap=RAG_CHUNK_OVERLAP):
-            tokens = _tokenize(chunk)
-            chunks.append({"source": name, "text": chunk, "tokens": tokens})
-    return chunks
+    return document_io.build_rag_chunks(
+        documents,
+        size=RAG_CHUNK_SIZE,
+        overlap=RAG_CHUNK_OVERLAP,
+    )
 
 
 def _score_chunks(query: str, chunks: List[Mapping[str, object]]) -> List[Mapping[str, object]]:
-    query_tokens = set(_tokenize(query))
-    if not query_tokens:
-        return []
-    scored: List[Mapping[str, object]] = []
-    for chunk in chunks:
-        tokens = chunk.get("tokens", [])
-        overlap = sum(1 for token in tokens if token in query_tokens)
-        if overlap == 0:
-            continue
-        score = overlap / max(len(tokens), 1)
-        scored.append({**chunk, "score": score})
-    scored.sort(key=lambda item: item.get("score", 0.0), reverse=True)
-    return scored[:RAG_TOP_RESULTS]
+    return document_io.score_chunks(query, chunks, limit=RAG_TOP_RESULTS)
 
 
 def _render_excel_model_download(
@@ -1153,8 +1094,14 @@ def _render_excel_model_download(
     with container:
         st.markdown("### Excel Model Download")
 
-        payload = st.session_state.get("input_payload") or {}
-        scenario_options = _scenario_options(payload)
+        snapshot = st.session_state.get("last_run_payload_snapshot")
+        if snapshot is None:
+            snapshot = st.session_state.get("input_snapshot")
+        if snapshot is None:
+            snapshot = _clone_payload(st.session_state.get("input_payload", {}))
+            st.session_state["last_run_payload_snapshot"] = snapshot
+            st.session_state["input_snapshot"] = snapshot
+        scenario_options = _scenario_options(snapshot)
         stored_selection = st.session_state.get("excel_scenario_selection")
         default_index = 0
         if isinstance(stored_selection, str) and stored_selection in scenario_options:
@@ -1167,18 +1114,15 @@ def _render_excel_model_download(
             key="excel_scenario_selection",
         )
 
-        snapshot = st.session_state.get("input_snapshot")
-        if snapshot is None:
-            snapshot = copy.deepcopy(payload)
-            st.session_state["input_snapshot"] = snapshot
-
         model, results = _ensure_scenario_payload(
             selected_scenario, snapshot, base_model, base_outputs
         )
         st.session_state["model_results"] = (model, results)
 
         excel_map: Dict[str, bytes] = st.session_state.setdefault("excel_bytes_map", {})
-        excel_bytes = excel_map.get(selected_scenario)
+        run_digest = str(st.session_state.get("last_run_digest", "") or "")
+        excel_cache_key = f"{run_digest}:{_scenario_slug(selected_scenario)}"
+        excel_bytes = excel_map.get(excel_cache_key)
 
         model.scenario = selected_scenario
 
@@ -1193,7 +1137,7 @@ def _render_excel_model_download(
                         excel_bytes = _generate_excel_bytes(
                             model, results, selected_scenario
                         )
-                    excel_map[selected_scenario] = excel_bytes
+                    excel_map[excel_cache_key] = excel_bytes
                     st.session_state.excel_bytes_map = excel_map
             if excel_bytes:
                 st.download_button(
@@ -1206,7 +1150,7 @@ def _render_excel_model_download(
                     "Clear Prepared Excel",
                     key=f"clear_excel_{selected_scenario.lower()}",
                 ):
-                    excel_map.pop(selected_scenario, None)
+                    excel_map.pop(excel_cache_key, None)
                     st.session_state.excel_bytes_map = excel_map
                     excel_bytes = None
             if not excel_bytes:
@@ -1221,10 +1165,13 @@ def _render_inputs_tab(
     inputs: ModelInputs,
     base_model: FinancialModel | None,
     base_outputs: FinancialOutputs | None,
+    current_digest: str,
+    last_digest: str | None,
 ) -> None:
     payload = st.session_state["input_payload"]
 
     st.button("Run Model", key="run_model", on_click=_request_model_run)
+    _render_stale_results_notice(current_digest, last_digest)
 
     st.markdown("### Projection Horizon")
     _render_projection_horizon(payload)
@@ -1509,7 +1456,11 @@ def _render_dashboard_tab(
     model: FinancialModel, outputs: FinancialOutputs, digest: str
 ) -> None:
     merged_outputs = _merge_analysis_outputs(outputs, digest)
-    income = _with_year(merged_outputs.income_statement)
+    income = _cached_derived_value(
+        digest,
+        "dashboard_income_statement",
+        lambda: _with_year(merged_outputs.income_statement),
+    )
     supports_plotly = px is not None and pd is not None
 
     if not supports_plotly:
@@ -1588,8 +1539,12 @@ def _render_dashboard_tab(
 
     st.markdown("### Working Capital Schedule")
     try:
-        working_capital = model.working_capital_schedule()
-        st.dataframe(_with_year(working_capital), use_container_width=True)
+        working_capital = _cached_derived_value(
+            digest,
+            "dashboard_working_capital_schedule",
+            lambda: _with_year(model.working_capital_schedule()),
+        )
+        st.dataframe(working_capital, use_container_width=True)
         st.caption(
             "Working capital balances reconcile receivables, inventory, and payables "
             "with the statement of financial position while showing year-over-year "
@@ -1600,8 +1555,12 @@ def _render_dashboard_tab(
 
     st.markdown("### Inventory Schedule")
     try:
-        inventory_table = model.inventory_schedule()
-        st.dataframe(_with_year(inventory_table), use_container_width=True)
+        inventory_table = _cached_derived_value(
+            digest,
+            "dashboard_inventory_schedule",
+            lambda: _with_year(model.inventory_schedule()),
+        )
+        st.dataframe(inventory_table, use_container_width=True)
         st.caption(
             "Inventory is derived as cost of sales divided by calendar days and "
             "multiplied by the configured inventory days, matching the balance "
@@ -1685,20 +1644,12 @@ def _render_dashboard_tab(
     # Scenario / IFs Analysis charts
     if merged_outputs.scenario_results:
         st.markdown("#### Scenario / IFs Analysis")
-        scenario_frames: list[pd.DataFrame] = []
-        for name, table in merged_outputs.scenario_results.items():
-            frame = _with_year(table)
-            if isinstance(frame, pd.DataFrame):
-                scenario_frame = frame.copy()
-            else:
-                scenario_frame = pd.DataFrame(frame)
-            if "Year" not in scenario_frame.columns:
-                scenario_frame = scenario_frame.reset_index().rename(columns={"index": "Year"})
-            scenario_frame["Scenario"] = name
-            scenario_frames.append(scenario_frame)
-
-        if scenario_frames:
-            combined = pd.concat(scenario_frames, ignore_index=True)
+        combined = _cached_derived_value(
+            digest,
+            "dashboard_scenario_comparison_frame",
+            lambda: _dashboard_scenario_frame(merged_outputs.scenario_results),
+        )
+        if isinstance(combined, pd.DataFrame) and not combined.empty:
             if "Net Revenue" in combined.columns:
                 fig = px.line(
                     combined,
@@ -1724,7 +1675,11 @@ def _render_dashboard_tab(
 
     # Break-even chart
     st.markdown("#### Break-even Analysis")
-    break_even_df = _ensure_dataframe(merged_outputs.break_even)
+    break_even_df = _cached_derived_value(
+        digest,
+        "dashboard_break_even_frame",
+        lambda: _ensure_dataframe(merged_outputs.break_even),
+    )
     if isinstance(break_even_df, pd.DataFrame):
         break_even_frame = break_even_df.reset_index().rename(columns={"index": "Product"})
     else:
@@ -1740,7 +1695,11 @@ def _render_dashboard_tab(
 
     # Payback charts
     st.markdown("#### Payback Schedule")
-    payback_df = _with_year(merged_outputs.payback)
+    payback_df = _cached_derived_value(
+        digest,
+        "dashboard_payback_frame",
+        lambda: _with_year(merged_outputs.payback),
+    )
     if isinstance(payback_df, pd.DataFrame):
         payback_frame = payback_df
     else:
@@ -1754,7 +1713,11 @@ def _render_dashboard_tab(
     )
     st.plotly_chart(fig_payback, use_container_width=True)
 
-    discounted_df = _with_year(merged_outputs.discounted_payback)
+    discounted_df = _cached_derived_value(
+        digest,
+        "dashboard_discounted_payback_frame",
+        lambda: _with_year(merged_outputs.discounted_payback),
+    )
     if isinstance(discounted_df, pd.DataFrame):
         discounted_frame = discounted_df
     else:
@@ -1801,20 +1764,11 @@ def _render_executive_summary(
                 st.metric(name, _format_number(value))
 
     st.markdown("### Range & Scenario Delta")
-    range_rows: list[dict[str, object]] = []
-    monte_table = merged_outputs.monte_carlo
-    for metric in ["NPV", "IRR", "Investor Viability Score"]:
-        if metric not in monte_table.data:
-            continue
-        values = monte_table.column(metric)
-        p10 = _percentile(values, 10)
-        p50 = _percentile(values, 50)
-        p90 = _percentile(values, 90)
-        if p10 is None or p50 is None or p90 is None:
-            continue
-        range_rows.append(
-            {"Metric": metric, "P10": p10, "P50": p50, "P90": p90}
-        )
+    range_rows = _cached_derived_value(
+        digest,
+        "executive_range_rows",
+        lambda: _executive_range_rows(merged_outputs.monte_carlo),
+    )
 
     if range_rows:
         st.markdown("#### Monte Carlo Range (P10/P50/P90)")
@@ -1822,48 +1776,11 @@ def _render_executive_summary(
     else:
         st.caption("Monte Carlo ranges unavailable for NPV/IRR/viability score.")
 
-    scenario_rows: list[dict[str, float]] = []
-    base_metrics = {
-        "NPV": _summary_metric(merged_outputs, "NPV"),
-        "IRR": _summary_metric(merged_outputs, "IRR"),
-        "Investor Viability Score": _summary_metric(merged_outputs, "Investor Viability Score"),
-    }
-    if all(value is not None for value in base_metrics.values()):
-        scenario_rows.append({"Scenario": "Base", **{k: float(v) for k, v in base_metrics.items()}})
-
-    scenario_inputs = model.inputs.scenarios if model.inputs.scenarios else {}
-    if scenario_inputs:
-        def _metric_from_summary(summary: Table, metric: str) -> float:
-            if metric in summary.index:
-                position = summary.index.index(metric)
-                return float(summary.data["Value"][position])
-            return float("nan")
-
-        base_inflation = list(model.inputs.inflation_series)
-        base_discount = float(model.inputs.financing.discount_rate)
-        for name, scenario in scenario_inputs.items():
-            inflation_override = scenario.get("inflation", base_inflation)
-            inflation_series = [float(value) for value in inflation_override]
-            interest_values = scenario.get("interest", [base_discount])
-            try:
-                discount_rate = float(interest_values[0]) if interest_values else base_discount
-            except (TypeError, ValueError, IndexError):
-                discount_rate = base_discount
-
-            scenario_model = FinancialModel(copy.deepcopy(model.inputs))
-            scenario_model.inputs.inflation_series = inflation_series
-            scenario_model.inputs.financing.discount_rate = discount_rate
-            summary = scenario_model.summary_metrics()
-            scenario_rows.append(
-                {
-                    "Scenario": str(name),
-                    "NPV": _metric_from_summary(summary, "NPV"),
-                    "IRR": _metric_from_summary(summary, "IRR"),
-                    "Investor Viability Score": _metric_from_summary(
-                        summary, "Investor Viability Score"
-                    ),
-                }
-            )
+    scenario_rows = _cached_derived_value(
+        digest,
+        "executive_scenario_rows",
+        lambda: _executive_scenario_rows(model, merged_outputs),
+    )
 
     if scenario_rows:
         base_row = next((row for row in scenario_rows if row.get("Scenario") == "Base"), None)
@@ -1891,7 +1808,11 @@ def _render_executive_summary(
     else:
         st.caption("Scenario delta unavailable because no scenarios are configured.")
 
-    summary_table = _ensure_dataframe(merged_outputs.summary_metrics)
+    summary_table = _cached_derived_value(
+        digest,
+        "executive_summary_table",
+        lambda: _ensure_dataframe(merged_outputs.summary_metrics),
+    )
     if summary_table is not None:
         st.markdown("#### Summary Metrics")
         if pd is not None and hasattr(summary_table, "reset_index"):
@@ -1919,16 +1840,19 @@ def _render_executive_summary(
             st.markdown(f"- {line}")
 
 
-def _render_statement_tab(title: str, table) -> None:
+def _render_statement_tab(title: str, table, digest: str) -> None:
     st.subheader(title)
-    if isinstance(table, Table):
-        display = table.rounded(0)
-    elif pd is not None and isinstance(table, pd.DataFrame):
-        display = table.round(0)
-    else:
-        display = table
-
-    display_with_year = _with_year(display)
+    display_with_year = _cached_derived_value(
+        digest,
+        f"statement_display:{title}",
+        lambda: _with_year(
+            table.rounded(0)
+            if isinstance(table, Table)
+            else table.round(0)
+            if pd is not None and isinstance(table, pd.DataFrame)
+            else table
+        ),
+    )
     st.dataframe(display_with_year, use_container_width=True)
 
     if px is None or pd is None:
@@ -1965,7 +1889,16 @@ def _render_statement_tab(title: str, table) -> None:
 
     if len(numeric_columns) > len(headline_columns):
         remaining = numeric_columns[len(headline_columns) :]
-        melt_frame = frame.melt(id_vars=["Year"], value_vars=remaining, var_name="Metric", value_name="Value")
+        melt_frame = _cached_derived_value(
+            digest,
+            f"statement_melt:{title}",
+            lambda: frame.melt(
+                id_vars=["Year"],
+                value_vars=remaining,
+                var_name="Metric",
+                value_name="Value",
+            ),
+        )
         fig = px.line(
             melt_frame,
             x="Year",
@@ -1977,10 +1910,17 @@ def _render_statement_tab(title: str, table) -> None:
         st.plotly_chart(fig, use_container_width=True)
 
 
-def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -> None:
+def _render_income_statement(
+    model: FinancialModel, outputs: FinancialOutputs, digest: str
+) -> None:
     st.subheader("Statement of Financial Performance")
-    rounded_income = outputs.income_statement.rounded(0, exclude_keywords=("Margin", "Return"))
-    income_frame = _with_year(rounded_income)
+    income_frame = _cached_derived_value(
+        digest,
+        "income_statement_display",
+        lambda: _with_year(
+            outputs.income_statement.rounded(0, exclude_keywords=("Margin", "Return"))
+        ),
+    )
     if pd is not None and isinstance(income_frame, pd.DataFrame):
         display_frame = income_frame.drop(columns=["Depreciation"], errors="ignore")
     elif isinstance(income_frame, list):
@@ -2005,8 +1945,13 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
             ]
             if line_metrics:
                 st.markdown("#### Profit & Loss Trends")
-                trend_data = frame[["Year", *line_metrics]]
-                trend_frame = trend_data.melt(id_vars=["Year"], var_name="Metric", value_name="Value")
+                trend_frame = _cached_derived_value(
+                    digest,
+                    "income_statement_trend_frame",
+                    lambda: frame[["Year", *line_metrics]].melt(
+                        id_vars=["Year"], var_name="Metric", value_name="Value"
+                    ),
+                )
                 fig_income = px.line(
                     trend_frame,
                     x="Year",
@@ -2029,11 +1974,14 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
 
     st.markdown("#### Gross Revenue Schedule")
     try:
-        revenue_schedule = model.revenue_schedule()
+        revenue_frame = _cached_derived_value(
+            digest,
+            "income_statement_revenue_schedule",
+            lambda: _with_year(model.revenue_schedule()),
+        )
     except Exception as exc:  # pragma: no cover - defensive guard for runtime issues
         st.warning(f"Unable to calculate gross revenue schedule: {exc}")
     else:
-        revenue_frame = _with_year(revenue_schedule)
         st.dataframe(revenue_frame, use_container_width=True)
         st.caption(
             "Gross Revenue is decomposed into product-level sales, distributor commissions, "
@@ -2051,11 +1999,15 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
             ]
             if "Product" in frame.columns and numeric_columns:
                 st.markdown("##### Revenue by Product")
-                product_frame = frame.melt(
-                    id_vars=["Year", "Product"],
-                    value_vars=numeric_columns,
-                    var_name="Metric",
-                    value_name="Value",
+                product_frame = _cached_derived_value(
+                    digest,
+                    "income_statement_revenue_product_frame",
+                    lambda: frame.melt(
+                        id_vars=["Year", "Product"],
+                        value_vars=numeric_columns,
+                        var_name="Metric",
+                        value_name="Value",
+                    ),
                 )
                 fig_product = px.bar(
                     product_frame,
@@ -2069,7 +2021,16 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
                 st.plotly_chart(fig_product, use_container_width=True)
             elif numeric_columns:
                 st.markdown("##### Revenue Drivers")
-                melt_frame = frame.melt(id_vars=["Year"], value_vars=numeric_columns, var_name="Metric", value_name="Value")
+                melt_frame = _cached_derived_value(
+                    digest,
+                    "income_statement_revenue_driver_frame",
+                    lambda: frame.melt(
+                        id_vars=["Year"],
+                        value_vars=numeric_columns,
+                        var_name="Metric",
+                        value_name="Value",
+                    ),
+                )
                 fig_revenue = px.line(
                     melt_frame,
                     x="Year",
@@ -2082,12 +2043,15 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
 
     st.markdown("#### Total Expenses Schedule")
     try:
-        expense_schedule = model.cost_structure()
+        expense_frame = _cached_derived_value(
+            digest,
+            "income_statement_expense_schedule",
+            lambda: _with_year(model.cost_structure()),
+        )
     except Exception as exc:  # pragma: no cover - defensive guard for runtime issues
         st.warning(f"Unable to calculate total expenses schedule: {exc}")
         return
 
-    expense_frame = _with_year(expense_schedule)
     st.dataframe(expense_frame, use_container_width=True)
     st.caption(
         "Total Expenses comprise raw materials, utilities, direct labour, cost of sales, "
@@ -2104,7 +2068,16 @@ def _render_income_statement(model: FinancialModel, outputs: FinancialOutputs) -
             if column != "Year" and pd.api.types.is_numeric_dtype(frame[column])
         ]
         if numeric_columns:
-            trend_frame = frame.melt(id_vars=["Year"], value_vars=numeric_columns, var_name="Expense", value_name="Value")
+            trend_frame = _cached_derived_value(
+                digest,
+                "income_statement_expense_mix_frame",
+                lambda: frame.melt(
+                    id_vars=["Year"],
+                    value_vars=numeric_columns,
+                    var_name="Expense",
+                    value_name="Value",
+                ),
+            )
             fig_expense = px.area(
                 trend_frame,
                 x="Year",
@@ -2773,19 +2746,6 @@ def _render_break_even_inputs(payload: dict) -> None:
                 st.session_state.pop(key, None)
             _rerun()
 
-def _dict_to_dataframe(data: Mapping[str, float], index_label: str, value_label: str):
-    if pd is None:
-        return [
-            {index_label: key, value_label: value}
-            for key, value in sorted(data.items(), key=lambda item: item[0])
-        ]
-    return (
-        pd.DataFrame(list(data.items()), columns=[index_label, value_label])
-        .sort_values(index_label)
-        .reset_index(drop=True)
-    )
-
-
 def _with_year(table) -> "pd.DataFrame | Table | list":
     frame = _ensure_dataframe(table)
     if pd is None:
@@ -2864,9 +2824,8 @@ def _ensure_dataframe(table) -> "pd.DataFrame | list":
 
 
 def _build_business_plan_bundle(
-    model: FinancialModel, outputs: FinancialOutputs, scenario_name: str
+    model: FinancialModel, outputs: FinancialOutputs, scenario_name: str, digest: str
 ) -> tuple[dict[str, tuple[bytes, str, str]], bytes]:
-    digest = st.session_state.get("last_run_digest", "")
     merged_outputs = _merge_analysis_outputs(outputs, digest)
     sections = collect_report_sections(model, merged_outputs)
     rag_chunks = st.session_state.get("rag_chunks", [])
@@ -2921,6 +2880,93 @@ def _final_value(table: Table, column: str) -> Optional[float]:
         return None
     values = table.column(column)
     return float(values[-1]) if values else None
+
+
+def _executive_range_rows(monte_table: Table) -> list[dict[str, object]]:
+    range_rows: list[dict[str, object]] = []
+    for metric in ["NPV", "IRR", "Investor Viability Score"]:
+        if metric not in monte_table.data:
+            continue
+        values = monte_table.column(metric)
+        p10 = _percentile(values, 10)
+        p50 = _percentile(values, 50)
+        p90 = _percentile(values, 90)
+        if p10 is None or p50 is None or p90 is None:
+            continue
+        range_rows.append({"Metric": metric, "P10": p10, "P50": p50, "P90": p90})
+    return range_rows
+
+
+def _metric_from_summary_table(summary: Table, metric: str) -> float:
+    if metric in summary.index:
+        position = summary.index.index(metric)
+        return float(summary.data["Value"][position])
+    return float("nan")
+
+
+def _executive_scenario_rows(
+    model: FinancialModel, outputs: FinancialOutputs
+) -> list[dict[str, float]]:
+    scenario_rows: list[dict[str, float]] = []
+    base_metrics = {
+        "NPV": _summary_metric(outputs, "NPV"),
+        "IRR": _summary_metric(outputs, "IRR"),
+        "Investor Viability Score": _summary_metric(outputs, "Investor Viability Score"),
+    }
+    if all(value is not None for value in base_metrics.values()):
+        scenario_rows.append({"Scenario": "Base", **{k: float(v) for k, v in base_metrics.items()}})
+
+    scenario_inputs = model.inputs.scenarios if model.inputs.scenarios else {}
+    if not scenario_inputs:
+        return scenario_rows
+
+    base_inflation = list(model.inputs.inflation_series)
+    base_discount = float(model.inputs.financing.discount_rate)
+    for name, scenario in scenario_inputs.items():
+        inflation_override = scenario.get("inflation", base_inflation)
+        inflation_series = [float(value) for value in inflation_override]
+        interest_values = scenario.get("interest", [base_discount])
+        try:
+            discount_rate = float(interest_values[0]) if interest_values else base_discount
+        except (TypeError, ValueError, IndexError):
+            discount_rate = base_discount
+
+        scenario_model = FinancialModel(copy.deepcopy(model.inputs))
+        scenario_model.inputs.inflation_series = inflation_series
+        scenario_model.inputs.financing.discount_rate = discount_rate
+        summary = scenario_model.summary_metrics()
+        scenario_rows.append(
+            {
+                "Scenario": str(name),
+                "NPV": _metric_from_summary_table(summary, "NPV"),
+                "IRR": _metric_from_summary_table(summary, "IRR"),
+                "Investor Viability Score": _metric_from_summary_table(
+                    summary, "Investor Viability Score"
+                ),
+            }
+        )
+    return scenario_rows
+
+
+def _dashboard_scenario_frame(
+    scenario_results: Mapping[str, Table],
+) -> "pd.DataFrame | None":
+    if pd is None:
+        return None
+    scenario_frames: list[pd.DataFrame] = []
+    for name, table in scenario_results.items():
+        frame = _with_year(table)
+        if isinstance(frame, pd.DataFrame):
+            scenario_frame = frame.copy()
+        else:
+            scenario_frame = pd.DataFrame(frame)
+        if "Year" not in scenario_frame.columns:
+            scenario_frame = scenario_frame.reset_index().rename(columns={"index": "Year"})
+        scenario_frame["Scenario"] = name
+        scenario_frames.append(scenario_frame)
+    if not scenario_frames:
+        return None
+    return pd.concat(scenario_frames, ignore_index=True)
 
 
 def _report_rows(table: Any) -> List[Mapping[str, Any]]:
@@ -3217,14 +3263,18 @@ def _render_rag_tab(
     )
 
     scenario_name = st.session_state.get("excel_scenario_selection", "base")
+    bundle_cache_key = f"{digest}:{_scenario_slug(str(scenario_name))}"
     if st.button("Prepare Business Plan Bundle", key="prepare_business_plan"):
         with st.spinner("Building reports..."):
-            reports, bundle = _build_business_plan_bundle(model, outputs, scenario_name)
-        st.session_state["business_plan_reports"] = reports
-        st.session_state["business_plan_bundle"] = bundle
+            reports, bundle = _build_business_plan_bundle(model, outputs, scenario_name, digest)
+        bundle_cache = st.session_state.setdefault("business_plan_cache", {})
+        bundle_cache[bundle_cache_key] = {"reports": reports, "bundle": bundle}
+        st.session_state["business_plan_cache"] = bundle_cache
 
-    reports = st.session_state.get("business_plan_reports", {})
-    bundle = st.session_state.get("business_plan_bundle")
+    bundle_cache = st.session_state.get("business_plan_cache", {})
+    prepared_bundle = bundle_cache.get(bundle_cache_key, {}) if isinstance(bundle_cache, Mapping) else {}
+    reports = prepared_bundle.get("reports", {}) if isinstance(prepared_bundle, Mapping) else {}
+    bundle = prepared_bundle.get("bundle") if isinstance(prepared_bundle, Mapping) else None
     if reports:
         pdf_bytes, pdf_mime, pdf_name = reports["PDF"]
         word_bytes, word_mime, word_name = reports["Word"]
@@ -3240,8 +3290,9 @@ def _render_rag_tab(
                 mime="application/zip",
             )
         if st.button("Clear Prepared Business Plan", key="clear_business_plan"):
-            st.session_state.pop("business_plan_reports", None)
-            st.session_state.pop("business_plan_bundle", None)
+            if isinstance(bundle_cache, dict):
+                bundle_cache.pop(bundle_cache_key, None)
+                st.session_state["business_plan_cache"] = bundle_cache
     else:
         st.info("Click 'Prepare Business Plan Bundle' to enable downloads.")
 
@@ -3570,16 +3621,21 @@ def _render_labor_mode_section(payload: dict) -> None:
     settings_rows = st.session_state.setdefault(
         "labor_model_settings_rows", _payload_to_labor_model_settings_rows(payload)
     )
-
-    st.session_state.setdefault("labor_advanced_draft_roles", copy.deepcopy(role_rows))
-    st.session_state.setdefault("labor_advanced_draft_settings", copy.deepcopy(settings_rows))
+    draft_roles = _ensure_editor_draft(
+        "labor_model_rows", "labor_advanced_draft_roles", role_rows
+    )
+    draft_settings = _ensure_editor_draft(
+        "labor_model_settings_rows",
+        "labor_advanced_draft_settings",
+        settings_rows,
+    )
 
     st.info(
         "Advanced mode is editable here. Add new roles directly in the Roles table (for example CEO or Deputy CEO), then click Save Advanced Labour Changes."
     )
     st.markdown("#### Roles (add or edit here)")
-    if not role_rows:
-        role_rows = [{
+    if not draft_roles:
+        draft_roles = [{
             "Name": "",
             "Labor Type": "direct",
             "Behavior": "fixed",
@@ -3594,18 +3650,17 @@ def _render_labor_mode_section(payload: dict) -> None:
             "Owner": "",
             "Benchmark Year": "",
         }]
-        st.session_state["labor_model_rows"] = role_rows
+        _store_editor_draft("labor_advanced_draft_roles", draft_roles)
 
     edited_roles = st.data_editor(
-        role_rows,
+        draft_roles,
         num_rows="dynamic",
         use_container_width=True,
         key="labor_model_roles_editor",
     )
     normalised_roles = _coerce_editor_rows(edited_roles)
-    if normalised_roles:
-        st.session_state["labor_model_rows"] = normalised_roles
-        role_rows = normalised_roles
+    if isinstance(normalised_roles, list):
+        draft_roles = _store_editor_draft("labor_advanced_draft_roles", normalised_roles)
 
     st.markdown("#### Yearly Increment Tool")
     yearly_increment = st.number_input(
@@ -3640,8 +3695,8 @@ def _render_labor_mode_section(payload: dict) -> None:
     save_increment = increment_cols[1].button("Save Yearly Increment", key="labor_yearly_increment_save")
     cancel_increment = increment_cols[2].button("Cancel Yearly Increment", key="labor_yearly_increment_cancel")
 
-    if preview_increment and settings_rows:
-        preview_rows = copy.deepcopy(settings_rows)
+    if preview_increment and draft_settings:
+        preview_rows = copy.deepcopy(draft_settings)
         selected_columns = increment_columns[1:] if target_column == "All" else [target_column]
         running_values: dict[str, float] = {}
         for column_name in selected_columns:
@@ -3657,20 +3712,22 @@ def _render_labor_mode_section(payload: dict) -> None:
         st.session_state["labor_yearly_increment_preview_rows"] = preview_rows
 
     preview_rows = st.session_state.get("labor_yearly_increment_preview_rows")
-    active_settings_rows = preview_rows if isinstance(preview_rows, list) else settings_rows
+    active_settings_rows = preview_rows if isinstance(preview_rows, list) else draft_settings
 
     if cancel_increment:
         st.session_state.pop("labor_yearly_increment_preview_rows", None)
         _rerun()
 
     if save_increment and isinstance(preview_rows, list):
-        st.session_state["labor_model_settings_rows"] = preview_rows
-        settings_rows = preview_rows
+        draft_settings = _store_editor_draft(
+            "labor_advanced_draft_settings",
+            preview_rows,
+        )
         st.session_state.pop("labor_yearly_increment_preview_rows", None)
         _rerun()
 
     st.markdown("#### Labor Settings by Year")
-    if not settings_rows:
+    if not draft_settings:
         st.warning("No yearly settings rows available. Add projection years in assumptions to edit year-by-year labour settings.")
 
     edited_settings = st.data_editor(
@@ -3680,34 +3737,36 @@ def _render_labor_mode_section(payload: dict) -> None:
         key="labor_model_settings_editor",
     )
     normalised_settings = _coerce_editor_rows(edited_settings)
-    if normalised_settings:
-        st.session_state["labor_model_settings_rows"] = normalised_settings
-        settings_rows = normalised_settings
+    if isinstance(normalised_settings, list):
+        draft_settings = _store_editor_draft(
+            "labor_advanced_draft_settings",
+            normalised_settings,
+        )
         st.session_state.pop("labor_yearly_increment_preview_rows", None)
 
     action_cols = st.columns(2)
     save_changes = action_cols[0].button("Save Advanced Labour Changes", key="labor_advanced_edit_save")
     cancel_changes = action_cols[1].button("Cancel", key="labor_advanced_edit_cancel")
+    if _editor_draft_is_dirty("labor_model_rows", "labor_advanced_draft_roles") or _editor_draft_is_dirty(
+        "labor_model_settings_rows", "labor_advanced_draft_settings"
+    ):
+        st.caption("Advanced labour draft changes are pending. Apply them before the next model run.")
 
     if cancel_changes:
-        draft_roles = st.session_state.get("labor_advanced_draft_roles")
-        draft_settings = st.session_state.get("labor_advanced_draft_settings")
-        if isinstance(draft_roles, list):
-            st.session_state["labor_model_rows"] = draft_roles
-            role_rows = draft_roles
-        if isinstance(draft_settings, list):
-            st.session_state["labor_model_settings_rows"] = draft_settings
-            settings_rows = draft_settings
-        st.session_state["labor_advanced_draft_roles"] = copy.deepcopy(role_rows)
-        st.session_state["labor_advanced_draft_settings"] = copy.deepcopy(settings_rows)
+        _discard_editor_draft("labor_model_rows", "labor_advanced_draft_roles")
+        _discard_editor_draft(
+            "labor_model_settings_rows",
+            "labor_advanced_draft_settings",
+        )
         st.session_state.pop("labor_yearly_increment_preview_rows", None)
         _rerun()
 
     if save_changes:
-        _labor_model_rows_to_payload(role_rows, payload)
-        _labor_model_settings_rows_to_payload(settings_rows, payload)
-        st.session_state["labor_advanced_draft_roles"] = copy.deepcopy(role_rows)
-        st.session_state["labor_advanced_draft_settings"] = copy.deepcopy(settings_rows)
+        _apply_editor_draft("labor_model_rows", "labor_advanced_draft_roles")
+        _apply_editor_draft(
+            "labor_model_settings_rows",
+            "labor_advanced_draft_settings",
+        )
         st.session_state.pop("labor_yearly_increment_preview_rows", None)
         _rerun()
 
@@ -3864,12 +3923,13 @@ def _render_utility_schedule(payload: dict) -> None:
 
     rows = _resize_utility_entries(rows, target_length, labels)
     st.session_state["utility_entries"] = rows
+    draft_rows = _ensure_editor_draft("utility_entries", "utility_entries_draft", rows)
 
-    row_labels = [str(row.get("label", f"Year {idx + 1}")) for idx, row in enumerate(rows)]
+    row_labels = [str(row.get("label", f"Year {idx + 1}")) for idx, row in enumerate(draft_rows)]
     base_label = st.selectbox("Utility assumption start year", options=row_labels, key="utility_base_year_selector")
     base_index = row_labels.index(base_label) if base_label in row_labels else 0
 
-    base_entry = _normalise_utility_entry(rows[base_index], base_index)
+    base_entry = _normalise_utility_entry(draft_rows[base_index], base_index)
     st.markdown("#### Base Year Utility Assumptions")
     cols = st.columns(5)
     base_entry["electricity_per_day"] = cols[0].number_input(
@@ -3915,7 +3975,8 @@ def _render_utility_schedule(payload: dict) -> None:
         key="utility_base_steam_hours"
     ))
 
-    rows[base_index] = _normalise_utility_entry(base_entry, base_index)
+    draft_rows[base_index] = _normalise_utility_entry(base_entry, base_index)
+    _store_editor_draft("utility_entries_draft", draft_rows)
 
     st.markdown("#### Yearly Increment Tool")
     utility_increment = st.number_input(
@@ -3944,7 +4005,7 @@ def _render_utility_schedule(payload: dict) -> None:
     cancel_increment = col_c.button("Cancel Yearly Increment", key="utility_yearly_increment_cancel")
 
     if preview_increment:
-        preview_rows = copy.deepcopy(rows)
+        preview_rows = copy.deepcopy(draft_rows)
         selected_columns = increment_columns[1:] if target_column == "All" else [target_column]
         running_values: dict[str, float] = {}
         for column_name in selected_columns:
@@ -3965,15 +4026,14 @@ def _render_utility_schedule(payload: dict) -> None:
         st.session_state["utility_yearly_increment_preview_rows"] = preview_rows
 
     preview_rows = st.session_state.get("utility_yearly_increment_preview_rows")
-    active_rows = preview_rows if isinstance(preview_rows, list) else rows
+    active_rows = preview_rows if isinstance(preview_rows, list) else draft_rows
 
     if cancel_increment:
         st.session_state.pop("utility_yearly_increment_preview_rows", None)
         _rerun()
 
     if save_increment and isinstance(preview_rows, list):
-        st.session_state["utility_entries"] = preview_rows
-        rows = preview_rows
+        draft_rows = _store_editor_draft("utility_entries_draft", preview_rows)
         st.session_state.pop("utility_yearly_increment_preview_rows", None)
         _rerun()
 
@@ -3988,12 +4048,26 @@ def _render_utility_schedule(payload: dict) -> None:
         num_rows="fixed",
     )
     normalised_editor = _coerce_editor_rows(updated_editor)
-    if normalised_editor:
-        rows = _editor_rows_to_utility_entries(normalised_editor)
-        st.session_state["utility_entries"] = rows
+    if isinstance(normalised_editor, list):
+        draft_rows = _editor_rows_to_utility_entries(normalised_editor)
+        _store_editor_draft("utility_entries_draft", draft_rows)
         st.session_state.pop("utility_yearly_increment_preview_rows", None)
 
-    _utility_entries_to_payload(rows, payload)
+    action_cols = st.columns(2)
+    apply_changes = action_cols[0].button("Apply Utility Changes", key="utility_apply_changes")
+    discard_changes = action_cols[1].button("Discard Utility Draft", key="utility_discard_changes")
+    if _editor_draft_is_dirty("utility_entries", "utility_entries_draft"):
+        st.caption("Utility draft changes are pending. Apply them before the next model run.")
+    if discard_changes:
+        _discard_editor_draft("utility_entries", "utility_entries_draft")
+        st.session_state.pop("utility_yearly_increment_preview_rows", None)
+        _rerun()
+    if apply_changes:
+        _apply_editor_draft("utility_entries", "utility_entries_draft")
+        st.session_state.pop("utility_yearly_increment_preview_rows", None)
+        _rerun()
+
+    _utility_entries_to_payload(st.session_state.get("utility_entries", rows), payload)
 
 
 def _render_receivable_inputs(payload: dict) -> None:
@@ -4015,19 +4089,21 @@ def _render_receivable_inputs(payload: dict) -> None:
         rows.append(base)
 
     st.session_state["receivable_rows"] = rows
-    labels = [str(row.get("label") or f"Year {idx + 1}") for idx, row in enumerate(rows)]
+    draft_rows = _ensure_editor_draft("receivable_rows", "receivable_rows_draft", rows)
+    labels = [str(row.get("label") or f"Year {idx + 1}") for idx, row in enumerate(draft_rows)]
 
     st.markdown("#### Base Year Assumption")
     base_label = st.selectbox("Accounts receivable start year", labels, key="receivable_base_year")
     base_index = labels.index(base_label) if base_label in labels else 0
-    base_row = dict(rows[base_index])
+    base_row = dict(draft_rows[base_index])
 
     cols = st.columns(4)
     base_row["days_in_year"] = int(cols[0].number_input("Days in Year", value=int(base_row.get("days_in_year", 365)), min_value=0, step=1, key="receivable_base_days_in_year"))
     base_row["accounts_receivable_days"] = int(cols[1].number_input("Accounts Receivable Days", value=int(base_row.get("accounts_receivable_days", 0)), min_value=0, step=1, key="receivable_base_ar_days"))
     base_row["prepaid_expense_days"] = int(cols[2].number_input("Prepaid Expense Days", value=int(base_row.get("prepaid_expense_days", 0)), min_value=0, step=1, key="receivable_base_prepaid_days"))
     base_row["other_asset_days"] = int(cols[3].number_input("Other Asset Days", value=int(base_row.get("other_asset_days", 0)), min_value=0, step=1, key="receivable_base_other_days"))
-    rows[base_index] = base_row
+    draft_rows[base_index] = base_row
+    _store_editor_draft("receivable_rows_draft", draft_rows)
 
     st.markdown("#### Yearly Increment Tool")
     increment_pct = st.number_input("Yearly Increment %", value=float(st.session_state.get("receivable_increment_pct", 0.0) or 0.0), step=0.1, key="receivable_increment_pct")
@@ -4039,7 +4115,7 @@ def _render_receivable_inputs(payload: dict) -> None:
 
     field_map = {"Accounts Receivable Days": "accounts_receivable_days", "Prepaid Expense Days": "prepaid_expense_days", "Other Asset Days": "other_asset_days"}
     if preview:
-        preview_rows = copy.deepcopy(rows)
+        preview_rows = copy.deepcopy(draft_rows)
         selected = list(field_map.values()) if increment_target == "All" else [field_map[increment_target]]
         running = {field: float(preview_rows[base_index].get(field, 0) or 0) for field in selected}
         for idx in range(base_index + 1, len(preview_rows)):
@@ -4050,13 +4126,12 @@ def _render_receivable_inputs(payload: dict) -> None:
         st.session_state["receivable_increment_preview_rows"] = preview_rows
 
     preview_rows = st.session_state.get("receivable_increment_preview_rows")
-    active_rows = preview_rows if isinstance(preview_rows, list) else rows
+    active_rows = preview_rows if isinstance(preview_rows, list) else draft_rows
     if cancel:
         st.session_state.pop("receivable_increment_preview_rows", None)
         _rerun()
     if save and isinstance(preview_rows, list):
-        st.session_state["receivable_rows"] = preview_rows
-        rows = preview_rows
+        draft_rows = _store_editor_draft("receivable_rows_draft", preview_rows)
         st.session_state.pop("receivable_increment_preview_rows", None)
         _rerun()
 
@@ -4073,7 +4148,7 @@ def _render_receivable_inputs(payload: dict) -> None:
     ]
     edited = st.data_editor(editor_seed, use_container_width=True, hide_index=True, key="receivable_schedule_editor", num_rows="fixed")
     normalised = _coerce_editor_rows(edited)
-    if normalised:
+    if isinstance(normalised, list):
         rebuilt: list[dict] = []
         for idx, row in enumerate(normalised):
             label = str(row.get("Year", "") or "").strip() or f"Year {idx + 1}"
@@ -4085,11 +4160,25 @@ def _render_receivable_inputs(payload: dict) -> None:
                 "prepaid_expense_days": int(float(row.get("Prepaid Expense Days", 0) or 0)),
                 "other_asset_days": int(float(row.get("Other Asset Days", 0) or 0)),
             })
-        rows = rebuilt
-        st.session_state["receivable_rows"] = rows
+        draft_rows = rebuilt
+        _store_editor_draft("receivable_rows_draft", draft_rows)
         st.session_state.pop("receivable_increment_preview_rows", None)
 
-    _receivable_rows_to_payload(rows, payload)
+    action_cols = st.columns(2)
+    apply_changes = action_cols[0].button("Apply Receivable Changes", key="receivable_apply_changes")
+    discard_changes = action_cols[1].button("Discard Receivable Draft", key="receivable_discard_changes")
+    if _editor_draft_is_dirty("receivable_rows", "receivable_rows_draft"):
+        st.caption("Receivable draft changes are pending. Apply them before the next model run.")
+    if discard_changes:
+        _discard_editor_draft("receivable_rows", "receivable_rows_draft")
+        st.session_state.pop("receivable_increment_preview_rows", None)
+        _rerun()
+    if apply_changes:
+        _apply_editor_draft("receivable_rows", "receivable_rows_draft")
+        st.session_state.pop("receivable_increment_preview_rows", None)
+        _rerun()
+
+    _receivable_rows_to_payload(st.session_state.get("receivable_rows", rows), payload)
 
 def _render_inventory_inputs(payload: dict) -> None:
     rows: list[dict] = st.session_state.get("inventory_rows", []) or _payload_to_inventory_rows(payload)
@@ -4110,18 +4199,20 @@ def _render_inventory_inputs(payload: dict) -> None:
         rows.append(base)
 
     st.session_state["inventory_rows"] = rows
-    labels = [str(row.get("label") or f"Year {idx + 1}") for idx, row in enumerate(rows)]
+    draft_rows = _ensure_editor_draft("inventory_rows", "inventory_rows_draft", rows)
+    labels = [str(row.get("label") or f"Year {idx + 1}") for idx, row in enumerate(draft_rows)]
 
     st.markdown("#### Base Year Assumption")
     base_label = st.selectbox("Inventory/AP start year", labels, key="inventory_base_year")
     base_index = labels.index(base_label) if base_label in labels else 0
-    base_row = dict(rows[base_index])
+    base_row = dict(draft_rows[base_index])
 
     cols = st.columns(3)
     base_row["days_in_year"] = int(cols[0].number_input("Days in Year", value=int(base_row.get("days_in_year", 365)), min_value=0, step=1, key="inventory_base_days_in_year"))
     base_row["inventory_days"] = int(cols[1].number_input("Inventory Days", value=int(base_row.get("inventory_days", 0)), min_value=0, step=1, key="inventory_base_inventory_days"))
     base_row["accounts_payable_days"] = int(cols[2].number_input("Accounts Payable Days", value=int(base_row.get("accounts_payable_days", 0)), min_value=0, step=1, key="inventory_base_payable_days"))
-    rows[base_index] = base_row
+    draft_rows[base_index] = base_row
+    _store_editor_draft("inventory_rows_draft", draft_rows)
 
     st.markdown("#### Yearly Increment Tool")
     increment_pct = st.number_input("Yearly Increment %", value=float(st.session_state.get("inventory_increment_pct", 0.0) or 0.0), step=0.1, key="inventory_increment_pct")
@@ -4133,7 +4224,7 @@ def _render_inventory_inputs(payload: dict) -> None:
 
     field_map = {"Inventory Days": "inventory_days", "Accounts Payable Days": "accounts_payable_days"}
     if preview:
-        preview_rows = copy.deepcopy(rows)
+        preview_rows = copy.deepcopy(draft_rows)
         selected = list(field_map.values()) if increment_target == "All" else [field_map[increment_target]]
         running = {field: float(preview_rows[base_index].get(field, 0) or 0) for field in selected}
         for idx in range(base_index + 1, len(preview_rows)):
@@ -4144,13 +4235,12 @@ def _render_inventory_inputs(payload: dict) -> None:
         st.session_state["inventory_increment_preview_rows"] = preview_rows
 
     preview_rows = st.session_state.get("inventory_increment_preview_rows")
-    active_rows = preview_rows if isinstance(preview_rows, list) else rows
+    active_rows = preview_rows if isinstance(preview_rows, list) else draft_rows
     if cancel:
         st.session_state.pop("inventory_increment_preview_rows", None)
         _rerun()
     if save and isinstance(preview_rows, list):
-        st.session_state["inventory_rows"] = preview_rows
-        rows = preview_rows
+        draft_rows = _store_editor_draft("inventory_rows_draft", preview_rows)
         st.session_state.pop("inventory_increment_preview_rows", None)
         _rerun()
 
@@ -4166,7 +4256,7 @@ def _render_inventory_inputs(payload: dict) -> None:
     ]
     edited = st.data_editor(editor_seed, use_container_width=True, hide_index=True, key="inventory_schedule_editor", num_rows="fixed")
     normalised = _coerce_editor_rows(edited)
-    if normalised:
+    if isinstance(normalised, list):
         rebuilt: list[dict] = []
         for idx, row in enumerate(normalised):
             label = str(row.get("Year", "") or "").strip() or f"Year {idx + 1}"
@@ -4177,11 +4267,25 @@ def _render_inventory_inputs(payload: dict) -> None:
                 "inventory_days": int(float(row.get("Inventory Days", 0) or 0)),
                 "accounts_payable_days": int(float(row.get("Accounts Payable Days", 0) or 0)),
             })
-        rows = rebuilt
-        st.session_state["inventory_rows"] = rows
+        draft_rows = rebuilt
+        _store_editor_draft("inventory_rows_draft", draft_rows)
         st.session_state.pop("inventory_increment_preview_rows", None)
 
-    _inventory_rows_to_payload(rows, payload)
+    action_cols = st.columns(2)
+    apply_changes = action_cols[0].button("Apply Inventory Changes", key="inventory_apply_changes")
+    discard_changes = action_cols[1].button("Discard Inventory Draft", key="inventory_discard_changes")
+    if _editor_draft_is_dirty("inventory_rows", "inventory_rows_draft"):
+        st.caption("Inventory draft changes are pending. Apply them before the next model run.")
+    if discard_changes:
+        _discard_editor_draft("inventory_rows", "inventory_rows_draft")
+        st.session_state.pop("inventory_increment_preview_rows", None)
+        _rerun()
+    if apply_changes:
+        _apply_editor_draft("inventory_rows", "inventory_rows_draft")
+        st.session_state.pop("inventory_increment_preview_rows", None)
+        _rerun()
+
+    _inventory_rows_to_payload(st.session_state.get("inventory_rows", rows), payload)
 
 def _commission_revenue_estimate(payload: Mapping, year_value: int, product: str) -> float:
     years = [int(year) for year in payload.get("years", [])] if isinstance(payload, Mapping) else []
@@ -4973,12 +5077,25 @@ def _render_cost_and_financing(payload: dict) -> None:
     )
     unit_costs = payload.get("unit_costs", {}) if isinstance(payload, Mapping) else {}
     products = sorted(str(name) for name in unit_costs.keys()) if isinstance(unit_costs, Mapping) else []
+    factor_source_rows = st.session_state.get("raw_material_factor_rows", [])
+    factor_lookup: dict[str, float] = {}
+    if isinstance(factor_source_rows, list) and factor_source_rows:
+        factor_lookup = {
+            str(row.get("Product", "")).strip(): float(row.get("Material Factor", 1.0) or 1.0)
+            for row in factor_source_rows
+            if str(row.get("Product", "")).strip()
+        }
+    else:
+        factors_mapping = raw.get("material_factors", {}) if isinstance(raw.get("material_factors"), Mapping) else {}
+        factor_lookup = {
+            str(name).strip(): float(value or 1.0)
+            for name, value in factors_mapping.items()
+        } if isinstance(factors_mapping, Mapping) else {}
     if products:
         st.markdown("#### Raw material factor by product")
-        factors_mapping = raw.get("material_factors", {}) if isinstance(raw.get("material_factors"), Mapping) else {}
         factor_rows = []
         for product in products:
-            factor = float(factors_mapping.get(product, 1.0) or 1.0)
+            factor = float(factor_lookup.get(product, 1.0) or 1.0)
             factor_rows.append(
                 {
                     "Product": product,
@@ -4986,8 +5103,14 @@ def _render_cost_and_financing(payload: dict) -> None:
                     "Effective Variable Cost / Unit": float(raw.get("per_unit", 0.0) or 0.0) * factor,
                 }
             )
-        edited_factors = st.data_editor(
+        st.session_state["raw_material_factor_rows"] = factor_rows
+        draft_factor_rows = _ensure_editor_draft(
+            "raw_material_factor_rows",
+            "raw_material_factor_rows_draft",
             factor_rows,
+        )
+        edited_factors = st.data_editor(
+            draft_factor_rows,
             use_container_width=True,
             hide_index=True,
             key="raw_material_factor_table",
@@ -4999,25 +5122,36 @@ def _render_cost_and_financing(payload: dict) -> None:
             num_rows="fixed",
         )
         normalised_factor_rows = _coerce_editor_rows(edited_factors)
-        if normalised_factor_rows:
-            raw["material_factors"] = {
-                str(row.get("Product", "")).strip(): max(float(row.get("Material Factor", 1.0) or 1.0), 0.0)
-                for row in normalised_factor_rows
-                if str(row.get("Product", "")).strip()
-            }
+        if isinstance(normalised_factor_rows, list):
+            _store_editor_draft("raw_material_factor_rows_draft", normalised_factor_rows)
     years = payload.get("years", [])
     annual_values = raw.get("annual", [])
     if not isinstance(annual_values, Sequence):
         annual_values = []
+    stored_annual_rows = st.session_state.get("raw_material_annual_rows", [])
+    annual_lookup: dict[int, float] = {}
+    if isinstance(stored_annual_rows, list) and stored_annual_rows:
+        annual_lookup = {
+            int(row.get("Year", 0)): float(row.get("Annual Spend", 0.0) or 0.0)
+            for row in stored_annual_rows
+        }
     raw_rows = []
     for idx, year in enumerate(years):
-        value = float(annual_values[idx]) if idx < len(annual_values) else 0.0
+        value = annual_lookup.get(int(year))
+        if value is None:
+            value = float(annual_values[idx]) if idx < len(annual_values) else 0.0
         raw_rows.append({"Year": int(year), "Annual Spend": value})
+    st.session_state["raw_material_annual_rows"] = raw_rows
     if raw_rows:
         st.markdown("#### Annual raw material spend (optional)")
         if hasattr(st, "data_editor"):
-            updated = st.data_editor(
+            draft_annual_rows = _ensure_editor_draft(
+                "raw_material_annual_rows",
+                "raw_material_annual_rows_draft",
                 raw_rows,
+            )
+            updated = st.data_editor(
+                draft_annual_rows,
                 use_container_width=True,
                 hide_index=True,
                 key="raw_material_annual_table",
@@ -5026,9 +5160,42 @@ def _render_cost_and_financing(payload: dict) -> None:
                     "Annual Spend": st.column_config.NumberColumn(format="%.2f"),
                 },
             )
-            raw["annual"] = [float(row.get("Annual Spend", 0.0)) for row in updated]
+            normalised_annual_rows = _coerce_editor_rows(updated)
+            if isinstance(normalised_annual_rows, list):
+                _store_editor_draft("raw_material_annual_rows_draft", normalised_annual_rows)
         else:
             st.table(raw_rows)
+    action_cols = st.columns(2)
+    apply_raw_material = action_cols[0].button("Apply Raw Material Changes", key="raw_material_apply_changes")
+    discard_raw_material = action_cols[1].button("Discard Raw Material Draft", key="raw_material_discard_changes")
+    raw_material_dirty = _editor_draft_is_dirty(
+        "raw_material_factor_rows",
+        "raw_material_factor_rows_draft",
+    ) or _editor_draft_is_dirty(
+        "raw_material_annual_rows",
+        "raw_material_annual_rows_draft",
+    )
+    if raw_material_dirty:
+        st.caption("Raw material table drafts are pending. Apply them before the next model run.")
+    if discard_raw_material:
+        _discard_editor_draft("raw_material_factor_rows", "raw_material_factor_rows_draft")
+        _discard_editor_draft("raw_material_annual_rows", "raw_material_annual_rows_draft")
+        _rerun()
+    if apply_raw_material:
+        _apply_editor_draft("raw_material_factor_rows", "raw_material_factor_rows_draft")
+        _apply_editor_draft("raw_material_annual_rows", "raw_material_annual_rows_draft")
+        _rerun()
+
+    applied_factor_rows = st.session_state.get("raw_material_factor_rows", [])
+    if isinstance(applied_factor_rows, list):
+        raw["material_factors"] = {
+            str(row.get("Product", "")).strip(): max(float(row.get("Material Factor", 1.0) or 1.0), 0.0)
+            for row in applied_factor_rows
+            if str(row.get("Product", "")).strip()
+        }
+    applied_annual_rows = st.session_state.get("raw_material_annual_rows", raw_rows)
+    if isinstance(applied_annual_rows, list):
+        raw["annual"] = [float(row.get("Annual Spend", 0.0) or 0.0) for row in applied_annual_rows]
 
     financing = payload.setdefault("financing", {})
     finance_cols = st.columns(3)
@@ -5445,21 +5612,23 @@ def _render_tax_schedule(payload: dict) -> None:
         rows.append({"Year": label, "Rate": previous})
 
     st.session_state["tax_rows"] = rows
+    draft_rows = _ensure_editor_draft("tax_rows", "tax_rows_draft", rows)
 
-    labels = [str(row.get("Year", f"Year {idx + 1}")) for idx, row in enumerate(rows)]
+    labels = [str(row.get("Year", f"Year {idx + 1}")) for idx, row in enumerate(draft_rows)]
     st.markdown("#### Base Year Assumption")
     base_label = st.selectbox("Tax schedule start year", labels, key="tax_base_year")
     base_index = labels.index(base_label) if base_label in labels else 0
-    rows[base_index]["Rate"] = float(
+    draft_rows[base_index]["Rate"] = float(
         st.number_input(
             "Tax rate (base year)",
-            value=float(rows[base_index].get("Rate", base_rate) or base_rate),
+            value=float(draft_rows[base_index].get("Rate", base_rate) or base_rate),
             min_value=0.0,
             step=0.001,
             format="%.4f",
             key="tax_base_year_rate",
         )
     )
+    _store_editor_draft("tax_rows_draft", draft_rows)
 
     st.markdown("#### Yearly Increment Tool")
     increment_pct = st.number_input(
@@ -5474,7 +5643,7 @@ def _render_tax_schedule(payload: dict) -> None:
     cancel = c3.button("Cancel Yearly Increment", key="tax_increment_cancel")
 
     if preview:
-        preview_rows = copy.deepcopy(rows)
+        preview_rows = copy.deepcopy(draft_rows)
         running = float(preview_rows[base_index].get("Rate", 0.0) or 0.0)
         for idx in range(base_index + 1, len(preview_rows)):
             running = max(running * (1 + float(increment_pct) / 100.0), 0.0)
@@ -5482,13 +5651,12 @@ def _render_tax_schedule(payload: dict) -> None:
         st.session_state["tax_increment_preview_rows"] = preview_rows
 
     preview_rows = st.session_state.get("tax_increment_preview_rows")
-    active_rows = preview_rows if isinstance(preview_rows, list) else rows
+    active_rows = preview_rows if isinstance(preview_rows, list) else draft_rows
     if cancel:
         st.session_state.pop("tax_increment_preview_rows", None)
         _rerun()
     if save and isinstance(preview_rows, list):
-        rows = preview_rows
-        st.session_state["tax_rows"] = rows
+        draft_rows = _store_editor_draft("tax_rows_draft", preview_rows)
         st.session_state.pop("tax_increment_preview_rows", None)
         _rerun()
 
@@ -5501,7 +5669,7 @@ def _render_tax_schedule(payload: dict) -> None:
         num_rows="fixed",
     )
     normalised = _coerce_editor_rows(edited)
-    if normalised:
+    if isinstance(normalised, list):
         rebuilt = []
         for idx, row in enumerate(normalised):
             label = str(row.get("Year", "") or "").strip() or f"Year {idx + 1}"
@@ -5510,10 +5678,25 @@ def _render_tax_schedule(payload: dict) -> None:
             except (TypeError, ValueError):
                 rate = 0.0
             rebuilt.append({"Year": label, "Rate": max(rate, 0.0)})
-        rows = rebuilt
-        st.session_state["tax_rows"] = rows
+        draft_rows = rebuilt
+        _store_editor_draft("tax_rows_draft", draft_rows)
         st.session_state.pop("tax_increment_preview_rows", None)
 
+    action_cols = st.columns(2)
+    apply_changes = action_cols[0].button("Apply Tax Changes", key="tax_apply_changes")
+    discard_changes = action_cols[1].button("Discard Tax Draft", key="tax_discard_changes")
+    if _editor_draft_is_dirty("tax_rows", "tax_rows_draft"):
+        st.caption("Tax draft changes are pending. Apply them before the next model run.")
+    if discard_changes:
+        _discard_editor_draft("tax_rows", "tax_rows_draft")
+        st.session_state.pop("tax_increment_preview_rows", None)
+        _rerun()
+    if apply_changes:
+        _apply_editor_draft("tax_rows", "tax_rows_draft")
+        st.session_state.pop("tax_increment_preview_rows", None)
+        _rerun()
+
+    rows = st.session_state.get("tax_rows", rows)
     tax_entries = [
         {"label": str(row.get("Year", f"Year {idx + 1}")), "rate": float(row.get("Rate", base_rate) or base_rate)}
         for idx, row in enumerate(rows)
@@ -5544,12 +5727,14 @@ def _render_inflation_schedule(payload: dict) -> None:
         rows.append({"Year": label, "Rate": float(rows[-1].get("Rate", base_rate) if rows else base_rate)})
 
     st.session_state["inflation_rows"] = rows
-    labels = [str(row.get("Year", f"Year {idx + 1}")) for idx, row in enumerate(rows)]
+    draft_rows = _ensure_editor_draft("inflation_rows", "inflation_rows_draft", rows)
+    labels = [str(row.get("Year", f"Year {idx + 1}")) for idx, row in enumerate(draft_rows)]
 
     st.markdown("#### Base Year Assumption")
     base_label = st.selectbox("Inflation start year", labels, key="inflation_base_year")
     base_index = labels.index(base_label) if base_label in labels else 0
-    rows[base_index]["Rate"] = float(st.number_input("Inflation rate (base year)", value=float(rows[base_index].get("Rate", base_rate)), min_value=0.0, step=0.001, format="%.4f", key="inflation_base_year_rate"))
+    draft_rows[base_index]["Rate"] = float(st.number_input("Inflation rate (base year)", value=float(draft_rows[base_index].get("Rate", base_rate)), min_value=0.0, step=0.001, format="%.4f", key="inflation_base_year_rate"))
+    _store_editor_draft("inflation_rows_draft", draft_rows)
 
     st.markdown("#### Yearly Increment Tool")
     increment_pct = st.number_input("Yearly Increment %", value=float(st.session_state.get("inflation_increment_pct", 0.0) or 0.0), step=0.1, key="inflation_increment_pct")
@@ -5559,7 +5744,7 @@ def _render_inflation_schedule(payload: dict) -> None:
     cancel = c3.button("Cancel Yearly Increment", key="inflation_increment_cancel")
 
     if preview:
-        preview_rows = copy.deepcopy(rows)
+        preview_rows = copy.deepcopy(draft_rows)
         running = float(preview_rows[base_index].get("Rate", 0.0) or 0.0)
         for idx in range(base_index + 1, len(preview_rows)):
             running = max(running * (1 + float(increment_pct) / 100.0), 0.0)
@@ -5567,20 +5752,19 @@ def _render_inflation_schedule(payload: dict) -> None:
         st.session_state["inflation_increment_preview_rows"] = preview_rows
 
     preview_rows = st.session_state.get("inflation_increment_preview_rows")
-    active_rows = preview_rows if isinstance(preview_rows, list) else rows
+    active_rows = preview_rows if isinstance(preview_rows, list) else draft_rows
     if cancel:
         st.session_state.pop("inflation_increment_preview_rows", None)
         _rerun()
     if save and isinstance(preview_rows, list):
-        rows = preview_rows
-        st.session_state["inflation_rows"] = rows
+        draft_rows = _store_editor_draft("inflation_rows_draft", preview_rows)
         st.session_state.pop("inflation_increment_preview_rows", None)
         _rerun()
 
     st.markdown("#### Inflation Settings by Year")
     edited = st.data_editor(active_rows, use_container_width=True, hide_index=True, key="inflation_schedule_editor", num_rows="fixed")
     normalised = _coerce_editor_rows(edited)
-    if normalised:
+    if isinstance(normalised, list):
         rebuilt = []
         for idx, row in enumerate(normalised):
             label = str(row.get("Year", "") or "").strip() or f"Year {idx + 1}"
@@ -5589,11 +5773,25 @@ def _render_inflation_schedule(payload: dict) -> None:
             except (TypeError, ValueError):
                 rate = 0.0
             rebuilt.append({"Year": label, "Rate": max(rate, 0.0)})
-        rows = rebuilt
-        st.session_state["inflation_rows"] = rows
+        draft_rows = rebuilt
+        _store_editor_draft("inflation_rows_draft", draft_rows)
         st.session_state.pop("inflation_increment_preview_rows", None)
 
-    _inflation_rows_to_payload(rows, payload)
+    action_cols = st.columns(2)
+    apply_changes = action_cols[0].button("Apply Inflation Changes", key="inflation_apply_changes")
+    discard_changes = action_cols[1].button("Discard Inflation Draft", key="inflation_discard_changes")
+    if _editor_draft_is_dirty("inflation_rows", "inflation_rows_draft"):
+        st.caption("Inflation draft changes are pending. Apply them before the next model run.")
+    if discard_changes:
+        _discard_editor_draft("inflation_rows", "inflation_rows_draft")
+        st.session_state.pop("inflation_increment_preview_rows", None)
+        _rerun()
+    if apply_changes:
+        _apply_editor_draft("inflation_rows", "inflation_rows_draft")
+        st.session_state.pop("inflation_increment_preview_rows", None)
+        _rerun()
+
+    _inflation_rows_to_payload(st.session_state.get("inflation_rows", rows), payload)
 
 def _render_risk_schedule(payload: dict) -> None:
     rows: list[dict] = st.session_state.get("risk_rows", []) or _payload_to_risk_rows(payload)
@@ -5610,22 +5808,24 @@ def _render_risk_schedule(payload: dict) -> None:
         rows.append({"Year": label, **{cat: float(source_row.get(cat, 0.0)) for cat in categories}})
 
     st.session_state["risk_rows"] = rows
-    labels = [str(row.get("Year", f"Year {idx + 1}")) for idx, row in enumerate(rows)]
+    draft_rows = _ensure_editor_draft("risk_rows", "risk_rows_draft", rows)
+    labels = [str(row.get("Year", f"Year {idx + 1}")) for idx, row in enumerate(draft_rows)]
 
     st.markdown("#### Base Year Assumption")
     base_label = st.selectbox("Risk start year", labels, key="risk_base_year")
     base_index = labels.index(base_label) if base_label in labels else 0
     base_cols = st.columns(len(categories))
     for col, category in zip(base_cols, categories):
-        rows[base_index][category] = float(col.number_input(
+        draft_rows[base_index][category] = float(col.number_input(
             f"{category.title()} base risk",
-            value=float(rows[base_index].get(category, 0.0)),
+            value=float(draft_rows[base_index].get(category, 0.0)),
             min_value=0.0,
             max_value=1.0,
             step=0.01,
             format="%.4f",
             key=f"risk_base_value_{category}",
         ))
+    _store_editor_draft("risk_rows_draft", draft_rows)
 
     st.markdown("#### Yearly Increment Tool")
     increment_pct = st.number_input("Yearly Increment %", value=float(st.session_state.get("risk_increment_pct", 0.0) or 0.0), step=0.1, key="risk_increment_pct")
@@ -5637,7 +5837,7 @@ def _render_risk_schedule(payload: dict) -> None:
     cancel = c3.button("Cancel Yearly Increment", key="risk_increment_cancel")
 
     if preview:
-        preview_rows = copy.deepcopy(rows)
+        preview_rows = copy.deepcopy(draft_rows)
         selected = categories if target == "All" else [target]
         running = {cat: float(preview_rows[base_index].get(cat, 0.0) or 0.0) for cat in selected}
         for idx in range(base_index + 1, len(preview_rows)):
@@ -5648,20 +5848,19 @@ def _render_risk_schedule(payload: dict) -> None:
         st.session_state["risk_increment_preview_rows"] = preview_rows
 
     preview_rows = st.session_state.get("risk_increment_preview_rows")
-    active_rows = preview_rows if isinstance(preview_rows, list) else rows
+    active_rows = preview_rows if isinstance(preview_rows, list) else draft_rows
     if cancel:
         st.session_state.pop("risk_increment_preview_rows", None)
         _rerun()
     if save and isinstance(preview_rows, list):
-        rows = preview_rows
-        st.session_state["risk_rows"] = rows
+        draft_rows = _store_editor_draft("risk_rows_draft", preview_rows)
         st.session_state.pop("risk_increment_preview_rows", None)
         _rerun()
 
     st.markdown("#### Risk Settings by Year")
     edited = st.data_editor(active_rows, use_container_width=True, hide_index=True, key="risk_schedule_editor", num_rows="fixed")
     normalised = _coerce_editor_rows(edited)
-    if normalised:
+    if isinstance(normalised, list):
         rebuilt = []
         for idx, row in enumerate(normalised):
             label = str(row.get("Year", "") or "").strip() or f"Year {idx + 1}"
@@ -5673,11 +5872,25 @@ def _render_risk_schedule(payload: dict) -> None:
                     value = 0.0
                 item[category] = min(max(value, 0.0), 1.0)
             rebuilt.append(item)
-        rows = rebuilt
-        st.session_state["risk_rows"] = rows
+        draft_rows = rebuilt
+        _store_editor_draft("risk_rows_draft", draft_rows)
         st.session_state.pop("risk_increment_preview_rows", None)
 
-    _risk_rows_to_payload(rows, payload)
+    action_cols = st.columns(2)
+    apply_changes = action_cols[0].button("Apply Risk Changes", key="risk_apply_changes")
+    discard_changes = action_cols[1].button("Discard Risk Draft", key="risk_discard_changes")
+    if _editor_draft_is_dirty("risk_rows", "risk_rows_draft"):
+        st.caption("Risk draft changes are pending. Apply them before the next model run.")
+    if discard_changes:
+        _discard_editor_draft("risk_rows", "risk_rows_draft")
+        st.session_state.pop("risk_increment_preview_rows", None)
+        _rerun()
+    if apply_changes:
+        _apply_editor_draft("risk_rows", "risk_rows_draft")
+        st.session_state.pop("risk_increment_preview_rows", None)
+        _rerun()
+
+    _risk_rows_to_payload(st.session_state.get("risk_rows", rows), payload)
 
 def _render_goal_seek(payload: dict) -> None:
     goal = payload.get("goal_seek", {}) if isinstance(payload, Mapping) else {}
@@ -6407,42 +6620,6 @@ def _utility_column_config():
     return config
 
 
-def _extract_editor_rows(data) -> list[Mapping]:
-    if data is None:
-        return []
-    if hasattr(data, "to_dict"):
-        try:
-            return data.to_dict(orient="records")  # type: ignore[attr-defined]
-        except Exception:  # pragma: no cover - fallback when pandas not available
-            pass
-    if isinstance(data, list):
-        return [row for row in data if isinstance(row, Mapping)]
-    if isinstance(data, tuple):
-        return [row for row in data if isinstance(row, Mapping)]
-    return []
-
-
-def _next_utility_entry(rows: Sequence[Mapping], payload_years: Sequence | None) -> dict:
-    index = len(rows)
-    label_override: str | None = None
-    if isinstance(payload_years, Sequence) and index < len(payload_years):
-        candidate = payload_years[index]
-        if candidate is not None:
-            label_override = str(candidate)
-    elif rows:
-        last = rows[-1]
-        last_year = None
-        if isinstance(last, Mapping):
-            candidate = last.get("year")
-            if isinstance(candidate, (int, float)):
-                last_year = int(candidate)
-            else:
-                last_year = _parse_year_value(last.get("label"), index)
-        if last_year is not None:
-            label_override = str(last_year + 1)
-    return _default_utility_entry(index, label_override)
-
-
 def _resize_utility_entries(
     entries: Sequence[Mapping], target_length: int, labels: Sequence
 ) -> list[dict]:
@@ -6524,37 +6701,6 @@ def _tax_entries_to_payload(
 
     tax = cast(dict, tax)
     tax["schedule"] = resolved
-
-
-def _next_tax_entry(
-    rows: Sequence[Mapping], years: Sequence | None, base_rate: float
-) -> dict:
-    used_labels = {
-        _normalise_tax_entry(row, index, base_rate)["label"]
-        for index, row in enumerate(rows or [])
-    }
-
-    candidate_label: str | None = None
-    if isinstance(years, Sequence):
-        for raw in years:
-            if raw is None:
-                continue
-            label = str(raw)
-            if label not in used_labels:
-                candidate_label = label
-                break
-
-    if candidate_label is None and rows:
-        last = _normalise_tax_entry(rows[-1], len(rows) - 1, base_rate)["label"]
-        try:
-            candidate_label = str(int(float(last)) + 1)
-        except Exception:  # pragma: no cover - fallback when last label not numeric
-            candidate_label = f"Year {len(rows) + 1}"
-
-    if candidate_label is None:
-        candidate_label = f"Year {len(rows) + 1}"
-
-    return {"label": candidate_label, "rate": float(base_rate)}
 
 
 def _payload_to_depreciation_rows(payload: Mapping) -> list[dict]:
@@ -8837,22 +8983,35 @@ _PHARMA_ROW_KEYS: list[str] = [
     "core_assumption_rows",
     "commission_rows",
     "utility_entries",
+    "utility_entries_draft",
     "receivable_rows",
+    "receivable_rows_draft",
     "inventory_rows",
+    "inventory_rows_draft",
     "direct_labor_rows",
     "indirect_labor_rows",
     "labor_model_rows",
     "labor_model_settings_rows",
+    "labor_advanced_draft_roles",
+    "labor_advanced_draft_settings",
     "fixed_variable_rows",
     "break_even_rows",
     "depreciation_rows",
     "inflation_rows",
+    "inflation_rows_draft",
     "risk_rows",
+    "risk_rows_draft",
     "sensitivity_rows",
     "senior_debt_rows",
     "revolver_rows",
     "overdraft_rows",
     "tax_entries",
+    "tax_rows",
+    "tax_rows_draft",
+    "raw_material_factor_rows",
+    "raw_material_factor_rows_draft",
+    "raw_material_annual_rows",
+    "raw_material_annual_rows_draft",
 ]
 
 

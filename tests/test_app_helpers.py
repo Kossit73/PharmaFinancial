@@ -69,6 +69,7 @@ class RerunHelperTest(unittest.TestCase):
         self.app = importlib.import_module("pharma_financial.app")
         self.app._INPUT_CACHE.clear()
         self.app._MODEL_CACHE.clear()
+        self.app._DERIVED_CACHE.clear()
 
     def tearDown(self):
         if self.original_streamlit is None:
@@ -330,6 +331,57 @@ class RerunHelperTest(unittest.TestCase):
 
         self.assertIs(model1, model2)
         self.assertIs(outputs1, outputs2)
+
+    def test_cached_derived_value_reuses_digest_until_invalidated(self):
+        calls = {"count": 0}
+
+        def _builder():
+            calls["count"] += 1
+            return {"value": calls["count"]}
+
+        cached_a = self.app._cached_derived_value("digest-a", "demo", _builder)
+        cached_b = self.app._cached_derived_value("digest-a", "demo", _builder)
+        cached_c = self.app._cached_derived_value("digest-b", "demo", _builder)
+
+        self.assertEqual(calls["count"], 2)
+        self.assertEqual(cached_a["value"], 1)
+        self.assertIs(cached_a, cached_b)
+        self.assertEqual(cached_c["value"], 2)
+
+        self.app._clear_derived_cache("digest-a")
+        cached_d = self.app._cached_derived_value("digest-a", "demo", _builder)
+        self.assertEqual(calls["count"], 3)
+        self.assertEqual(cached_d["value"], 3)
+
+    def test_editor_draft_helpers_apply_and_discard_changes(self):
+        applied_rows = [{"Year": "2024", "Rate": 0.1}]
+        self.stub.session_state["tax_rows"] = [dict(row) for row in applied_rows]
+
+        draft_rows = self.app._ensure_editor_draft(
+            "tax_rows",
+            "tax_rows_draft",
+            applied_rows,
+        )
+        self.assertEqual(draft_rows, applied_rows)
+        self.assertFalse(self.app._editor_draft_is_dirty("tax_rows", "tax_rows_draft"))
+
+        self.app._store_editor_draft(
+            "tax_rows_draft",
+            [{"Year": "2024", "Rate": 0.2}],
+        )
+        self.assertTrue(self.app._editor_draft_is_dirty("tax_rows", "tax_rows_draft"))
+
+        applied = self.app._apply_editor_draft("tax_rows", "tax_rows_draft")
+        self.assertEqual(applied[0]["Rate"], 0.2)
+        self.assertFalse(self.app._editor_draft_is_dirty("tax_rows", "tax_rows_draft"))
+
+        self.app._store_editor_draft(
+            "tax_rows_draft",
+            [{"Year": "2024", "Rate": 0.35}],
+        )
+        restored = self.app._discard_editor_draft("tax_rows", "tax_rows_draft")
+        self.assertEqual(restored[0]["Rate"], 0.2)
+        self.assertFalse(self.app._editor_draft_is_dirty("tax_rows", "tax_rows_draft"))
 
     def test_inventory_rows_roundtrip(self):
         payload = json.loads(
