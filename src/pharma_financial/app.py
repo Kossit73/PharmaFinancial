@@ -768,26 +768,29 @@ def main() -> None:
         _clear_analysis_cache()
         result_digest = draft_digest
 
-    tabs = st.tabs(
-        [
-            "Input Landing Page",
-            "Financial Performance",
-            "Financial Position",
-            "Cash Flow Statement",
-            "RAG Assistant",
-            "Key Metrics Dashboard",
-        ]
+    page_options = [
+        "Input Landing Page",
+        "Financial Performance",
+        "Financial Position",
+        "Cash Flow Statement",
+        "RAG Assistant",
+        "Key Metrics Dashboard",
+    ]
+    selected_page = _render_view_selector(
+        page_options,
+        key="pharma_active_page",
+        label="Pharma workspace section",
     )
 
-    with tabs[0]:
+    if selected_page == "Input Landing Page":
         _render_inputs_tab(inputs, model, outputs, draft_digest, result_digest)
-    with tabs[1]:
+    elif selected_page == "Financial Performance":
         if outputs is None or model is None:
             st.info("Press Run on the Input Landing Page to generate results.")
         else:
             _render_stale_results_notice(draft_digest, result_digest)
             _render_income_statement(model, outputs, result_digest or draft_digest)
-    with tabs[2]:
+    elif selected_page == "Financial Position":
         if outputs is None:
             st.info("Press Run on the Input Landing Page to generate results.")
         else:
@@ -797,7 +800,7 @@ def main() -> None:
                 outputs.balance_sheet,
                 result_digest or draft_digest,
             )
-    with tabs[3]:
+    elif selected_page == "Cash Flow Statement":
         if outputs is None:
             st.info("Press Run on the Input Landing Page to generate results.")
         else:
@@ -807,40 +810,70 @@ def main() -> None:
                 outputs.cash_flow,
                 result_digest or draft_digest,
             )
-    with tabs[4]:
+    elif selected_page == "RAG Assistant":
         if outputs is None or model is None:
             st.info("Press Run on the Input Landing Page to generate results.")
         else:
             _render_stale_results_notice(draft_digest, result_digest)
             _render_rag_tab(model, outputs, result_digest or draft_digest)
-    with tabs[5]:
+    elif selected_page == "Key Metrics Dashboard":
         if outputs is None or model is None:
             st.info("Press Run on the Input Landing Page to generate results.")
         else:
             _render_stale_results_notice(draft_digest, result_digest)
-            dashboard_tabs = st.tabs(
-                [
-                    "Executive Summary",
-                    "Key Metrics Dashboard",
-                    "Sensitivity Analysis",
-                    "Scenario / IFs Analysis",
-                    "Monte Carlo Simulation",
-                    "Break-even & Payback",
-                ]
+            dashboard_options = [
+                "Executive Summary",
+                "Key Metrics Dashboard",
+                "Sensitivity Analysis",
+                "Scenario / IFs Analysis",
+                "Monte Carlo Simulation",
+                "Break-even & Payback",
+            ]
+            selected_dashboard = _render_view_selector(
+                dashboard_options,
+                key="pharma_dashboard_page",
+                label="Pharma dashboard section",
             )
-            with dashboard_tabs[0]:
+            if selected_dashboard == "Executive Summary":
                 _render_executive_summary(model, outputs, result_digest or draft_digest)
-            with dashboard_tabs[1]:
+            elif selected_dashboard == "Key Metrics Dashboard":
                 _render_excel_model_download(st.container(), model, outputs)
                 _render_dashboard_tab(model, outputs, result_digest or draft_digest)
-            with dashboard_tabs[2]:
+            elif selected_dashboard == "Sensitivity Analysis":
                 _render_sensitivity(model, outputs, result_digest or draft_digest)
-            with dashboard_tabs[3]:
+            elif selected_dashboard == "Scenario / IFs Analysis":
                 _render_scenarios(outputs)
-            with dashboard_tabs[4]:
+            elif selected_dashboard == "Monte Carlo Simulation":
                 _render_monte_carlo(model, outputs, result_digest or draft_digest)
-            with dashboard_tabs[5]:
+            elif selected_dashboard == "Break-even & Payback":
                 _render_break_even(outputs)
+
+
+def _render_view_selector(options: Sequence[str], *, key: str, label: str) -> str:
+    segmented_control = getattr(st, "segmented_control", None)
+    selected: str | None = None
+    if callable(segmented_control):
+        try:
+            selected = segmented_control(
+                label,
+                options,
+                key=key,
+                label_visibility="collapsed",
+            )
+        except TypeError:
+            selected = None
+    if not selected:
+        try:
+            selected = st.radio(
+                label,
+                options,
+                key=key,
+                horizontal=True,
+                label_visibility="collapsed",
+            )
+        except TypeError:
+            selected = st.radio(label, options, key=key)
+    return str(selected or options[0])
 
 
 def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:

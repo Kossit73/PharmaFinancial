@@ -1356,19 +1356,6 @@ def _table_to_rows(data: Any) -> List[Mapping[str, Any]]:
         return [{"Value": _stringify(data)}]
 
 
-def _table_to_dataframe(data: Any):
-    if pd is None:
-        return None
-    if isinstance(data, pd.DataFrame):
-        return data
-    if isinstance(data, Table):
-        return data.to_frame()
-    rows = _table_to_rows(data)
-    if not rows:
-        return pd.DataFrame()
-    return pd.DataFrame(rows)
-
-
 def _escape_csv(value: Any) -> str:
     text = _stringify(value)
     if any(char in text for char in [",", "\n", '"']):
