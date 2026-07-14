@@ -24,21 +24,20 @@ def render_financial_statements(
         "Financial Statements",
         "Review the formal statements and the core roll-forwards that support them.",
     )
-    income_tab, position_tab, cash_tab, bridge_tab = legacy.st.tabs(
-        [
-            "Income Statement",
-            "Financial Position",
-            "Cash Flow",
-            "Working Capital & Inventory",
-        ]
+    active_panel = legacy.st.radio(
+        "Statement",
+        ["Income Statement", "Financial Position", "Cash Flow", "Working Capital & Inventory"],
+        horizontal=True,
+        key="pharma_active_statement_panel",
+        label_visibility="collapsed",
     )
-    with income_tab:
+    if active_panel == "Income Statement":
         legacy._render_income_statement(model, outputs)
-    with position_tab:
+    if active_panel == "Financial Position":
         legacy._render_statement_tab("Statement of Financial Position", outputs.balance_sheet)
-    with cash_tab:
+    if active_panel == "Cash Flow":
         legacy._render_statement_tab("Statement of Cash Flows", outputs.cash_flow)
-    with bridge_tab:
+    if active_panel == "Working Capital & Inventory":
         try:
             working_capital = model.working_capital_schedule()
             legacy.st.markdown("### Working Capital Schedule")

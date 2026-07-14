@@ -84,12 +84,20 @@ def resolve_model_outputs(
     model = legacy.st.session_state.get("last_model")
     outputs = legacy.st.session_state.get("last_outputs")
 
-    if run_requested or last_digest != digest:
+    # Draft edits only change ``digest`` and mark the completed run stale.
+    # The financial engine is activated exclusively by the Run Model action.
+    if run_requested:
         model, outputs = cached_model_run(inputs, digest)
         legacy.st.session_state["last_model"] = model
         legacy.st.session_state["last_outputs"] = outputs
         legacy.st.session_state["last_run_digest"] = digest
+        legacy._sync_workbook_cache_with_payload_digest(digest)
         clear_analysis_cache()
+
+    active_digest = legacy.st.session_state.get("last_run_digest")
+    legacy.st.session_state["pharma_results_stale"] = (
+        outputs is None or active_digest != digest
+    )
 
     return model, outputs
 

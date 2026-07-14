@@ -29,29 +29,28 @@ def render_investment_case(
         "Investment Case",
         "Use this view for management and investment-committee discussion before dropping into detailed statements.",
     )
-    summary_tab, returns_tab, liquidity_tab, bridge_tab = legacy.st.tabs(
-        [
-            "IC Summary",
-            "Returns & Covenants",
-            "Liquidity & Funding Need",
-            "Value Driver Bridge",
-        ]
+    active_panel = legacy.st.radio(
+        "Investment case panel",
+        ["IC Summary", "Returns & Covenants", "Liquidity & Funding Need", "Value Driver Bridge"],
+        horizontal=True,
+        key="pharma_active_investment_panel",
+        label_visibility="collapsed",
     )
-    with summary_tab:
+    if active_panel == "IC Summary":
         legacy._render_executive_summary(model, outputs, digest)
         legacy.st.markdown("### Bankability Gate")
         _render_table_like(legacy, outputs.bankability_gate)
-    with returns_tab:
+    if active_panel == "Returns & Covenants":
         legacy.st.markdown("### Summary Metrics")
         _render_table_like(legacy, outputs.summary_metrics)
         legacy.st.markdown("### Covenant Headroom")
         _render_table_like(legacy, outputs.covenant_headroom)
-    with liquidity_tab:
+    if active_panel == "Liquidity & Funding Need":
         legacy.st.markdown("### Sources & Uses")
         _render_table_like(legacy, outputs.sources_and_uses)
         legacy.st.markdown("### Liquidity Bridge")
         _render_table_like(legacy, outputs.liquidity_bridge)
-    with bridge_tab:
+    if active_panel == "Value Driver Bridge":
         legacy.st.markdown("### Commercial Diagnostics")
         _render_table_like(legacy, outputs.commercial_diagnostics)
         legacy.st.markdown("### Downside Case Summary")
