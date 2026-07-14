@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+from functools import lru_cache
+from pathlib import Path
+
+
+_HERO_IMAGE_PATH = Path(__file__).resolve().parents[1] / "assets" / "pharmaplant.png"
+
 
 def inject_app_theme() -> None:
     from .. import app as legacy
@@ -22,14 +29,45 @@ def inject_app_theme() -> None:
             max-width: 1450px;
         }
         .designer-hero {
+            --pharma-hero-overlay: linear-gradient(
+                90deg,
+                rgba(239, 245, 255, 0.98) 0%,
+                rgba(239, 245, 255, 0.94) 46%,
+                rgba(239, 245, 255, 0.76) 72%,
+                rgba(15, 23, 42, 0.20) 100%
+            );
+            position: relative;
+            overflow: hidden;
             margin-bottom: 1.2rem;
+            min-height: 19rem;
             padding: 1.8rem 1.9rem;
             border-radius: 28px;
-            border: 1px solid rgba(29, 78, 216, 0.12);
-            background:
-                linear-gradient(135deg, rgba(233, 240, 255, 0.96), rgba(255, 255, 255, 0.94)),
-                linear-gradient(135deg, rgba(29, 78, 216, 0.05), rgba(56, 189, 248, 0.06));
-            box-shadow: 0 24px 48px rgba(15, 23, 42, 0.08);
+            border: 1px solid rgba(29, 78, 216, 0.18);
+            background: linear-gradient(135deg, #e9f0ff, #ffffff);
+            box-shadow: 0 24px 48px rgba(15, 23, 42, 0.12);
+        }
+        .designer-hero-image {
+            position: absolute;
+            inset: 0;
+            z-index: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            object-position: center 58%;
+            pointer-events: none;
+        }
+        .designer-hero::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            z-index: 1;
+            background: var(--pharma-hero-overlay);
+            pointer-events: none;
+        }
+        .designer-hero-content {
+            position: relative;
+            z-index: 2;
+            width: 100%;
         }
         .designer-kicker {
             margin: 0 0 0.45rem 0;
@@ -67,6 +105,7 @@ def inject_app_theme() -> None:
             color: var(--pharma-brand);
             font-size: 0.82rem;
             font-weight: 700;
+            backdrop-filter: blur(8px);
         }
         .pharma-section-card {
             padding: 1rem 1.1rem;
@@ -193,15 +232,39 @@ def inject_app_theme() -> None:
         div[data-testid="stDataFrame"] {
             border-radius: 20px;
         }
+        @media (max-width: 760px) {
+            .designer-hero {
+                --pharma-hero-overlay: linear-gradient(
+                    180deg,
+                    rgba(239, 245, 255, 0.97) 0%,
+                    rgba(239, 245, 255, 0.92) 72%,
+                    rgba(239, 245, 255, 0.78) 100%
+                );
+                min-height: 23rem;
+                padding: 1.35rem 1.25rem;
+            }
+            .designer-hero-image {
+                object-position: 58% center;
+            }
+        }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
 
+@lru_cache(maxsize=1)
+def _hero_image_data_uri() -> str:
+    """Return the bundled pharmaceutical plant image as an embeddable PNG URI."""
+
+    encoded = base64.b64encode(_HERO_IMAGE_PATH.read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
 def render_model_hero() -> None:
     from .. import app as legacy
 
+    image_data_uri = _hero_image_data_uri()
     badges = "".join(
         f'<span class="designer-badge">{label}</span>'
         for label in (
@@ -214,13 +277,21 @@ def render_model_hero() -> None:
     legacy.st.markdown(
         f"""
         <section class="designer-hero">
-            <p class="designer-kicker">Pharma planning suite</p>
-            <h1 class="designer-title">NumQuants Pharmaceuticals Financial Model</h1>
-            <p class="designer-copy">
-                Review revenue, operations, financing, and risk assumptions in a cleaner executive shell
-                built for management review and investor presentation.
-            </p>
-            <div class="designer-badges">{badges}</div>
+            <img
+                class="designer-hero-image"
+                src="{image_data_uri}"
+                alt=""
+                aria-hidden="true"
+            />
+            <div class="designer-hero-content">
+                <p class="designer-kicker">Pharma planning suite</p>
+                <h1 class="designer-title">NumQuants Pharmaceuticals Financial Model</h1>
+                <p class="designer-copy">
+                    Review revenue, operations, financing, and risk assumptions in a cleaner executive shell
+                    built for management review and investor presentation.
+                </p>
+                <div class="designer-badges">{badges}</div>
+            </div>
         </section>
         """,
         unsafe_allow_html=True,
