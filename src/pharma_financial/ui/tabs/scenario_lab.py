@@ -29,26 +29,25 @@ def render_scenario_lab(
         "Scenario Lab",
         "Stress the base case, compare outcomes, and review probabilistic downside before finalising recommendations.",
     )
-    sensitivity_tab, downside_tab, monte_tab, breach_tab = legacy.st.tabs(
-        [
-            "Key Sensitivities",
-            "Pharma Downside Cases",
-            "Monte Carlo",
-            "Breach Monitor",
-        ]
+    active_panel = legacy.st.radio(
+        "Scenario analysis",
+        ["Key Sensitivities", "Pharma Downside Cases", "Monte Carlo", "Breach Monitor"],
+        horizontal=True,
+        key="pharma_active_scenario_panel",
+        label_visibility="collapsed",
     )
-    with sensitivity_tab:
+    if active_panel == "Key Sensitivities":
         legacy._render_sensitivity(model, outputs, digest)
-    with downside_tab:
+    if active_panel == "Pharma Downside Cases":
         legacy.st.markdown("### Downside Case Summary")
         _render_table_like(legacy, outputs.downside_case_summary)
         legacy.st.markdown("### Scenario Compare")
         legacy._render_scenarios(outputs)
         legacy.st.markdown("### Break-even & Payback")
         legacy._render_break_even(outputs)
-    with monte_tab:
+    if active_panel == "Monte Carlo":
         legacy._render_monte_carlo(model, outputs, digest)
-    with breach_tab:
+    if active_panel == "Breach Monitor":
         legacy.st.markdown("### Bankability Gate")
         _render_table_like(legacy, outputs.bankability_gate)
         legacy.st.markdown("### Covenant Headroom")

@@ -1701,13 +1701,29 @@ def main() -> None:
     model, outputs = ui_state.resolve_model_outputs(inputs, digest)
 
     workspace_tabs = ui_tab_registry.build_workspace_tabs()
-    tab_slots = st.tabs([tab.title for tab in workspace_tabs])
-    for tab_def, tab_slot in zip(workspace_tabs, tab_slots):
-        with tab_slot:
-            if tab_def.requires_model and (model is None or outputs is None):
-                st.info("Update the setup tabs and click Run Model to generate results.")
-                continue
-            tab_def.render(inputs, model, outputs, digest)
+    tab_titles = [tab.title for tab in workspace_tabs]
+    active_title = st.radio(
+        "Workspace section",
+        tab_titles,
+        horizontal=True,
+        key="pharma_active_workspace_section",
+        label_visibility="collapsed",
+    )
+    active_tab = next(tab for tab in workspace_tabs if tab.title == active_title)
+
+    last_digest = st.session_state.get("last_run_digest")
+    if model is not None and outputs is not None and last_digest != digest:
+        st.warning(
+            "Draft inputs have changed. This section still shows the last completed "
+            "run; press Run Model when you want to refresh it."
+        )
+
+    if active_tab.requires_model and (model is None or outputs is None):
+        st.info("Update the setup sections and click Run Model to generate results.")
+    else:
+        # Only the selected section renders. Scenario, Monte Carlo, export, and
+        # assistant panels are not built in hidden tabs on every rerun.
+        active_tab.render(inputs, model, outputs, digest)
 
 
 def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:
@@ -1932,7 +1948,6 @@ def _resolve_inputs(container: DeltaGenerator) -> tuple[ModelInputs, str]:
     st.session_state["input_payload"] = committed_payload
 
     inputs, digest = _cached_parse_inputs(committed_payload)
-    _sync_workbook_cache_with_payload_digest(digest)
     st.session_state["input_fingerprint"] = digest
     return inputs, digest
 

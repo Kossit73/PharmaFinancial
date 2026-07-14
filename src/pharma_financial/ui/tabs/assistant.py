@@ -29,21 +29,25 @@ def render_knowledge_and_reports(
         "Knowledge & Reports",
         "Export workbooks and business-plan packages, then augment the numbers with supporting documents and AI commentary.",
     )
-    investor_tab, evidence_tab, assistant_tab = legacy.st.tabs(
-        ["Investor Pack", "Evidence Register", "RAG Assistant"]
+    active_panel = legacy.st.radio(
+        "Knowledge panel",
+        ["Investor Pack", "Evidence Register", "RAG Assistant"],
+        horizontal=True,
+        key="pharma_active_knowledge_panel",
+        label_visibility="collapsed",
     )
-    with investor_tab:
+    if active_panel == "Investor Pack":
         legacy.st.markdown("### Investor Pack Preview")
         _render_table_like(legacy, outputs.bankability_gate)
         legacy.st.markdown("### Sources & Uses")
         _render_table_like(legacy, outputs.sources_and_uses)
         legacy._render_excel_model_download(legacy.st.container(), model, outputs)
-    with evidence_tab:
+    if active_panel == "Evidence Register":
         legacy.st.markdown("### Evidence Register")
         _render_table_like(legacy, outputs.evidence_register or [])
         legacy._render_data_quality_exceptions_dashboard(
             outputs.data_quality_exceptions or [],
             caption="Resolve flagged input or financing issues before sharing the exported workbook with investors.",
         )
-    with assistant_tab:
+    if active_panel == "RAG Assistant":
         legacy._render_rag_tab(model, outputs, digest)
